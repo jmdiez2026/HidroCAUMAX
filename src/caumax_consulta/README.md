@@ -155,7 +155,7 @@ Las capas permanecen en el proyecto al cerrar el diálogo. Sus estados de visibi
 
 ## Fondo MDT y legibilidad de la cuenca
 
-El MDT de la resolución activa se representa con una **rampa natural verde, oliva, ocre y piedra**, combinada con **relieve multidireccional** al **45 % de opacidad** en modo Multiplicar. QGIS dibuja ambos directamente desde el MDT real a su resolución nativa, según la escala solicitada. Esta representación no modifica cotas, direcciones D8, punto de cierre ni parámetros.
+El MDT de la resolución activa se representa con una **rampa natural de verdes bajos, tonos claros intermedios, tierras ocres y roca gris beige en las cotas altas**, sin blanco de nieve, combinada con **relieve multidireccional** al **45 % de opacidad** en modo Multiplicar. QGIS dibuja ambos directamente desde el MDT real a su resolución nativa, según la escala solicitada. Esta representación no modifica cotas, direcciones D8, punto de cierre ni parámetros.
 
 Al desplazar o ampliar el mapa, la rampa de colores se ajusta automáticamente a las cotas válidas del MDT que quedan visibles. La leyenda se actualiza con ese intervalo. El cálculo cartográfico se realiza en segundo plano tras una pausa breve de navegación y descarta solicitudes anteriores; respeta el CRS del lienzo, los NoData y la visibilidad de las capas. Se conservan los colores naturales, el sombreado multidireccional al 45 % y el factor vertical 1, sin exagerar alturas. Al ampliar se suavizan los píxeles mediante interpolación bilineal exclusivamente de pantalla; la malla original, los valores del archivo y todos los cálculos hidrológicos permanecen intactos.
 

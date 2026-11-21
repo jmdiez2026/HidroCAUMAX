@@ -23,11 +23,12 @@ ROLE_PROPERTY = "hidrocaumax/dem_display_role"
 SOURCE_PROPERTY = "hidrocaumax/dem_source"
 RESOLUTION_PROPERTY = "hidrocaumax/dem_resolution"
 HILLSHADE_OPACITY = 0.45
-# Relative stops, from vegetated low ground to warm stone. No white snow cap.
+# Relative stops: green valleys, light grassland, ochre earth and beige-grey rock.
+# The early transition out of green keeps lower and middle slopes legible.
 NATURAL_RAMP = (
-    (0.00, "#476B3F"), (0.18, "#65834A"), (0.38, "#8F9857"),
-    (0.58, "#B4A36A"), (0.76, "#BA9A73"), (0.90, "#A99E89"),
-    (1.00, "#CFCCBD"),
+    (0.00, "#477754"), (0.16, "#83A86A"), (0.32, "#C3CC8C"),
+    (0.50, "#DAC293"), (0.70, "#C2A17E"), (0.86, "#B9B1A4"),
+    (1.00, "#DED8CB"),
 )
 
 

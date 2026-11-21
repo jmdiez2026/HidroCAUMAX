@@ -105,8 +105,8 @@ class DemDisplayTests(unittest.TestCase):
         self.assertEqual(colours.customProperty("hidrocaumax/dem_range_m"), [875.0, 1971.0])
         ramp = colours.renderer().shader().rasterShaderFunction().colorRampItemList()
         self.assertEqual(len(ramp), len(display.NATURAL_RAMP))
-        self.assertEqual(ramp[0].color.name().upper(), "#476B3F")
-        self.assertEqual(ramp[-1].color.name().upper(), "#CFCCBD")
+        self.assertEqual(ramp[0].color.name().upper(), "#477754")
+        self.assertEqual(ramp[-1].color.name().upper(), "#DED8CB")
         self.assertTrue(all(max(item.color.red(), item.color.green(), item.color.blue()) < 230 for item in ramp))
 
     def test_native_resolution_follows_each_real_active_dem(self):
