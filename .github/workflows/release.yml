@@ -1,0 +1,61 @@
+name: Publicar complemento y repositorio QGIS
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Etiqueta existente que coincide con metadata.txt (por ejemplo v1.2.2)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hidrocaumax-release-pages
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Obtener exactamente la etiqueta solicitada
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Validar empaquetado, identidad y XML
+        run: python -m unittest discover -s tests -p test_release_packaging.py -v
+      - name: Construir publicación
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+        run: python scripts/build_release.py --output dist --tag "$RELEASE_TAG" --repository "$RELEASE_REPOSITORY"
+      - name: Crear o verificar Release sin sustituir archivos existentes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+        run: python scripts/publish_release.py --output dist --repository "$RELEASE_REPOSITORY"
+      - name: Preparar Pages
+        uses: actions/configure-pages@v5
+      - name: Subir índice QGIS
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist/site
+      - name: Publicar Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

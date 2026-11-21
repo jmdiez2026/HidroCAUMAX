@@ -1,0 +1,16 @@
+[general]
+name=HidroCAUMAX v1.2.2
+description=Cuenca, MDT mejorado, TauDEM D8, curva hipsométrica, P₀ y precipitaciones medias de cuenca, cuantiles Q(T)/T(Q) en la consulta de caudales de CAUMAX.
+about=Complemento auxiliar para Mapa de caudales máximos > Consulta de capas de caudales máximos. Morfometría, suavizado en el mapa, curva hipsométrica y consultas Q(T)/T(Q). Calcula P₀ medio y precipitaciones máximas diarias medias de la cuenca, con cobertura, consultas P(T)/T(P) y gráficos. Exporta MDT, direcciones D8 y red con umbral editable. PDF con mapa y apertura automática; proyectos multirresolución. TauDEM/MPI se instalan por separado.
+version=1.2.2
+qgisMinimumVersion=3.34
+qgisMaximumVersion=3.99
+author=JM
+email=
+category=Raster
+experimental=False
+deprecated=False
+hasProcessingProvider=False
+repository=https://github.com/jmdiez2026/HidroCAUMAX
+homepage=https://jmdiez2026.github.io/HidroCAUMAX
+tracker=https://github.com/jmdiez2026/HidroCAUMAX/issues

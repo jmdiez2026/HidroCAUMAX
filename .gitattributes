@@ -1,0 +1,10 @@
+# Keep build tooling and repository documentation conventional across platforms.
+scripts/** text eol=lf
+.github/** text eol=lf
+tests/** text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# Last rule wins: preserve every packaged file, including README.md, exactly.
+src/caumax_consulta/** -text

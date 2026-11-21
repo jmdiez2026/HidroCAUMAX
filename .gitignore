@@ -1,0 +1,49 @@
+# Python and development environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+.idea/
+.vscode/
+
+# Generated packages, reports and local validation data
+/dist/
+/build/
+/outputs/
+/work/
+*.zip
+*.log
+/*.pdf
+*.caumax.json
+*.qgs
+*.qgz
+*.tif
+*.tiff
+*.gpkg
+*.shp
+*.shx
+*.dbf
+*.prj
+*.aux.xml
+*.sqlite
+*.db
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+credentials*.json
+secrets*.json
+
+# Operating system files
+.DS_Store
+Thumbs.db
+Desktop.ini
