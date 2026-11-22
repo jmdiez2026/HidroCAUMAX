@@ -7,13 +7,14 @@ import sys
 import time
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtGui import QColor
 from qgis.PyQt import sip
 from qgis.PyQt.QtTest import QTest
-from qgis.core import (QgsColorRampShader, QgsCoordinateReferenceSystem, QgsCoordinateTransform,
+from qgis.core import (Qgis, QgsColorRampShader, QgsCoordinateReferenceSystem, QgsCoordinateTransform,
                        QgsProject, QgsRectangle)
 from qgis.gui import QgsMapCanvas
 
@@ -103,20 +104,21 @@ class VisibleDemTests(unittest.TestCase):
         self.wait(lambda: colours.customProperty('hidrocaumax/dem_visible_range_m') == [100., 115.])
         self.show_range(colours, self.right, (1000., 1015.))
         ramp = colours.renderer().shader().rasterShaderFunction().colorRampItemList()
-        self.assertEqual([item.color.name().upper() for item in ramp], [colour for _, colour in display.NATURAL_RAMP[:-1]])
+        self.assertEqual([item.color.name().upper() for item in ramp], [colour for _, colour in display.NATURAL_RAMP])
         self.assertEqual((colours.renderer().classificationMin(), colours.renderer().classificationMax()),
                          (1000., 1015.))
-        self.assertAlmostEqual(ramp[0].value, 1000.312)
-        self.assertEqual(ramp[-1].value, math.inf)
-        self.assertTrue(ramp[0].label.startswith('1000–'))
-        self.assertTrue(ramp[-1].label.endswith('–1015 m'))
+        self.assertEqual((ramp[0].value, ramp[-1].value), (1000., 1015.))
+        self.assertTrue(all(math.isfinite(item.value) for item in ramp))
+        self.assertTrue(ramp[0].label.startswith('1000'))
+        self.assertTrue(ramp[-1].label.endswith('1015 m'))
         self.assertEqual(colours.customProperty('hidrocaumax/dem_range_m'), initial_source_range)
         self.assertEqual(colours.opacity(), 1)
         self.assertAlmostEqual(shade.opacity(), display.HILLSHADE_OPACITY)
-        self.assertTrue(shade.renderer().multiDirectional())
-        self.assertEqual(shade.renderer().zFactor(), 1)
-        self.assertEqual(shade.resampleFilter().zoomedInResampler().type(), 'bilinear')
-        self.assertEqual(colours.resampleFilter().zoomedInResampler().type(), 'bilinear')
+        self.assertFalse(shade.renderer().multiDirectional())
+        self.assertEqual(shade.renderer().zFactor(), display.HILLSHADE_Z_FACTOR)
+        for layer in (shade, colours):
+            self.assertEqual(layer.resamplingStage(), Qgis.RasterResamplingStage.Provider)
+            self.assertEqual(layer.dataProvider().zoomedInResamplingMethod(), Qgis.RasterResamplingMethod.CubicSpline)
 
     def test_canvas_crs_changes_are_transformed_to_the_raster(self):
         _, _, colours = self.layers()
@@ -169,7 +171,7 @@ class VisibleDemTests(unittest.TestCase):
         # Same canvas and same DEM, but a newly computed basin in the highlands.
         colours.setCustomProperty(BASIN_BOUNDS_PROPERTY, [300110, 4699910, 300190, 4699990])
         self.wait(lambda: colours.customProperty('hidrocaumax/dem_visible_range_m') == [1000., 1015.])
-        self.assertEqual(shade.renderer().zFactor(), 1)
+        self.assertEqual(shade.renderer().zFactor(), display.HILLSHADE_Z_FACTOR)
         # Invalid persisted context must fall back safely to the visible range.
         colours.setCustomProperty(BASIN_BOUNDS_PROPERTY, [float('nan'), 0, 0, 0])
         self.wait(lambda: colours.customProperty('hidrocaumax/dem_visible_range_m') == [100., 1015.])
@@ -207,14 +209,7 @@ class VisibleDemTests(unittest.TestCase):
         self.assertTrue(replacement.setId(colours.id()))
         self.assertIsNot(replacement, colours)
         self.assertEqual(replacement.source(), colours.source())
-        previous_palette = ('#477754', '#83A86A', '#C3CC8C', '#DAC293',
-                            '#C2A17E', '#B9B1A4', '#DED8CB')
-        ramp = replacement.renderer().shader().rasterShaderFunction()
-        ramp.setColorRampType(QgsColorRampShader.Interpolated)
-        ramp.setColorRampItemList([
-            QgsColorRampShader.ColorRampItem(100+fraction*15, QColor(colour))
-            for fraction, colour in zip((0., .16, .32, .50, .70, .86, 1.), previous_palette)
-        ])
+        fixture.legacy_cd_a(replacement, 100, 115)
         # Project reload can remove and restore the same saved layer ID before
         # the debounce fires. The new object has the same source and bounds.
         self.canvas.setLayers([shade])
@@ -222,9 +217,9 @@ class VisibleDemTests(unittest.TestCase):
         self.assertEqual(self.controller._applied[colours.id()], previous_signature)
         self.wait(lambda: [item.color.name().upper() for item in
                            replacement.renderer().shader().rasterShaderFunction().colorRampItemList()]
-                         == [colour.upper() for _, colour in display.NATURAL_RAMP[:-1]])
+                         == [colour.upper() for _, colour in display.NATURAL_RAMP])
         self.assertEqual(replacement.renderer().shader().rasterShaderFunction().colorRampType(),
-                         QgsColorRampShader.Discrete)
+                         QgsColorRampShader.Interpolated)
         self.assertIs(self.controller._layer_signals[replacement.id()](), replacement)
         self.assertEqual(self.canvas.extent(), previous_extent)
         replacement.setCustomProperty(BASIN_BOUNDS_PROPERTY,
@@ -232,6 +227,51 @@ class VisibleDemTests(unittest.TestCase):
         self.wait(lambda: replacement.customProperty('hidrocaumax/dem_visible_range_m')
                          == [1000., 1015.])
         self.assertEqual(self.canvas.extent(), previous_extent)
+
+    def test_cached_same_extent_migrates_both_renderers_once_and_respects_later_manual_shading(self):
+        path, shade, colours = self.layers()
+        source_before = path.read_bytes()
+        self.controller.start()
+        self.show_range(colours, self.left, (100., 115.))
+        self.wait(lambda: not self.controller._tasks)
+        signature = self.controller._applied[colours.id()]
+        extent = QgsRectangle(self.canvas.extent())
+        ids = (shade.id(), colours.id())
+        renderers = (shade.renderer(), colours.renderer())
+        fixture.legacy_hillshade(shade)
+        fixture.legacy_cd_a(colours, 100, 115)
+        # A matching viewport signature must not skip the style migration or
+        # trigger a second raster scan solely to apply the visual revision.
+        with patch('caumax_consulta.visible_dem.QgsApplication.taskManager') as manager:
+            self.controller.refresh()
+        manager.assert_not_called()
+        self.assertEqual(self.controller._applied[colours.id()], signature)
+        self.assertEqual((shade.id(), colours.id()), ids)
+        self.assertIs(shade.renderer(), renderers[0])
+        self.assertIs(colours.renderer(), renderers[1])
+        self.assertEqual(self.canvas.extent(), extent)
+        self.assertEqual(colours.renderer().shader().rasterShaderFunction().colorRampType(), QgsColorRampShader.Interpolated)
+        self.assertEqual(shade.renderer().zFactor(), display.HILLSHADE_Z_FACTOR)
+        self.assertAlmostEqual(shade.opacity(), display.HILLSHADE_OPACITY)
+        for layer in (shade, colours):
+            self.assertEqual(layer.customProperty(display.STYLE_PROPERTY), display.STYLE_REVISION)
+        shade.setOpacity(.32)
+        shade.renderer().setZFactor(2.25)
+        shade.renderer().setAltitude(50.)
+        shade.brightnessFilter().setBrightness(-4)
+        shade.brightnessFilter().setContrast(7)
+        shade.dataProvider().setZoomedInResamplingMethod(Qgis.RasterResamplingMethod.Nearest)
+        colours.setOpacity(.6)
+        self.controller.refresh()
+        self.show_range(colours, self.right, (1000., 1015.))
+        self.assertAlmostEqual(shade.opacity(), .32)
+        self.assertEqual(shade.renderer().zFactor(), 2.25)
+        self.assertEqual(shade.renderer().altitude(), 50.)
+        self.assertEqual(shade.brightnessFilter().brightness(), -4)
+        self.assertEqual(shade.brightnessFilter().contrast(), 7)
+        self.assertEqual(shade.dataProvider().zoomedInResamplingMethod(), Qgis.RasterResamplingMethod.Nearest)
+        self.assertAlmostEqual(colours.opacity(), .6)
+        self.assertEqual(path.read_bytes(), source_before)
 
     def test_empty_outside_and_flat_windows_keep_valid_uniform_rendering(self):
         data = np.hstack((np.full((4, 4), -9999), np.full((4, 4), 1200)))

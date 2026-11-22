@@ -7,6 +7,7 @@ from qgis.PyQt import sip
 from qgis.core import QgsCoordinateReferenceSystem, QgsGeometry, QgsProject, QgsWkbTypes
 
 from .layer_order import create_result_group, ensure_results_above_official
+from .dem_display import apply_terrain_style
 
 
 _BASIN_BOUNDS_PROPERTY = 'hidrocaumax/dem_basin_bounds'
@@ -83,6 +84,9 @@ class TerrainLayers:
         existing = list(self.layers)
         for variant in self._variants.values():
             existing.extend(variant['layers'])
+        for layer in existing:
+            if not sip.isdeleted(layer) and project.mapLayer(layer.id()) is layer:
+                apply_terrain_style(layer)
         _set_basin_context((layer for layer in existing
                             if not sip.isdeleted(layer)
                             and layer.customProperty('HidroCAUMAX/terrain_owner') == self.owner_key

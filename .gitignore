@@ -16,6 +16,7 @@ venv/
 /outputs/
 /work/
 *.zip
+!/src/caumax_consulta/vendor/taudem-5.5.0-win64.zip
 *.log
 /*.pdf
 *.caumax.json

@@ -15,13 +15,47 @@ from osgeo import gdal, osr
 from qgis.PyQt import sip
 from qgis.PyQt.QtCore import QSize
 from qgis.PyQt.QtGui import QColor, QPainter
-from qgis.core import (QgsApplication, QgsColorRampShader, QgsCptCityColorRamp,
+from qgis.core import (Qgis, QgsApplication, QgsBilinearRasterResampler,
+                       QgsColorRampShader, QgsCptCityColorRamp,
                        QgsHillshadeRenderer, QgsMapRendererParallelJob,
                        QgsMapSettings, QgsProject, QgsSingleBandPseudoColorRenderer)
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from caumax_consulta import dem_display as display
+
+
+def legacy_cd_a(colours, low, high):
+    """Recreate the actual 1.2.3 renderer from QGIS's installed cpt-city resource."""
+    native = QgsCptCityColorRamp('jm/cd/cd-a', '')
+    if not Path(native.fileName()).is_file():
+        raise unittest.SkipTest('The legacy-project fixture requires the bundled cpt-city resource.')
+    ramp = QgsColorRampShader(low, high)
+    ramp.setSourceColorRamp(native)
+    ramp.setColorRampType(QgsColorRampShader.Discrete)
+    ramp.setClassificationMode(QgsColorRampShader.Continuous)
+    ramp.classifyColorRamp()
+    colours.renderer().shader().setRasterShaderFunction(ramp)
+    colours.renderer().setClassificationMin(low)
+    colours.renderer().setClassificationMax(high)
+    colours.setCustomProperty('hidrocaumax/dem_visible_range_m', [float(low), float(high)])
+    colours.removeCustomProperty(display.STYLE_PROPERTY)
+
+
+def legacy_hillshade(shade):
+    shade.renderer().setMultiDirectional(True)
+    shade.renderer().setAzimuth(315.)
+    shade.renderer().setAltitude(45.)
+    shade.renderer().setZFactor(1.)
+    shade.setOpacity(.45)
+    shade.setBlendMode(QPainter.CompositionMode_Multiply)
+    shade.brightnessFilter().setBrightness(0)
+    shade.brightnessFilter().setContrast(0)
+    shade.brightnessFilter().setGamma(1.)
+    shade.setResamplingStage(Qgis.RasterResamplingStage.ResampleFilter)
+    shade.dataProvider().enableProviderResampling(False)
+    shade.resampleFilter().setZoomedInResampler(QgsBilinearRasterResampler())
+    shade.removeCustomProperty(display.STYLE_PROPERTY)
 
 
 class DemDisplayTests(unittest.TestCase):
@@ -85,10 +119,12 @@ class DemDisplayTests(unittest.TestCase):
         shade, colours = self.build(path)
         self.assertEqual(set(QgsProject.instance().mapLayers()), before)
         self.assertIsInstance(shade.renderer(), QgsHillshadeRenderer)
-        self.assertTrue(shade.renderer().multiDirectional())
-        self.assertEqual(shade.renderer().zFactor(), 1)
+        self.assertFalse(shade.renderer().multiDirectional())
+        self.assertEqual(shade.renderer().azimuth(), 315.)
+        self.assertEqual(shade.renderer().altitude(), display.HILLSHADE_ALTITUDE)
+        self.assertEqual(shade.renderer().zFactor(), display.HILLSHADE_Z_FACTOR)
         self.assertEqual(shade.blendMode(), QPainter.CompositionMode_Multiply)
-        self.assertAlmostEqual(shade.opacity(), .45)
+        self.assertAlmostEqual(shade.opacity(), display.HILLSHADE_OPACITY)
         self.assertIsInstance(colours.renderer(), QgsSingleBandPseudoColorRenderer)
         self.assertEqual(colours.opacity(), 1)
         for layer, role in ((shade, "hillshade"), (colours, "hypsometry")):
@@ -100,47 +136,40 @@ class DemDisplayTests(unittest.TestCase):
             self.assertEqual(layer.width(), 3)
             self.assertEqual(layer.height(), 2)
             self.assertIn("25×25 m", layer.name())
+            self.assertEqual(layer.customProperty(display.STYLE_PROPERTY), display.STYLE_REVISION)
+            self.assertEqual(layer.resamplingStage(), Qgis.RasterResamplingStage.Provider)
+            self.assertEqual(layer.dataProvider().zoomedInResamplingMethod(), Qgis.RasterResamplingMethod.CubicSpline)
+            self.assertEqual(layer.dataProvider().zoomedOutResamplingMethod(), Qgis.RasterResamplingMethod.CubicSpline)
 
-    def test_ramp_limits_exclude_nodata_and_preserve_exact_cd_a_classes(self):
+    def test_ramp_limits_exclude_nodata_and_use_finite_natural_endpoints(self):
         path = self.raster([[-9999, 875], [1000, 1971]])
         shade, colours = self.build(path)
         self.assertEqual(colours.customProperty("hidrocaumax/dem_range_m"), [875.0, 1971.0])
         ramp = colours.renderer().shader().rasterShaderFunction().colorRampItemList()
-        self.assertEqual(len(ramp), 48)
-        self.assertEqual(ramp[0].color.name().upper(), '#18C6CA')
-        self.assertEqual(ramp[-1].color.name().upper(), '#FFFFFF')
-        self.assertTrue(math.isinf(ramp[-1].value))
+        self.assertEqual(ramp[0].value, 875.)
+        self.assertEqual(ramp[-1].value, 1971.)
+        self.assertTrue(all(math.isfinite(item.value) for item in ramp))
+        self.assertEqual(ramp[0].color.name().upper(), display.NATURAL_RAMP[0][1])
+        self.assertEqual(ramp[-1].color.name().upper(), display.NATURAL_RAMP[-1][1])
         self.assertEqual(colours.renderer().classificationMin(), 875)
         self.assertEqual(colours.renderer().classificationMax(), 1971)
 
-    def test_cd_a_matches_installed_cpt_city_resource_and_native_discrete_shader(self):
-        native = QgsCptCityColorRamp('jm/cd/cd-a', '')
-        if not Path(native.fileName()).is_file():
-            self.skipTest('This QGIS installation has no cpt-city resource archive.')
-        self.assertTrue(native.isDiscrete())
-        self.assertEqual(tuple((native.value(i), native.color(native.value(i)).name().upper())
-                               for i in range(native.count())), display.NATURAL_RAMP)
+    def test_natural_shader_has_gradual_transitions_instead_of_discrete_bands(self):
         _, colours = self.build(self.raster([[900, 1000], [1200, 1500]]))
         actual = colours.renderer().shader().rasterShaderFunction()
-        expected = QgsColorRampShader(900, 1500)
-        expected.setSourceColorRamp(native)
-        expected.setColorRampType(QgsColorRampShader.Discrete)
-        expected.setClassificationMode(QgsColorRampShader.Continuous)
-        expected.classifyColorRamp()
-        self.assertEqual(actual.sourceColorRamp().schemeName(), 'jm/cd/cd-a')
-        self.assertEqual(actual.colorRampType(), QgsColorRampShader.Discrete)
-        self.assertEqual([(item.value, item.color.name()) for item in actual.colorRampItemList()],
-                         [(item.value, item.color.name()) for item in expected.colorRampItemList()])
-        for index in range(len(display.NATURAL_RAMP)-1):
-            a, b = display.NATURAL_RAMP[index][0], display.NATURAL_RAMP[index+1][0]
-            value = 900 + (a+b)*300
-            self.assertEqual(actual.shade(value), expected.shade(value))
-        with patch.object(display, 'QgsCptCityColorRamp') as unavailable:
-            unavailable.return_value.count.return_value = 0
-            fallback = display._cpt_city_ramp()
-        self.assertTrue(fallback.isDiscrete())
-        self.assertEqual(tuple((fallback.value(i), fallback.color(fallback.value(i)).name().upper())
-                               for i in range(fallback.count())), display.NATURAL_RAMP)
+        self.assertEqual(actual.colorRampType(), QgsColorRampShader.Interpolated)
+        self.assertFalse(actual.sourceColorRamp().isDiscrete())
+        samples = [actual.shade(float(value)) for value in np.linspace(900, 1500, 1201)]
+        self.assertTrue(all(sample[0] for sample in samples))
+        rgb = np.asarray([sample[1:4] for sample in samples], dtype=int)
+        self.assertGreater(len(np.unique(rgb, axis=0)), 150)
+        self.assertLessEqual(int(np.abs(np.diff(rgb, axis=0)).max()), 2)
+        # Bright vegetation at low elevations, warm earth in the middle,
+        # and light neutral rock at the top, without cyan or white banding.
+        self.assertGreater(rgb[0, 1], rgb[0, 0])
+        self.assertGreater(float(rgb[0].mean()), 130.)
+        self.assertGreater(rgb[650, 0], rgb[650, 2])
+        self.assertLess(int(rgb[-1].max()-rgb[-1].min()), 20)
 
     def test_native_resolution_follows_each_real_active_dem(self):
         for resolution in (500, 25, 5, 2):
@@ -153,27 +182,23 @@ class DemDisplayTests(unittest.TestCase):
     def test_saved_project_palette_updates_even_when_visible_elevation_range_is_unchanged(self):
         path = self.raster([[900, 1000], [1200, 1500]])
         _, colours = self.build(path)
+        legacy_cd_a(colours, 900, 1500)
         ramp = colours.renderer().shader().rasterShaderFunction()
-        previous_palette = ('#477754', '#83A86A', '#C3CC8C', '#DAC293',
-                            '#C2A17E', '#B9B1A4', '#DED8CB')
-        ramp.setColorRampItemList([
-            QgsColorRampShader.ColorRampItem(900+fraction*600, QColor(colour))
-            for fraction, colour in zip((0, .16, .32, .5, .7, .86, 1), previous_palette)
-        ])
-        ramp.setColorRampType(QgsColorRampShader.Interpolated)
-        colours.setCustomProperty('hidrocaumax/dem_visible_range_m', [900., 1500.])
+        renderer = colours.renderer()
         original = path.read_bytes()
-        self.assertTrue(display.apply_visible_elevation_range(colours, 900, 1500))
+        self.assertEqual(ramp.colorRampType(), QgsColorRampShader.Discrete)
+        self.assertTrue(display.apply_terrain_style(colours))
+        self.assertIs(colours.renderer(), renderer)
         actual = ramp.colorRampItemList()
         self.assertEqual([item.color.name().upper() for item in actual],
-                         [colour for _, colour in display.NATURAL_RAMP[:-1]])
-        self.assertEqual(ramp.colorRampType(), QgsColorRampShader.Discrete)
-        self.assertEqual(actual[0].value, 912.48)
-        self.assertTrue(math.isinf(actual[-1].value))
+                         [colour for _, colour in display.NATURAL_RAMP])
+        self.assertEqual(ramp.colorRampType(), QgsColorRampShader.Interpolated)
+        self.assertEqual((actual[0].value, actual[-1].value), (900., 1500.))
+        self.assertFalse(display.apply_terrain_style(colours))
         self.assertFalse(display.apply_visible_elevation_range(colours, 900, 1500))
         self.assertEqual(path.read_bytes(), original)
 
-    def test_actual_terrain_render_is_coloured_and_multidirectional_shading_changes_pixels(self):
+    def test_actual_terrain_render_is_coloured_and_new_shading_increases_relief_contrast(self):
         yy, xx = np.indices((33, 33))
         data = 1000 + 180 * np.sin(xx / 8) * np.cos(yy / 9) + xx * 2
         layers = self.build(self.raster(data))
@@ -182,6 +207,91 @@ class DemDisplayTests(unittest.TestCase):
         self.assertGreater(np.unique(shaded.reshape(-1, 3), axis=0).shape[0], 100)
         self.assertGreater(np.count_nonzero(np.any(shaded != colour_only, axis=2)), 30000)
         self.assertLess(float(shaded.mean()), float(colour_only.mean()))
+        legacy = layers[0].clone()
+        self.layers.append(legacy)
+        legacy_hillshade(legacy)
+        previous = self.render([legacy, layers[1]])
+        weights = np.array([.2126, .7152, .0722])
+        current_luma = shaded[20:-20, 20:-20] @ weights
+        previous_luma = previous[20:-20, 20:-20] @ weights
+        current_contrast = float(np.percentile(current_luma, 95)-np.percentile(current_luma, 5))
+        previous_contrast = float(np.percentile(previous_luma, 95)-np.percentile(previous_luma, 5))
+        self.assertGreater(current_contrast, previous_contrast*1.05)
+
+    def test_qgz_migrates_legacy_colour_and_shade_once_preserving_ids_visibility_and_manual_settings(self):
+        path = self.raster(np.arange(81).reshape(9, 9)+900)
+        source_before = path.read_bytes()
+        shade, colours = self.build(path)
+        legacy_hillshade(shade)
+        legacy_cd_a(colours, 900, 980)
+        old_ids = {'hillshade': shade.id(), 'hypsometry': colours.id()}
+        saved = self.folder/'legacy123.qgz'
+        project = QgsProject()
+        reopened = QgsProject()
+        final = QgsProject()
+        try:
+            project.addMapLayer(shade)
+            project.addMapLayer(colours)
+            project.layerTreeRoot().findLayer(shade.id()).setItemVisibilityChecked(False)
+            project.layerTreeRoot().findLayer(colours.id()).setItemVisibilityChecked(True)
+            self.assertTrue(project.write(str(saved)))
+            project.clear()
+            self.assertTrue(reopened.read(str(saved)))
+            migrated = {}
+            for role, layer_id in old_ids.items():
+                layer = reopened.mapLayer(layer_id)
+                self.assertIsNotNone(layer)
+                renderer = layer.renderer()
+                was_visible = reopened.layerTreeRoot().findLayer(layer_id).itemVisibilityChecked()
+                self.assertTrue(display.apply_terrain_style(layer))
+                self.assertIs(layer.renderer(), renderer)
+                self.assertEqual(layer.id(), layer_id)
+                self.assertEqual(reopened.layerTreeRoot().findLayer(layer_id).itemVisibilityChecked(), was_visible)
+                self.assertEqual(layer.customProperty(display.STYLE_PROPERTY), display.STYLE_REVISION)
+                migrated[role] = layer
+            shade, colours = migrated['hillshade'], migrated['hypsometry']
+            self.assertEqual(shade.renderer().zFactor(), display.HILLSHADE_Z_FACTOR)
+            self.assertAlmostEqual(shade.opacity(), display.HILLSHADE_OPACITY)
+            self.assertFalse(shade.renderer().multiDirectional())
+            self.assertEqual(colours.renderer().shader().rasterShaderFunction().colorRampType(), QgsColorRampShader.Interpolated)
+            self.assertEqual(colours.customProperty('hidrocaumax/dem_visible_range_m'), [900., 980.])
+            # After the one-time migration, respect subsequent cartographic edits.
+            shade.renderer().setZFactor(1.7)
+            shade.renderer().setAltitude(58.)
+            shade.renderer().setAzimuth(225.)
+            shade.renderer().setMultiDirectional(True)
+            shade.setOpacity(.37)
+            shade.setBlendMode(QPainter.CompositionMode_Screen)
+            shade.brightnessFilter().setBrightness(-6)
+            shade.brightnessFilter().setContrast(4)
+            shade.dataProvider().setZoomedInResamplingMethod(Qgis.RasterResamplingMethod.Nearest)
+            colours.setOpacity(.63)
+            self.assertFalse(display.apply_terrain_style(shade))
+            self.assertFalse(display.apply_terrain_style(colours))
+            revised = self.folder/'migrated124.qgz'
+            self.assertTrue(reopened.write(str(revised)))
+            reopened.clear()
+            self.assertTrue(final.read(str(revised)))
+            shade = final.mapLayer(old_ids['hillshade'])
+            colours = final.mapLayer(old_ids['hypsometry'])
+            self.assertFalse(display.apply_terrain_style(shade))
+            self.assertFalse(display.apply_terrain_style(colours))
+            self.assertAlmostEqual(shade.opacity(), .37)
+            self.assertAlmostEqual(colours.opacity(), .63)
+            self.assertEqual(shade.renderer().zFactor(), 1.7)
+            self.assertEqual((shade.renderer().azimuth(), shade.renderer().altitude()), (225., 58.))
+            self.assertTrue(shade.renderer().multiDirectional())
+            self.assertEqual(shade.blendMode(), QPainter.CompositionMode_Screen)
+            self.assertEqual(shade.brightnessFilter().brightness(), -6)
+            self.assertEqual(shade.brightnessFilter().contrast(), 4)
+            self.assertEqual(shade.dataProvider().zoomedInResamplingMethod(), Qgis.RasterResamplingMethod.Nearest)
+            self.assertFalse(final.layerTreeRoot().findLayer(shade.id()).itemVisibilityChecked())
+            self.assertTrue(final.layerTreeRoot().findLayer(colours.id()).itemVisibilityChecked())
+        finally:
+            project.clear()
+            reopened.clear()
+            final.clear()
+        self.assertEqual(path.read_bytes(), source_before)
 
     def test_factory_and_render_leave_source_bytes_affine_and_sidecars_unchanged(self):
         path = self.raster(np.arange(81).reshape(9, 9) + 900)

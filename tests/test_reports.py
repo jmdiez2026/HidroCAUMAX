@@ -296,7 +296,7 @@ class ReportTests(unittest.TestCase):
         )
         text = normalized(' '.join(page.extract_text() for page in PdfReader(str(result)).pages))
         for expected in (
-            'HidroCAUMAX v1.2.3', 'Resolución MDT seleccionada', 'MDT25 IGN',
+            'HidroCAUMAX v1.2.4', 'Resolución MDT seleccionada', 'MDT25 IGN',
             '25,00 × 25,00 m', 'IGN/CNIG', 'https://centrodedescargas.cnig.es/',
             'Mayor detalle espacial', 'Caudal CAUMAX original', '177.000000 m³/s',
             'no se recalcula al descargar o seleccionar otro MDT',
@@ -341,7 +341,9 @@ class ReportTests(unittest.TestCase):
                 text = normalized(' '.join(page.extract_text() for page in reader.pages))
                 self.assertIn('Curva hipsométrica', text)
                 self.assertIn('Modo adimensional' if relative else 'Modo dimensional', text)
-                self.assertIn('HI exacto: 0,1250', text)
+                self.assertIn('HI exacto: 0,12', text)
+                self.assertNotIn('HI exacto: 0,1250', text)
+                self.assertEqual(self.analysis.values['hypsometric'], .125)
                 self.assertIn('201 cuantiles de 8 cotas válidas', text)
                 self.assertIn('media aritmética de todas las cotas válidas', text)
                 self.assertIn('integral aproximada no sustituye el HI exacto', text)
@@ -355,6 +357,20 @@ class ReportTests(unittest.TestCase):
                             images.append(obj)
                 self.assertTrue(any(obj.get('/Width') == 1280 and obj.get('/Height') == 600
                                     for obj in images))
+
+    def test_hypsometric_pdf_caption_uses_square_metres_for_small_basin_and_local_rounding(self):
+        from caumax_consulta.hypsometry_data import build_hypsometric_curve
+        self.analysis.values.update(area_km2=.5425, hypsometric=.4565)
+        self.analysis.diagnostics['hypsometric_curve'] = build_hypsometric_curve(
+            [970, 990, 1015, 1050, 1125], .5425, .4565)
+        result = reports.generate_basin_pdf(self.folder/'small_hypsometry.pdf',
+            self.analysis, self.query, open_after=False)
+        text = pdf_text(PdfReader(str(result)))
+        self.assertIn('Área acumulada por encima de la cota (m²); altitud (m).', text)
+        self.assertIn('HI exacto: 0,46', text)
+        self.assertNotIn('HI exacto: 0,4565', text)
+        self.assertEqual(self.analysis.values['hypsometric'], .4565)
+        self.assertEqual(schema.format_value('hypsometric', .4565), '0,4565')
 
     def test_pdf_direction_provenance_uses_recorded_engine_instead_of_resolution(self):
         self.analysis.diagnostics['dem_hydrology'] = {'engine': 'TauDEM D8FlowDir'}

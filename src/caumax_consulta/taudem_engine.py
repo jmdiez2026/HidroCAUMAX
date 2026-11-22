@@ -20,6 +20,7 @@ from osgeo import gdal, ogr, osr
 
 from . import basin as _b
 from . import dem_hydrology as _h
+from . import taudem_runtime as _runtime
 from .terrain import analyze_basin
 
 INSTALL_URL = "https://github.com/dtarb/TauDEM/releases/latest"
@@ -48,6 +49,14 @@ class TauDEMProducts:
 
 def probe_taudem(bin_dir=None):
     """Find the real tools and MPI without changing environment or settings."""
+    if bin_dir is None:
+        try:
+            bundled = _runtime.discover_bundled_runtime()
+        except (OSError, ValueError) as error:
+            return {"available": False, "reason": "No se puede usar el TauDEM integrado: " + str(error),
+                    "executables": {}, "mpiexec": None, "engine": "TauDEM", "installation_url": INSTALL_URL}
+        if bundled is not None:
+            return dict(bundled, installation_url=INSTALL_URL)
     folders = []
     configured = ((bin_dir,) if bin_dir is not None else
                   (os.environ.get("TAUDEM_BIN"), os.environ.get("TAUDEM_PATH")))
@@ -61,11 +70,14 @@ def probe_taudem(bin_dir=None):
             if base and Path(base).is_dir():
                 for root in sorted(Path(base).glob("TauDEM*")):
                     folders.extend((root, root / "bin", root / "TauDEM5Exe"))
-    executables = {}
+    executables, mpi = {}, None
     for folder in folders:
         if not folder.is_dir():
             continue
         names = {p.name.lower(): p for p in folder.iterdir() if p.is_file()}
+        local_mpi = names.get("mpiexec.exe" if os.name == "nt" else "mpiexec")
+        if mpi is None and local_mpi and (os.name == "nt" or os.access(local_mpi, os.X_OK)):
+            mpi = str(local_mpi.resolve())
         for tool in _TOOLS:
             candidate = names.get(tool + (".exe" if os.name == "nt" else ""))
             if candidate and (os.name == "nt" or os.access(candidate, os.X_OK)):
@@ -75,7 +87,7 @@ def probe_taudem(bin_dir=None):
             candidate = shutil.which(tool) or shutil.which(_CLI_NAMES[tool])
             if candidate:
                 executables.setdefault(tool, str(Path(candidate).resolve()))
-    mpi = shutil.which("mpiexec") or shutil.which("mpiexec.exe")
+    mpi = mpi or shutil.which("mpiexec") or shutil.which("mpiexec.exe")
     if not mpi and os.name == "nt":
         candidates = []
         if os.environ.get("MSMPI_BIN"):
@@ -90,7 +102,8 @@ def probe_taudem(bin_dir=None):
             "TauDEM real no está disponible. Falta: " + ", ".join(missing) +
             ". Seleccione su carpeta TauDEM e instale las dependencias oficiales: " + INSTALL_URL,
             "executables": executables, "mpiexec": mpi, "engine": "TauDEM",
-            "installation_url": INSTALL_URL}
+            "installation_url": INSTALL_URL, "bin_dir": str(bin_dir) if bin_dir is not None else None,
+            "runtime": {"kind": "external"}}
 
 
 def _fingerprint(path):
@@ -103,9 +116,9 @@ def _fingerprint(path):
 
 def _run(engine, tool, arguments, work, cancelled):
     _h._check(cancelled)
+    engine = _runtime.ensure_runtime(engine, cancelled)
     command = [engine["mpiexec"], "-n", "1", engine["executables"][tool], *map(str, arguments)]
-    env = os.environ.copy()
-    env.update(TMPDIR=str(work), TMP=str(work), TEMP=str(work), UCX_VFS_ENABLE="n")
+    env = _runtime.subprocess_environment(engine, work)
     kwargs = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {"start_new_session": True}
     logfile = work / (tool + ".log")
     started = time.monotonic()
@@ -239,6 +252,9 @@ def prepare_taudem(dem_path, outlet_x, outlet_y, cache_dir, *, reference_area_m2
     if not engine["available"]:
         raise ValueError(engine["reason"])
     _h._check(cancelled)
+    if engine.get("private_runtime"):
+        progress("Preparando TauDEM integrado y verificando sus archivos", 0)
+    engine = _runtime.ensure_runtime(engine, cancelled)
     source = Path(dem_path).expanduser().resolve()
     dem = _b._open_raster(source, "MDT TauDEM")
     try:
@@ -249,7 +265,8 @@ def prepare_taudem(dem_path, outlet_x, outlet_y, cache_dir, *, reference_area_m2
         parameters = _h._snap_parameters(reference_area_m2, reference_cell_width,
                                          reference_cell_height, None, .9)
         hashes = {name: _fingerprint(path) for name, path in engine["executables"].items()}
-        key = hashlib.sha256(repr((_VERSION, _h._source_key(dem, source), hashes)).encode()).hexdigest()[:24]
+        runtime = engine.get("runtime", {"kind": "external"})
+        key = hashlib.sha256(repr((_VERSION, _h._source_key(dem, source), hashes, runtime)).encode()).hexdigest()[:24]
         base = _h._cache_folder(Path(cache_dir).expanduser().resolve()) / ("taudem_" + key)
         base.mkdir(parents=True, exist_ok=True)
         filled, native, slope, coded = (base / name for name in ("filled.tif", "d8_tau.tif", "slope_tau.tif", "d8_caumax.tif"))
@@ -268,7 +285,7 @@ def prepare_taudem(dem_path, outlet_x, outlet_y, cache_dir, *, reference_area_m2
                 for target in (filled, native, slope, coded):
                     _h._check(cancelled)
                     _h._publish_cache(work / target.name, target, cancelled)
-                manifest.write_text(json.dumps({"steps": steps, "binary_sha256": hashes}), encoding="utf-8")
+                manifest.write_text(json.dumps({"steps": steps, "binary_sha256": hashes, "runtime": runtime}), encoding="utf-8")
             provenance = json.loads(manifest.read_text(encoding="utf-8"))
             steps = []
             progress("Calculando aporte y ajustando cierre", 35)
@@ -317,7 +334,7 @@ def prepare_taudem(dem_path, outlet_x, outlet_y, cache_dir, *, reference_area_m2
                 closure, cells, net_folder, work, cancelled, progress)
             steps.extend(network_steps)
         metadata = {"engine": "TauDEM", "version": provenance["steps"][0]["version"],
-                    "binary_sha256": hashes, "source_url": "https://github.com/dtarb/TauDEM",
+                    "binary_sha256": hashes, "runtime": runtime, "source_url": "https://github.com/dtarb/TauDEM",
                     "steps": provenance["steps"] + steps,
                     "flow_encoding": "ESRI_D8", "native_flow_encoding": "TAUDEM_D8",
                     "elevation_source": "original DEM; filled DEM routes flow only",
@@ -348,6 +365,11 @@ def rebuild_network(products, threshold_area_m2, *, bin_dir=None,
     engine = probe_taudem(bin_dir if bin_dir is not None else products.metadata.get("bin_dir"))
     if not engine["available"]:
         raise ValueError(engine["reason"])
+    _h._check(cancelled)
+    engine = _runtime.ensure_runtime(engine, cancelled)
+    previous_runtime = products.metadata.get("runtime", {})
+    if previous_runtime.get("sha256") and previous_runtime != engine.get("runtime"):
+        raise ValueError("El runtime TauDEM ha cambiado; genere de nuevo las capas antes de modificar la red.")
     cells, area = _threshold(threshold_area_m2, products.analysis.cell_width * products.analysis.cell_height)
     folder = Path(products.accumulation_path).parent / ("network_" + str(cells))
     with tempfile.TemporaryDirectory(prefix="tn_", dir=str(_h._runtime_folder()), ignore_cleanup_errors=True) as temporary:

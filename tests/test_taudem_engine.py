@@ -19,6 +19,13 @@ class TauDEMTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="taudem_tests_")
         self.folder = Path(self.temp.name)
+        work = self.folder / "process_work"
+        work.mkdir()
+        for target, name, value in ((engine._runtime, "_default_cache", self.folder / "runtime"),
+                                    (engine._h, "_runtime_folder", work)):
+            mocked = patch.object(target, name, return_value=value)
+            mocked.start()
+            self.addCleanup(mocked.stop)
 
     def tearDown(self):
         self.temp.cleanup()

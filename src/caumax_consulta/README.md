@@ -1,10 +1,10 @@
-# HidroCAUMAX v1.2.3
+# HidroCAUMAX v1.2.4
 
-Complemento auxiliar para **CAUMAX 3.0 y QGIS 3 con Qt 5**. La versión del paquete y del diálogo es **1.2.3**. Conserva procesamiento con TauDEM, exportación de MDT, direcciones y red, curva hipsométrica, los seis cuantiles originales y **P₀ y precipitación máxima diaria de la cuenca**. Incluye los ajustes completos del diálogo, estadísticos y recálculo automático por suavizado o resolución. La entrega se ha comprobado en Windows con QGIS 3.44.15. Las pruebas reproducibles se encuentran en la carpeta `tests` del repositorio; los registros locales de sesiones no se publican.
+Complemento auxiliar para **CAUMAX 3.0 y QGIS 3 con Qt 5**. La versión del paquete y del diálogo es **1.2.4**. Conserva procesamiento con TauDEM, exportación de MDT, direcciones y red, curva hipsométrica, los seis cuantiles originales y **P₀ y precipitación máxima diaria de la cuenca**. Incluye los ajustes completos del diálogo, estadísticos y recálculo automático por suavizado o resolución. La entrega se ha comprobado en Windows con QGIS 3.44.15. Las pruebas reproducibles se encuentran en la carpeta `tests` del repositorio; los registros locales de sesiones no se publican.
 
 ## Instalación y uso
 
-1. Instala **HidroCAUMAX_v1_2_3.zip**, sin descomprimir, desde **Complementos → Administrar e instalar complementos → Instalar a partir de ZIP**. Acepta sustituir la instalación auxiliar anterior. El nombre visible es **HidroCAUMAX v1.2.3**; la carpeta interna sigue siendo **caumax_consulta** para conservar la continuidad de la actualización.
+1. Instala **HidroCAUMAX_v1_2_4.zip**, sin descomprimir, desde **Complementos → Administrar e instalar complementos → Instalar a partir de ZIP**. Acepta sustituir la instalación auxiliar anterior. El nombre visible es **HidroCAUMAX v1.2.4**; la carpeta interna sigue siendo **caumax_consulta** para conservar la continuidad de la actualización.
 2. Activa CAUMAX, carga sus capas y abre **Mapa de caudales máximos → Consulta de capas de caudales máximos**. Selecciona periodo y punto; pulsa **Consultar**.
 3. Una consulta válida habilita **Cuenca hidrográfica**, a la izquierda del informe nativo. Su texto y su altura son el **110 %** de los botones de la derecha, con redondeo al píxel más cercano para la altura. La anchura reserva espacio para el texto completo y el logotipo **GEA-UVa**.
 4. Pulsa el botón para calcular la cuenca. El diálogo se alinea con el borde derecho de QGIS, usa toda su altura y aproximadamente el **36 %** de su anchura. Sigue los cambios de posición y tamaño de QGIS. **Morfología de la Cuenca** presenta la tabla blanca de 19 parámetros: **Parámetro, Valor, Unidad e Interpretación**, con anchuras relativas **46/13/9/32 %**. Valor y Unidad se centran; la interpretación ocupa como máximo tres líneas y conserva el texto completo en su ayuda. Las observaciones del cálculo quedan inmediatamente debajo de esta tabla.
@@ -12,7 +12,7 @@ Complemento auxiliar para **CAUMAX 3.0 y QGIS 3 con Qt 5**. La versión del paqu
 6. En **Suavizado divisoria**, elige **Original**, **Suavizada** o ambas y ajusta un grado entero. Cada cambio vuelve a calcular todos los resultados sobre la superficie activa, con cancelación de trabajos anteriores y publicación del conjunto completo. **Exportar shape**, compacto y alineado a la izquierda, guarda las divisorias ya mostradas.
 7. La franja **Informe** reúne **Informe (PDF)**, **Guardar proyecto** y **Abrir proyecto**. El cuerpo de la ventana tiene desplazamiento y esa franja permanece visible.
 
-En la sección de drenaje puedes pulsar **Generar capas D8** para procesar el MDT activo con TauDEM y preparar sus tres productos exportables. Esta función requiere los ejecutables y dependencias de TauDEM; **Carpeta de TauDEM…** permite seleccionarlos.
+En la sección de drenaje puedes pulsar **Generar capas D8** para procesar el MDT activo con TauDEM y preparar sus tres productos exportables. En Windows de 64 bits, los ejecutables y todas sus dependencias están incluidos en el ZIP y se preparan automáticamente al primer cálculo. **Motor TauDEM…** permite usar el motor incluido o seleccionar opcionalmente una carpeta externa.
 
 El menú **Complementos → HidroCAUMAX** permite activar las herramientas y **Abrir proyecto de cuenca…** sin realizar otra consulta nativa. Los botones nuevos tienen fondo azul claro. El botón general **Identificar objetos espaciales** conserva su funcionamiento habitual.
 
@@ -113,6 +113,10 @@ Se guardan perfiles comprimidos de hasta **200000 píxeles válidos por mapa** p
 
 Los resultados quedan vinculados a la geometría original y su CRS mediante una huella **SHA-256**, además del área total. Se guardan por resolución con las entradas y casillas. Al abrir una consulta o generar su PDF **no se vuelven a leer los rásteres fuente ni se recalculan las medias**. Los resultados de otra divisoria no se muestran como si correspondieran a la activa. Las consultas anteriores sin este estado siguen abriéndose; no reciben medias inventadas. Si no se ha solicitado ningún cálculo, el informe lo indica brevemente; con solo P₀ calculado no añade gráficos vacíos de precipitación.
 
+## Formato de la curva hipsométrica
+
+El eje horizontal dimensional muestra enteros con pasos regulares y aproximadamente diez divisiones. Para 54,25 km² se extiende de 0 a 55, cada 5 km²; la curva termina en el área real. Para áreas menores de 1 km² se indican m². El eje vertical tiene ocho intervalos y las etiquetas y el HI mostrado usan un máximo de dos decimales. El título horizontal se sitúa junto al eje. El modo adimensional conserva sus fracciones entre 0 y 1. Las cifras guardadas y los cálculos conservan toda su precisión; el PDF utiliza el mismo formato y unidades.
+
 ## TauDEM real y tres productos exportables
 
 **Generar capas D8** ejecuta **PitRemove → D8FlowDir → AreaD8 → Threshold → StreamNet** con TauDEM real y actualiza la cuenca y su red con esas direcciones. El programa registra herramientas, versión, procedencia y umbral. Si faltan ejecutables o falla una etapa, informa del problema; no presenta otro motor como si fuera TauDEM. La consulta Q/T original permanece intacta. Las estadísticas de altitud, pendiente local y TRI siguen usando el **MDT original**; el MDT rellenado se usa para encaminar el flujo.
@@ -138,7 +142,7 @@ Para utilizar las direcciones en el **Método Racional de CAUMAX**, selecciona *
 | S | 7 | 4 |
 | SE | 8 | 2 |
 
-No basta con renombrar el TIFF: el exportador realiza la recodificación y conserva la malla. En **Windows**, instala **TauDEM y Microsoft MPI Runtime (MS-MPI)** siguiendo la [distribución oficial y sus dependencias](https://hydrology.usu.edu/taudem/taudem5/downloads.html). Son programas externos: **el ZIP del complemento no incluye ni instala TauDEM o MS-MPI**. El instalador completo oficial de TauDEM reúne sus ejecutables y dependencias; no se necesita ArcGIS para usarlos por línea de comandos. Después selecciona la carpeta de ejecutables mediante **Carpeta de TauDEM…** y comprueba la disponibilidad indicada en el diálogo.
+No basta con renombrar el TIFF: el exportador realiza la recodificación y conserva la malla. En **Windows de 64 bits**, el ZIP incluye **TauDEM 5.5.0, Microsoft MPI y GDAL/PROJ**, con sus licencias y procedencia. Al primer cálculo se verifica y extrae el conjunto en una carpeta privada del usuario, sin permisos de administrador, descargas adicionales, ArcGIS ni modificaciones del PATH global. Las bibliotecas se utilizan únicamente en los procesos de TauDEM. **Motor TauDEM… → Usar motor incluido** restablece esta opción si antes se había seleccionado una carpeta externa. Una instalación externa sigue siendo opcional en Windows y necesaria en Linux/macOS. El archivo `vendor/README.md` documenta el conjunto incluido.
 
 ## Cursos principal y central en QGIS
 
@@ -155,15 +159,15 @@ Las capas permanecen en el proyecto al cerrar el diálogo. Sus estados de visibi
 
 ## Fondo MDT y legibilidad de la cuenca
 
-El MDT de la resolución activa se representa con la rampa exacta **cpt-city → Topography → cd-a (California Dry)**, recurso `jm/cd/cd-a`, con sus **48 clases originales**. Se combina con **relieve multidireccional** al **45 % de opacidad** en modo Multiplicar y factor vertical 1. QGIS dibuja ambos directamente desde el MDT real a su resolución nativa, según la escala solicitada. Esta representación no modifica cotas, direcciones D8, punto de cierre ni parámetros.
+El MDT de la resolución activa se representa con una **paleta natural de verdes salvia luminosos, ocres suaves y tonos de roca**, combinada con **sombreado con luz del noroeste más marcado** para apreciar mejor el relieve. QGIS dibuja ambos directamente desde el MDT real a su resolución nativa, según la escala solicitada. Los ajustes de color y sombreado son exclusivamente visuales: no modifican cotas, direcciones D8, punto de cierre ni parámetros hidrológicos.
 
-La rampa cd-a es obra de Jim Mossman (2005), distribuida en cpt-city. Portions of this work include intellectual property of Jim Mossman and are used herein with permission. Copyright (C) 2005 Jim Mossman. All rights reserved. Su licencia y atribución originales se conservan en `CPT_CITY_LICENSE.txt`.
+La rampa cd-a utilizada en la versión 1.2.3 es obra de Jim Mossman (2005), distribuida en cpt-city. Portions of this work include intellectual property of Jim Mossman and are used herein with permission. Copyright (C) 2005 Jim Mossman. All rights reserved. Su licencia y atribución originales se conservan en `CPT_CITY_LICENSE.txt`.
 
 Al desplazar o ampliar el mapa, la rampa y su leyenda se ajustan automáticamente a las cotas válidas de una ventana de referencia local. Esta ventana parte del rectángulo que encierra la cuenca y añade un **10 % de margen por cada lado**; el rango se calcula sobre su intersección con el encuadre visible. En un acercamiento, se utilizan las cotas del área visible dentro de ese entorno. Así, al alejar el mapa, no se incorporan las cotas de todo el MDT para representar una cuenca pequeña.
 
 Si el encuadre queda completamente fuera del entorno de la cuenca, la ventana se centra en el lienzo y sus dimensiones se limitan a las del entorno: **1,2 veces la anchura y la altura del rectángulo de la cuenca**. Los proyectos antiguos que no contienen este contexto siguen usando el área visible hasta abrir la consulta o recalcular; esa operación incorpora el entorno de referencia.
 
-El cálculo cartográfico se realiza en segundo plano tras una pausa breve de navegación y descarta solicitudes anteriores; respeta el CRS del lienzo, los NoData y la visibilidad de las capas. Se conservan el sombreado multidireccional al 45 % y el factor vertical 1, sin exagerar alturas. Al ampliar se suavizan los píxeles mediante interpolación bilineal exclusivamente de pantalla; la malla original, los valores del archivo y todos los cálculos hidrológicos permanecen intactos.
+El cálculo cartográfico se realiza en segundo plano tras una pausa breve de navegación y descarta solicitudes anteriores; respeta el CRS del lienzo, los NoData y la visibilidad de las capas. La iluminación del noroeste a 35° utiliza un realce vertical visual ×3, opacidad del 80 % y mezcla Multiplicar. Al ampliar se suaviza la representación mediante interpolación cúbica spline antes del sombreado; la malla original, los valores del archivo y todos los cálculos hidrológicos permanecen intactos.
 
 El relleno de la cuenca original es **rojo al 20 % de opacidad**, equivalente al **80 % de transparencia** (alfa 51/255), para ver el terreno a través de él. La casilla **Malla de celdas** muestra u oculta la trama independientemente del contorno original y conserva su elección por resolución, también en el proyecto y el PDF. Para 500 y 25 m aparece activada por defecto; en resoluciones más finas, desactivada.
 
@@ -246,5 +250,5 @@ El ZIP conserva además el script original íntegro del usuario en **extras/CAUM
 - [Norma 5.2-IC, texto consolidado del Ministerio](https://cdn.mitma.gob.es/portal-web-drupal/carreteras/52ic_fom2982016_err_fom1852017_res180326_consolidado.pdf), apartado 2.2.2.5; [Orden FOM/298/2016 en BOE](https://www.boe.es/buscar/doc.php?id=BOE-A-2016-2405).
 - [GDAL: TRI Riley y Wilson](https://gdal.org/en/stable/programs/gdal_raster_tri.html) y [Riley, DeGloria y Elliot (1999)](https://arc.lib.montana.edu/ojs/index.php/IJS/article/view/2914).
 
-El repositorio incluye pruebas reproducibles de cálculo, interfaz, recuperación de resultados y exportación. Los registros históricos locales se mantienen fuera de esta publicación porque contienen rutas y referencias a sesiones de trabajo. HidroCAUMAX v1.2.3 se distribuye en el canal **estable**; la comprobación de un proyecto concreto debe realizarse en su instalación de QGIS y con sus fuentes de datos.
+El repositorio incluye pruebas reproducibles de cálculo, interfaz, recuperación de resultados y exportación. Los registros históricos locales se mantienen fuera de esta publicación porque contienen rutas y referencias a sesiones de trabajo. HidroCAUMAX v1.2.4 se distribuye en el canal **estable**; la comprobación de un proyecto concreto debe realizarse en su instalación de QGIS y con sus fuentes de datos.
 

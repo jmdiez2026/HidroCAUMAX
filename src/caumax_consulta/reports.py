@@ -188,19 +188,19 @@ def _outlet_snap_report_html(analysis):
 
 def _hypsometric_report_html(analysis, state):
     from .hypsometry import curve_plot_data, render_hypsometric_png
-    from .parameter_schema import format_value
 
     dimensionless = bool((state or {}).get('hypsometric_dimensionless', False))
     data = curve_plot_data(analysis, dimensionless)
     mode = 'adimensional' if dimensionless else 'dimensional'
-    hi = _text(format_value('hypsometric', data['hi']))
+    hi = _text('No disponible' if data['hi'] is None else
+               f"{data['hi']:.2f}".rstrip('0').rstrip('.').replace('.', ','))
     if not data['available']:
         return ('<h2>Curva hipsométrica</h2><p class="small">Modo ' + mode
                 + '. HI exacto: ' + hi + '. ' + _text(data['reason']) + '</p>')
     png = render_hypsometric_png(analysis, dimensionless, font_family=_pdf_font_family())
     source = 'data:image/png;base64,' + base64.b64encode(png).decode('ascii')
     axes = ('Área relativa a/A; altitud relativa (h−Hmín)/(Hmáx−Hmín).'
-            if dimensionless else 'Área acumulada por encima de la cota (km²); altitud (m).')
+            if dimensionless else data['x_label'] + '; altitud (m).')
     return (
         '<h2 style="page-break-before: always;">Curva hipsométrica</h2>'
         '<p align="center"><img src="' + source + '" width="820" height="384"></p>'
@@ -513,7 +513,7 @@ td {vertical-align: top;}
 .method {font-size: 8pt;}
 </style></head><body>
 <h1>''' + title + '''</h1>
-<p><b>HidroCAUMAX v1.2.3 - Parámetros morfológicos e hidrológicos</b></p>
+<p><b>HidroCAUMAX v1.2.4 - Parámetros morfológicos e hidrológicos</b></p>
 <table width="100%" cellspacing="0" cellpadding="3">''' + metadata_rows + '''</table>
 ''' + resolution_html + '''
 ''' + outlet_snap_html + '''
@@ -603,8 +603,8 @@ def _write_document(path, content):
     printer = QPrinter(QPrinter.HighResolution)
     printer.setOutputFormat(QPrinter.PdfFormat)
     printer.setOutputFileName(str(path))
-    printer.setDocName('HidroCAUMAX v1.2.3 - Cuenca hidrográfica')
-    printer.setCreator('HidroCAUMAX v1.2.3')
+    printer.setDocName('HidroCAUMAX v1.2.4 - Cuenca hidrográfica')
+    printer.setCreator('HidroCAUMAX v1.2.4')
     printer.setFontEmbeddingEnabled(True)
     printer.setPaperSize(QPrinter.A4)
     printer.setOrientation(QPrinter.Landscape)

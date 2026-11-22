@@ -5,15 +5,24 @@ from qgis.PyQt.QtCore import QBuffer, QIODevice, QPointF, QRectF, Qt
 from qgis.PyQt.QtGui import QColor, QFont, QImage, QPainter, QPainterPath, QPen
 from qgis.PyQt.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
-from .parameter_schema import format_value
-
-
 def _finite(value):
     try:
         number = float(value)
         return number if math.isfinite(number) else None
     except (TypeError, ValueError, OverflowError):
         return None
+
+
+def _area_axis(area_km2):
+    """Readable integer ticks without rounding or replacing the curve samples."""
+    scale, unit = (1e6, 'm²') if area_km2 < 1 else (1.0, 'km²')
+    extent = area_km2 * scale
+    target = max(1.0, extent / 10)
+    magnitude = 10 ** math.floor(math.log10(target))
+    step = min((int(factor * magnitude) for factor in (1, 2, 5, 10)),
+               key=lambda candidate: abs(math.log(candidate / target)))
+    maximum = max(step, math.ceil(extent / step) * step)
+    return scale, maximum, tuple(range(0, maximum + 1, step)), unit
 
 
 def curve_plot_data(analysis, dimensionless=False):
@@ -52,18 +61,29 @@ def curve_plot_data(analysis, dimensionless=False):
     if dimensionless and relief == 0:
         result.update(hi=None, reason='Curva adimensional no definida: la cuenca no tiene desnivel (Hmáx = Hmín).')
         return result
+    if dimensionless:
+        scale, axis_maximum, ticks = 1.0, 1.0, tuple(i / 10 for i in range(11))
+    else:
+        scale, axis_maximum, ticks, unit = _area_axis(area)
+        result['x_label'] = f'Área acumulada por encima de la cota ({unit})'
     result.update(
         available=True, reason='',
         x=fraction if dimensionless else [f * area for f in fraction],
         y=[(h - minimum) / relief for h in heights] if dimensionless else heights,
         x_limits=(0.0, 1.0 if dimensionless else area),
+        x_display_limits=(0.0, axis_maximum), x_scale=scale, x_ticks=ticks,
         y_limits=(0.0, 1.0) if dimensionless else (minimum, maximum),
     )
     return result
 
 
 def _tick(value):
-    return f'{value:.4g}'.replace('.', ',')
+    number = _finite(value)
+    if number is None:
+        return 'No disponible'
+    # Display rounding only: the full-precision data and exact HI are retained.
+    text = f'{number:.2f}'.rstrip('0').rstrip('.')
+    return ('0' if text == '-0' else text).replace('.', ',')
 
 
 def paint_hypsometric_curve(painter, bounds, data, font_family=None):
@@ -79,7 +99,7 @@ def paint_hypsometric_curve(painter, bounds, data, font_family=None):
     painter.setFont(font)
     painter.setPen(QColor('#203449'))
     title = 'Curva hipsométrica · ' + ('adimensional' if data['dimensionless'] else 'dimensional')
-    title += ' · HI exacto: ' + format_value('hypsometric', data['hi'])
+    title += ' · HI exacto: ' + _tick(data['hi'])
     painter.drawText(QRectF(bounds.left() + 12, bounds.top() + 8, bounds.width() - 24, pixels * 2),
                      Qt.AlignCenter, title)
     if not data['available']:
@@ -87,11 +107,11 @@ def paint_hypsometric_curve(painter, bounds, data, font_family=None):
                          Qt.AlignCenter | Qt.TextWordWrap, data['reason'])
         painter.restore()
         return
-    chart = bounds.adjusted(max(80, pixels * 8), pixels * 3, -pixels * 2, -pixels * 5)
+    chart = bounds.adjusted(max(80, pixels * 8), pixels * 3, -pixels * 2, -pixels * 4)
     if chart.width() <= 0 or chart.height() <= 0:
         painter.restore()
         return
-    xmin, xmax = data['x_limits']
+    xmin, xmax = data['x_display_limits']
     ymin, ymax = data['y_limits']
     if ymax == ymin:
         padding = max(1.0, abs(ymin) * .005)
@@ -101,16 +121,27 @@ def paint_hypsometric_curve(painter, bounds, data, font_family=None):
         return QPointF(chart.left() + (x - xmin) / (xmax - xmin) * chart.width(),
                        chart.bottom() - (y - ymin) / (ymax - ymin) * chart.height())
 
-    for index in range(6):
-        value = xmin + index / 5 * (xmax - xmin)
+    ticks = data['x_ticks']
+    labels = [_tick(value) for value in ticks]
+    spacing = chart.width() / max(1, len(ticks)-1)
+    text_width = max(painter.fontMetrics().horizontalAdvance(text) for text in labels)
+    label_stride = max(1, math.ceil((text_width + 8) / spacing))
+    for index, value in enumerate(ticks):
         position = point(value, ymin).x()
         painter.setPen(QPen(QColor('#dce4ec'), 1, Qt.DashLine))
         painter.drawLine(QPointF(position, chart.top()), QPointF(position, chart.bottom()))
         painter.setPen(QColor('#203449'))
-        painter.drawText(QRectF(position - pixels * 3, chart.bottom() + 5, pixels * 6, pixels * 2),
-                         Qt.AlignHCenter | Qt.AlignTop, _tick(value))
-    for index in range(5):
-        value = ymin + index / 4 * (ymax - ymin)
+        if index % label_stride == 0 or index == len(ticks)-1:
+            # Keep the last label clear of a preceding one on narrow canvases.
+            if (index != len(ticks)-1 and index > 0
+                    and len(ticks)-1-index < label_stride):
+                continue
+            label_width = max(pixels * 3, text_width + 4)
+            painter.drawText(QRectF(position-label_width/2, chart.bottom()+4,
+                                   label_width, pixels*1.5),
+                             Qt.AlignHCenter | Qt.AlignTop, labels[index])
+    for index in range(9):
+        value = ymin + index / 8 * (ymax - ymin)
         position = point(xmin, value).y()
         painter.setPen(QPen(QColor('#dce4ec'), 1, Qt.DashLine))
         painter.drawLine(QPointF(chart.left(), position), QPointF(chart.right(), position))
@@ -121,15 +152,15 @@ def paint_hypsometric_curve(painter, bounds, data, font_family=None):
     painter.drawRect(chart)
     painter.save()
     painter.setClipRect(chart.adjusted(-1, -1, 1, 1))
-    path = QPainterPath(point(data['x'][0], data['y'][0]))
+    path = QPainterPath(point(data['x'][0]*data['x_scale'], data['y'][0]))
     for x, y in zip(data['x'][1:], data['y'][1:]):
-        path.lineTo(point(x, y))
+        path.lineTo(point(x*data['x_scale'], y))
     painter.setPen(QPen(QColor('#1383b5'), max(2.0, pixels / 6)))
     painter.drawPath(path)
     painter.restore()
     painter.setPen(QColor('#203449'))
-    painter.drawText(QRectF(chart.left(), chart.bottom() + pixels * 2.5,
-                           chart.width(), pixels * 2), Qt.AlignCenter, data['x_label'])
+    painter.drawText(QRectF(chart.left(), chart.bottom() + pixels * 1.9,
+                           chart.width(), pixels * 1.6), Qt.AlignCenter, data['x_label'])
     painter.save()
     painter.translate(bounds.left() + pixels * 1.1, chart.center().y())
     painter.rotate(-90)
@@ -204,7 +235,7 @@ class HypsometricWidget(QWidget):
 
     def _refresh(self, *unused):
         data = self.plot_data()
-        self.hi_label.setText('Índice hipsométrico (HI) exacto: ' + format_value('hypsometric', data['hi']))
+        self.hi_label.setText('Índice hipsométrico (HI) exacto: ' + _tick(data['hi']))
         self.status_label.setText(
             (str(data['sample_count']) + ' puntos · ' + str(data['valid_count'])
              + (' cotas válidas. HI usa la media de cotas ponderada por superficie; la integral de la curva es aproximada.'

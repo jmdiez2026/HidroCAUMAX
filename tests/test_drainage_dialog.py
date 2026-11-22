@@ -17,7 +17,7 @@ from osgeo import gdal
 
 os.environ.setdefault('QT_QPA_PLATFORM','offscreen')
 from qgis.PyQt import sip
-from qgis.PyQt.QtCore import QCoreApplication, QEvent, Qt
+from qgis.PyQt.QtCore import QCoreApplication, QEvent, QSettings, Qt
 from qgis.PyQt.QtTest import QTest
 from qgis.core import QgsApplication, QgsCoordinateReferenceSystem, QgsGeometry, QgsProject
 from qgis.gui import QgsMapCanvas
@@ -207,6 +207,49 @@ class DrainageDialogTests(unittest.TestCase):
             self.assertFalse(dialog._drainage_timer.isActive())
             QTest.qWait(550)
         self.assertEqual(len(dialog._drainage_controller.calls),1)
+
+    def test_bundled_engine_menu_removes_external_override_only_when_available(self):
+        settings_path=str(self.folder/'isolated-settings.ini')
+        settings=QSettings(settings_path,QSettings.IniFormat)
+        settings.setValue('HidroCAUMAX/taudem_bin',str(self.folder/'external-engine'))
+        settings.setValue('HidroCAUMAX/unrelated-setting','preserved')
+        settings.sync()
+        dialog=self.dialog
+        actions=dialog.taudem_folder_button.menu().actions()
+        self.assertEqual([action.text() for action in actions],
+            ['Usar motor incluido (Windows 64 bits)','Seleccionar carpeta externa…'])
+        with patch('caumax_consulta.basin_dialog.QSettings',return_value=settings), \
+                patch('caumax_consulta.taudem_engine.probe_taudem',return_value={'available':True}) as probe:
+            actions[0].trigger()
+        probe.assert_called_once_with()
+        settings.sync()
+        restored=QSettings(settings_path,QSettings.IniFormat)
+        self.assertFalse(restored.contains('HidroCAUMAX/taudem_bin'))
+        self.assertEqual(restored.value('HidroCAUMAX/unrelated-setting'),'preserved')
+        self.assertIn('Motor TauDEM predeterminado seleccionado',dialog.drainage_status.text())
+        dialog._drainage_controller.busy=True
+        dialog._refresh_drainage_controls()
+        self.assertFalse(dialog.taudem_folder_button.isEnabled())
+        self.assertFalse(dialog.drainage_prepare_button.isEnabled())
+        dialog._drainage_controller.busy=False
+        dialog._refresh_drainage_controls()
+        self.assertTrue(dialog.taudem_folder_button.isEnabled())
+
+    def test_unavailable_bundled_engine_preserves_override_and_displays_reason(self):
+        settings_path=str(self.folder/'isolated-settings.ini')
+        settings=QSettings(settings_path,QSettings.IniFormat)
+        external=str(self.folder/'working-external-engine')
+        settings.setValue('HidroCAUMAX/taudem_bin',external)
+        settings.sync()
+        reason='El runtime incluido no está disponible en esta plataforma de prueba.'
+        with patch('caumax_consulta.basin_dialog.QSettings',return_value=settings), \
+                patch('caumax_consulta.taudem_engine.probe_taudem',
+                      return_value={'available':False,'reason':reason}) as probe:
+            self.dialog.taudem_folder_button.menu().actions()[0].trigger()
+        probe.assert_called_once_with()
+        settings.sync()
+        self.assertEqual(QSettings(settings_path,QSettings.IniFormat).value('HidroCAUMAX/taudem_bin'),external)
+        self.assertEqual(self.dialog.drainage_status.text(),reason)
 
 
 if __name__=='__main__':unittest.main()

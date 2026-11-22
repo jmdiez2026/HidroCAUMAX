@@ -40,6 +40,10 @@ jobs:
           python-version: '3.12'
       - name: Validar empaquetado, identidad y XML
         run: python -m unittest discover -s tests -p test_release_packaging.py -v
+      - name: Validar empaquetador del runtime TauDEM
+        run: python -m unittest discover -s tests -p test_taudem_bundle.py -v
+      - name: Verificar integridad del runtime TauDEM versionado
+        run: python scripts/prepare_taudem_bundle.py --verify src/caumax_consulta/vendor/taudem-5.5.0-win64.zip
       - name: Construir publicación
         env:
           RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}

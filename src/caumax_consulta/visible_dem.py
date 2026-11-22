@@ -10,7 +10,8 @@ from qgis.core import (QgsApplication, QgsCoordinateReferenceSystem, QgsCoordina
                        QgsCsException, QgsProject, QgsRasterLayer, QgsRectangle,
                        QgsSingleBandPseudoColorRenderer, QgsTask)
 
-from .dem_display import ROLE_PROPERTY, apply_visible_elevation_range, smooth_terrain_display
+from .dem_display import (ROLE_PROPERTY, apply_visible_elevation_range,
+                          apply_terrain_style)
 
 
 BASIN_BOUNDS_PROPERTY = 'hidrocaumax/dem_basin_bounds'
@@ -218,7 +219,7 @@ class VisibleDemController(QObject):
         if not self._started:
             return
         for layer in self.canvas.layers():
-            smooth_terrain_display(layer)
+            apply_terrain_style(layer)
         visible_layers = list(self._visible_layers())
         self._watch_layers(visible_layers)
         current_ids = set()

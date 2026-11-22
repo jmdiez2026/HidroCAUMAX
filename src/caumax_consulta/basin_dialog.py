@@ -10,7 +10,7 @@ from qgis.PyQt.QtGui import QColor
 from qgis.PyQt.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QDialog, QDialogButtonBox,
     QDoubleSpinBox, QSpinBox, QComboBox, QFileDialog, QGridLayout, QGroupBox, QHBoxLayout, QMessageBox,
-    QHeaderView, QLabel, QPlainTextEdit, QProgressBar, QPushButton, QTableWidget,
+    QHeaderView, QLabel, QMenu, QPlainTextEdit, QProgressBar, QPushButton, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QScrollArea, QWidget,
 )
 from qgis.core import (
@@ -76,7 +76,7 @@ class BasinDialog(QDialog):
     def __init__(self, query, iface, parent=None, saved_session=None):
         super().__init__(parent)
         self.setObjectName('CaumaxCuencaHidrograficaDialog')
-        self.setWindowTitle('HidroCAUMAX v1.2.3 · Cuenca hidrográfica')
+        self.setWindowTitle('HidroCAUMAX v1.2.4 · Cuenca hidrográfica')
         self.setStyleSheet(BLUE_BUTTON_STYLE)
         self.setAttribute(Qt.WA_DeleteOnClose)
         self.query, self.iface = query, iface
@@ -277,8 +277,12 @@ class BasinDialog(QDialog):
         self.drainage_prepare_button = QPushButton('Generar capas D8', drainage_group)
         self.drainage_prepare_button.clicked.connect(self._prepare_drainage)
         preparation.addWidget(self.drainage_prepare_button)
-        self.taudem_folder_button = QPushButton('Carpeta de TauDEM…', drainage_group)
-        self.taudem_folder_button.clicked.connect(self._choose_taudem_folder)
+        self.taudem_folder_button = QPushButton('Motor TauDEM…', drainage_group)
+        taudem_menu = QMenu(self.taudem_folder_button)
+        taudem_menu.addAction('Usar motor incluido (Windows 64 bits)', self._use_bundled_taudem)
+        taudem_menu.addAction('Seleccionar carpeta externa…', self._choose_taudem_folder)
+        self.taudem_folder_button.setMenu(taudem_menu)
+        self.taudem_folder_button.setToolTip('En Windows de 64 bits, TauDEM y sus dependencias están incluidos. La carpeta externa es opcional.')
         preparation.addWidget(self.taudem_folder_button)
         self.drainage_cancel_button = QPushButton('Cancelar cálculo', drainage_group)
         self.drainage_cancel_button.clicked.connect(self._cancel_drainage)
@@ -333,7 +337,8 @@ class BasinDialog(QDialog):
         self.drainage_progress.setRange(0,100)
         self.drainage_progress.hide()
         drainage_layout.addWidget(self.drainage_progress)
-        taudem_help = QLabel('<a href="https://hydrology.usu.edu/taudem/taudem5/downloads.html">Instalación oficial de TauDEM y MPI</a>',drainage_group)
+        taudem_help = QLabel('TauDEM y dependencias incluidos para Windows de 64 bits. <a href="https://hydrology.usu.edu/taudem/taudem5/documentation.html">Documentación</a>',drainage_group)
+        taudem_help.setWordWrap(True)
         taudem_help.setOpenExternalLinks(True)
         drainage_layout.addWidget(taudem_help)
         layout.addWidget(drainage_group)
@@ -737,6 +742,15 @@ class BasinDialog(QDialog):
         elif not busy:
             self.drainage_status.setText('Pulsa Generar capas D8. El MDT y las direcciones conservarán la misma malla.')
 
+    def _use_bundled_taudem(self):
+        from .taudem_engine import probe_taudem
+        info = probe_taudem()
+        if not info.get('available'):
+            self.drainage_status.setText(info.get('reason', 'El motor incluido no está disponible en esta plataforma.'))
+            return
+        QSettings().remove('HidroCAUMAX/taudem_bin')
+        self.drainage_status.setText('Motor TauDEM predeterminado seleccionado. Pulsa Generar capas D8.')
+
     def _choose_taudem_folder(self):
         initial = str(QSettings().value('HidroCAUMAX/taudem_bin',''))
         folder = QFileDialog.getExistingDirectory(self,'Carpeta de ejecutables TauDEM',initial)
@@ -760,7 +774,7 @@ class BasinDialog(QDialog):
             bin_dir = str(QSettings().value('HidroCAUMAX/taudem_bin','')) or None
             info = probe_taudem(bin_dir=bin_dir)
             if not info.get('available'):
-                self.drainage_status.setText(info.get('reason','Instala TauDEM y MPI o selecciona su carpeta.'))
+                self.drainage_status.setText(info.get('reason','No se puede preparar TauDEM. Reinstala el complemento o selecciona un motor externo.'))
                 return
             if self._drainage_controller is None:
                 from .drainage_controller import DrainageController
