@@ -196,12 +196,18 @@ def _raster_export(products, source, destination, product, encoding, add_to_proj
             for key, value in tags.items():
                 copied.SetMetadataItem(key, value)
             copied.FlushCache()
+            if hasattr(copied, 'Close'):
+                copied.Close()
             copied = None
             copied = _open_raster(stage)
             _check_copy(source, copied)
             if any(copied.GetMetadataItem(key) != value for key, value in tags.items()):
                 raise ValueError('La copia no conserva la procedencia del procesamiento.')
         finally:
+            # Tracebacks or validation callbacks may still reference this Dataset.
+            # Close its native handle before TemporaryDirectory removes the file.
+            if copied is not None and hasattr(copied, 'Close'):
+                copied.Close()
             copied = None
         _publish(stage, target)
     if add_to_project:
@@ -217,8 +223,13 @@ def _raster_export(products, source, destination, product, encoding, add_to_proj
 def export_dem(products, destination, add_to_project=False):
     """Copy the original active DEM, preserving its cells, CRS and NoData."""
     source = _open_raster(products.dem_path)
-    _reference(source.GetProjectionRef())
-    return _raster_export(products, source, destination, 'ELEVATION', None, add_to_project)
+    try:
+        _reference(source.GetProjectionRef())
+        return _raster_export(products, source, destination, 'ELEVATION', None, add_to_project)
+    finally:
+        if hasattr(source, 'Close'):
+            source.Close()
+        source = None
 
 
 def export_directions(products, destination, encoding='caumax', add_to_project=False):
@@ -229,7 +240,12 @@ def export_directions(products, destination, encoding='caumax', add_to_project=F
     if normalized not in ('caumax', 'taudem'):
         raise ValueError('Selecciona codificación CAUMAX/ESRI o TauDEM nativa.')
     source = _check_directions(products, normalized)
-    return _raster_export(products, source, destination, 'FLOW_DIRECTION', normalized, add_to_project)
+    try:
+        return _raster_export(products, source, destination, 'FLOW_DIRECTION', normalized, add_to_project)
+    finally:
+        if hasattr(source, 'Close'):
+            source.Close()
+        source = None
 
 
 def _check_network(source, copied):
