@@ -10,16 +10,19 @@ import unittest
 
 import numpy as np
 from qgis.PyQt.QtCore import Qt
+from qgis.PyQt.QtGui import QColor
 from qgis.PyQt import sip
 from qgis.PyQt.QtTest import QTest
-from qgis.core import (QgsCoordinateReferenceSystem, QgsCoordinateTransform,
+from qgis.core import (QgsColorRampShader, QgsCoordinateReferenceSystem, QgsCoordinateTransform,
                        QgsProject, QgsRectangle)
 from qgis.gui import QgsMapCanvas
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT/'src'))
 from caumax_consulta import dem_display as display
-from caumax_consulta.visible_dem import VisibleDemController, visible_elevation_range
+from caumax_consulta.visible_dem import (BASIN_BOUNDS_PROPERTY, BASIN_CRS_PROPERTY,
+                                       VisibleDemController, layer_basin_extent,
+                                       reference_extent, visible_elevation_range)
 import test_dem_display as fixture
 
 
@@ -100,9 +103,13 @@ class VisibleDemTests(unittest.TestCase):
         self.wait(lambda: colours.customProperty('hidrocaumax/dem_visible_range_m') == [100., 115.])
         self.show_range(colours, self.right, (1000., 1015.))
         ramp = colours.renderer().shader().rasterShaderFunction().colorRampItemList()
-        self.assertEqual([item.color.name().upper() for item in ramp], [colour for _, colour in display.NATURAL_RAMP])
-        self.assertEqual((ramp[0].value, ramp[-1].value), (1000., 1015.))
-        self.assertEqual((ramp[0].label, ramp[-1].label), ('1000 m', '1015 m'))
+        self.assertEqual([item.color.name().upper() for item in ramp], [colour for _, colour in display.NATURAL_RAMP[:-1]])
+        self.assertEqual((colours.renderer().classificationMin(), colours.renderer().classificationMax()),
+                         (1000., 1015.))
+        self.assertAlmostEqual(ramp[0].value, 1000.312)
+        self.assertEqual(ramp[-1].value, math.inf)
+        self.assertTrue(ramp[0].label.startswith('1000–'))
+        self.assertTrue(ramp[-1].label.endswith('–1015 m'))
         self.assertEqual(colours.customProperty('hidrocaumax/dem_range_m'), initial_source_range)
         self.assertEqual(colours.opacity(), 1)
         self.assertAlmostEqual(shade.opacity(), display.HILLSHADE_OPACITY)
@@ -133,9 +140,98 @@ class VisibleDemTests(unittest.TestCase):
         self.wait(lambda: colours.customProperty('hidrocaumax/dem_visible_range_m') == [1000., 1015.])
         self.controller.stop()
         self.assertEqual(self.controller._signals, [])
+        self.assertEqual(self.controller._layer_signals, {})
         self.canvas.setExtent(self.left)
         QTest.qWait(100)
         self.assertEqual(colours.customProperty('hidrocaumax/dem_visible_range_m'), [1000., 1015.])
+
+    def test_basin_neighbourhood_limits_overview_but_respects_close_zoom_and_pan(self):
+        basin = QgsRectangle(0, 0, 100, 200)
+        overview = QgsRectangle(-1000, -1000, 2000, 2000)
+        self.assertEqual(reference_extent(overview, basin), QgsRectangle(-10, -20, 110, 220))
+        close = QgsRectangle(20, 30, 40, 50)
+        self.assertEqual(reference_extent(close, basin), close)
+        partial = QgsRectangle(50, 50, 500, 500)
+        self.assertEqual(reference_extent(partial, basin), QgsRectangle(50, 50, 110, 220))
+        away = QgsRectangle(1000, 1000, 2000, 2000)
+        self.assertEqual(reference_extent(away, basin), QgsRectangle(1440, 1380, 1560, 1620))
+        self.assertEqual(reference_extent(overview), overview)
+
+    def test_overview_ignores_distant_peak_and_new_basin_updates_without_panning(self):
+        _, shade, colours = self.layers()
+        colours.setCustomProperty(BASIN_BOUNDS_PROPERTY, [300010, 4699910, 300090, 4699990])
+        colours.setCustomProperty(BASIN_CRS_PROPERTY, colours.crs().toWkt())
+        self.canvas.setExtent(QgsRectangle(299900, 4699800, 300300, 4700200))
+        self.controller.start()
+        self.wait(lambda: colours.customProperty('hidrocaumax/dem_visible_range_m') == [100., 115.])
+        self.assertEqual(colours.customProperty('hidrocaumax/dem_reference_bounds'),
+                         [300002., 4699902., 300098., 4699998.])
+        # Same canvas and same DEM, but a newly computed basin in the highlands.
+        colours.setCustomProperty(BASIN_BOUNDS_PROPERTY, [300110, 4699910, 300190, 4699990])
+        self.wait(lambda: colours.customProperty('hidrocaumax/dem_visible_range_m') == [1000., 1015.])
+        self.assertEqual(shade.renderer().zFactor(), 1)
+        # Invalid persisted context must fall back safely to the visible range.
+        colours.setCustomProperty(BASIN_BOUNDS_PROPERTY, [float('nan'), 0, 0, 0])
+        self.wait(lambda: colours.customProperty('hidrocaumax/dem_visible_range_m') == [100., 1015.])
+
+    def test_basin_reference_crs_is_independent_of_canvas_and_raster_crs(self):
+        _, _, colours = self.layers()
+        target = QgsCoordinateReferenceSystem('EPSG:3857')
+        transform = QgsCoordinateTransform(colours.crs(), target, QgsProject.instance().transformContext())
+        # Leave room for the conservative envelope of two CRS transformations.
+        basin = QgsRectangle(300020, 4699920, 300080, 4699980)
+        projected = transform.transformBoundingBox(basin)
+        colours.setCustomProperty(BASIN_BOUNDS_PROPERTY,
+                                  [projected.xMinimum(), projected.yMinimum(),
+                                   projected.xMaximum(), projected.yMaximum()])
+        colours.setCustomProperty(BASIN_CRS_PROPERTY, target.toWkt())
+        restored = layer_basin_extent(colours)
+        self.assertIsNotNone(restored)
+        self.assertLess(abs(restored.center().x()-basin.center().x()), .01)
+        self.assertLess(abs(restored.center().y()-basin.center().y()), .01)
+        self.canvas.setExtent(QgsRectangle(299900, 4699800, 300300, 4700200))
+        self.controller.start()
+        self.wait(lambda: colours.customProperty('hidrocaumax/dem_visible_range_m') == [100., 115.])
+
+    def test_reopened_layer_with_same_id_rebinds_context_and_migrates_cached_palette(self):
+        _, shade, colours = self.layers()
+        colours.setCustomProperty(BASIN_BOUNDS_PROPERTY, [300010, 4699910, 300090, 4699990])
+        colours.setCustomProperty(BASIN_CRS_PROPERTY, colours.crs().toWkt())
+        self.canvas.setExtent(QgsRectangle(299900, 4699800, 300300, 4700200))
+        self.controller.start()
+        self.wait(lambda: colours.customProperty('hidrocaumax/dem_visible_range_m') == [100., 115.])
+        previous_signature = self.controller._applied[colours.id()]
+        previous_extent = QgsRectangle(self.canvas.extent())
+        replacement = colours.clone()
+        self.fixture.layers.append(replacement)
+        self.assertTrue(replacement.setId(colours.id()))
+        self.assertIsNot(replacement, colours)
+        self.assertEqual(replacement.source(), colours.source())
+        previous_palette = ('#477754', '#83A86A', '#C3CC8C', '#DAC293',
+                            '#C2A17E', '#B9B1A4', '#DED8CB')
+        ramp = replacement.renderer().shader().rasterShaderFunction()
+        ramp.setColorRampType(QgsColorRampShader.Interpolated)
+        ramp.setColorRampItemList([
+            QgsColorRampShader.ColorRampItem(100+fraction*15, QColor(colour))
+            for fraction, colour in zip((0., .16, .32, .50, .70, .86, 1.), previous_palette)
+        ])
+        # Project reload can remove and restore the same saved layer ID before
+        # the debounce fires. The new object has the same source and bounds.
+        self.canvas.setLayers([shade])
+        self.canvas.setLayers([shade, replacement])
+        self.assertEqual(self.controller._applied[colours.id()], previous_signature)
+        self.wait(lambda: [item.color.name().upper() for item in
+                           replacement.renderer().shader().rasterShaderFunction().colorRampItemList()]
+                         == [colour.upper() for _, colour in display.NATURAL_RAMP[:-1]])
+        self.assertEqual(replacement.renderer().shader().rasterShaderFunction().colorRampType(),
+                         QgsColorRampShader.Discrete)
+        self.assertIs(self.controller._layer_signals[replacement.id()](), replacement)
+        self.assertEqual(self.canvas.extent(), previous_extent)
+        replacement.setCustomProperty(BASIN_BOUNDS_PROPERTY,
+                                      [300110, 4699910, 300190, 4699990])
+        self.wait(lambda: replacement.customProperty('hidrocaumax/dem_visible_range_m')
+                         == [1000., 1015.])
+        self.assertEqual(self.canvas.extent(), previous_extent)
 
     def test_empty_outside_and_flat_windows_keep_valid_uniform_rendering(self):
         data = np.hstack((np.full((4, 4), -9999), np.full((4, 4), 1200)))

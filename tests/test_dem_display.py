@@ -3,6 +3,7 @@
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import math
 from pathlib import Path
 import sys
 import tempfile
@@ -14,7 +15,8 @@ from osgeo import gdal, osr
 from qgis.PyQt import sip
 from qgis.PyQt.QtCore import QSize
 from qgis.PyQt.QtGui import QColor, QPainter
-from qgis.core import (QgsApplication, QgsHillshadeRenderer, QgsMapRendererParallelJob,
+from qgis.core import (QgsApplication, QgsColorRampShader, QgsCptCityColorRamp,
+                       QgsHillshadeRenderer, QgsMapRendererParallelJob,
                        QgsMapSettings, QgsProject, QgsSingleBandPseudoColorRenderer)
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -99,15 +101,46 @@ class DemDisplayTests(unittest.TestCase):
             self.assertEqual(layer.height(), 2)
             self.assertIn("25×25 m", layer.name())
 
-    def test_ramp_limits_exclude_nodata_and_ends_in_stone_not_white_snow(self):
+    def test_ramp_limits_exclude_nodata_and_preserve_exact_cd_a_classes(self):
         path = self.raster([[-9999, 875], [1000, 1971]])
         shade, colours = self.build(path)
         self.assertEqual(colours.customProperty("hidrocaumax/dem_range_m"), [875.0, 1971.0])
         ramp = colours.renderer().shader().rasterShaderFunction().colorRampItemList()
-        self.assertEqual(len(ramp), len(display.NATURAL_RAMP))
-        self.assertEqual(ramp[0].color.name().upper(), "#477754")
-        self.assertEqual(ramp[-1].color.name().upper(), "#DED8CB")
-        self.assertTrue(all(max(item.color.red(), item.color.green(), item.color.blue()) < 230 for item in ramp))
+        self.assertEqual(len(ramp), 48)
+        self.assertEqual(ramp[0].color.name().upper(), '#18C6CA')
+        self.assertEqual(ramp[-1].color.name().upper(), '#FFFFFF')
+        self.assertTrue(math.isinf(ramp[-1].value))
+        self.assertEqual(colours.renderer().classificationMin(), 875)
+        self.assertEqual(colours.renderer().classificationMax(), 1971)
+
+    def test_cd_a_matches_installed_cpt_city_resource_and_native_discrete_shader(self):
+        native = QgsCptCityColorRamp('jm/cd/cd-a', '')
+        if not Path(native.fileName()).is_file():
+            self.skipTest('This QGIS installation has no cpt-city resource archive.')
+        self.assertTrue(native.isDiscrete())
+        self.assertEqual(tuple((native.value(i), native.color(native.value(i)).name().upper())
+                               for i in range(native.count())), display.NATURAL_RAMP)
+        _, colours = self.build(self.raster([[900, 1000], [1200, 1500]]))
+        actual = colours.renderer().shader().rasterShaderFunction()
+        expected = QgsColorRampShader(900, 1500)
+        expected.setSourceColorRamp(native)
+        expected.setColorRampType(QgsColorRampShader.Discrete)
+        expected.setClassificationMode(QgsColorRampShader.Continuous)
+        expected.classifyColorRamp()
+        self.assertEqual(actual.sourceColorRamp().schemeName(), 'jm/cd/cd-a')
+        self.assertEqual(actual.colorRampType(), QgsColorRampShader.Discrete)
+        self.assertEqual([(item.value, item.color.name()) for item in actual.colorRampItemList()],
+                         [(item.value, item.color.name()) for item in expected.colorRampItemList()])
+        for index in range(len(display.NATURAL_RAMP)-1):
+            a, b = display.NATURAL_RAMP[index][0], display.NATURAL_RAMP[index+1][0]
+            value = 900 + (a+b)*300
+            self.assertEqual(actual.shade(value), expected.shade(value))
+        with patch.object(display, 'QgsCptCityColorRamp') as unavailable:
+            unavailable.return_value.count.return_value = 0
+            fallback = display._cpt_city_ramp()
+        self.assertTrue(fallback.isDiscrete())
+        self.assertEqual(tuple((fallback.value(i), fallback.color(fallback.value(i)).name().upper())
+                               for i in range(fallback.count())), display.NATURAL_RAMP)
 
     def test_native_resolution_follows_each_real_active_dem(self):
         for resolution in (500, 25, 5, 2):
@@ -116,6 +149,29 @@ class DemDisplayTests(unittest.TestCase):
                 self.assertEqual(layer.customProperty(display.RESOLUTION_PROPERTY), [float(resolution)] * 2)
                 self.assertEqual(layer.rasterUnitsPerPixelX(), resolution)
                 self.assertEqual(layer.rasterUnitsPerPixelY(), resolution)
+
+    def test_saved_project_palette_updates_even_when_visible_elevation_range_is_unchanged(self):
+        path = self.raster([[900, 1000], [1200, 1500]])
+        _, colours = self.build(path)
+        ramp = colours.renderer().shader().rasterShaderFunction()
+        previous_palette = ('#477754', '#83A86A', '#C3CC8C', '#DAC293',
+                            '#C2A17E', '#B9B1A4', '#DED8CB')
+        ramp.setColorRampItemList([
+            QgsColorRampShader.ColorRampItem(900+fraction*600, QColor(colour))
+            for fraction, colour in zip((0, .16, .32, .5, .7, .86, 1), previous_palette)
+        ])
+        ramp.setColorRampType(QgsColorRampShader.Interpolated)
+        colours.setCustomProperty('hidrocaumax/dem_visible_range_m', [900., 1500.])
+        original = path.read_bytes()
+        self.assertTrue(display.apply_visible_elevation_range(colours, 900, 1500))
+        actual = ramp.colorRampItemList()
+        self.assertEqual([item.color.name().upper() for item in actual],
+                         [colour for _, colour in display.NATURAL_RAMP[:-1]])
+        self.assertEqual(ramp.colorRampType(), QgsColorRampShader.Discrete)
+        self.assertEqual(actual[0].value, 912.48)
+        self.assertTrue(math.isinf(actual[-1].value))
+        self.assertFalse(display.apply_visible_elevation_range(colours, 900, 1500))
+        self.assertEqual(path.read_bytes(), original)
 
     def test_actual_terrain_render_is_coloured_and_multidirectional_shading_changes_pixels(self):
         yy, xx = np.indices((33, 33))

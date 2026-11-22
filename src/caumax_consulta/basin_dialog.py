@@ -76,7 +76,7 @@ class BasinDialog(QDialog):
     def __init__(self, query, iface, parent=None, saved_session=None):
         super().__init__(parent)
         self.setObjectName('CaumaxCuencaHidrograficaDialog')
-        self.setWindowTitle('HidroCAUMAX v1.2.2 · Cuenca hidrográfica')
+        self.setWindowTitle('HidroCAUMAX v1.2.3 · Cuenca hidrográfica')
         self.setStyleSheet(BLUE_BUTTON_STYLE)
         self.setAttribute(Qt.WA_DeleteOnClose)
         self.query, self.iface = query, iface
@@ -102,6 +102,8 @@ class BasinDialog(QDialog):
         self._map_data = {}
         self._restored = False
         self._course_layers = None
+        self._boundary_layers = None
+        self._boundary_adopt_existing = True
         self._terrain_layers = None
         self._drainage_layers = None
         self._drainage_state = None
@@ -1107,6 +1109,26 @@ class BasinDialog(QDialog):
     def _update_smoothing(self):
         if self._disposed or self.analysis is None:
             return
+        self._smoothing_timer.stop()
+        if self._boundary_layers is None:
+            from .boundary_layers import BoundaryLayers
+            self._boundary_layers = BoundaryLayers()
+        if self._boundary_adopt_existing:
+            self._boundary_adopt_existing = False
+            existing = self._boundary_layers.existing_state(self.analysis, self.query)
+            if existing:
+                for kind, control in (('original', self.original_check), ('suavizada', self.smooth_check)):
+                    if kind in existing['visibility']:
+                        control.blockSignals(True)
+                        control.setChecked(existing['visibility'][kind])
+                        control.blockSignals(False)
+                if isinstance(existing['degree'], (int, float)):
+                    self.smoothing_degree.blockSignals(True)
+                    self.smoothing_degree.setValue(int(existing['degree']))
+                    self.smoothing_degree.blockSignals(False)
+                if self.smooth_check.isChecked():
+                    self._queue_smoothing()
+                    self._smoothing_timer.stop()
         self._smoothing_ready = False
         self.export_button.setEnabled(False)
         self.preview_geometries = {}
@@ -1121,6 +1143,7 @@ class BasinDialog(QDialog):
                 self.preview_geometries['suavizada'] = smooth_boundary(
                     original, self.smoothing_degree.value(), self.analysis.cell_width,
                     self.analysis.cell_height, QgsPointXY(self.analysis.outlet_x, self.analysis.outlet_y))
+            self._sync_boundary_layers()
             self._preview()
             self._show_smoothing_summary()
             if self._surface_requested:
@@ -1129,6 +1152,8 @@ class BasinDialog(QDialog):
             self._smoothing_error = str(error)
             self.preview_geometries = {}
             self._remove_preview()
+            if self._boundary_layers is not None:
+                self._boundary_layers.set_visibility({'original': self.original_check.isChecked(), 'suavizada': False})
             self.smoothing_status.setText('No se puede aplicar este grado: ' + str(error))
             if self._surface_requested:
                 self._surface_pending = self._surface_requested = False
@@ -1305,6 +1330,20 @@ class BasinDialog(QDialog):
         )
         geometry.transform(transform)
         return geometry, transform
+
+    def _sync_boundary_layers(self):
+        """Keep real outlines independently of the temporary canvas overlays."""
+        try:
+            if self._boundary_layers is None:
+                from .boundary_layers import BoundaryLayers
+                self._boundary_layers = BoundaryLayers()
+            original = QgsGeometry()
+            original.fromWkb(bytes(self._base_geometry_wkb or self.analysis.geometry_wkb))
+            self._boundary_layers.update(self.analysis, self.query, original,
+                self.preview_geometries.get('suavizada'), degree=self.smoothing_degree.value(),
+                visibility={'original': self.original_check.isChecked(), 'suavizada': self.smooth_check.isChecked()})
+        except Exception as error:
+            self.status.setText(self.status.text() + '\nNo se ha podido conservar la divisoria como capa: ' + str(error))
 
     def _preview(self, *args):
         self._remove_preview()
@@ -1528,6 +1567,7 @@ class BasinDialog(QDialog):
         self._setup_resolutions(getattr(saved,'resolution_state',None))
 
     def _apply_smoothing_snapshot(self, state):
+        self._boundary_adopt_existing = False
         self._smoothing_loading = True
         self._base_geometry_wkb = bytes(state.get('base_geometry_wkb', self.analysis.geometry_wkb))
         key = f'{min(self.analysis.cell_width, self.analysis.cell_height):g}'
@@ -1557,6 +1597,7 @@ class BasinDialog(QDialog):
             self.preview_geometries[kind] = geometry
         if self._course_layers is not None:
             self._course_layers.update(self.analysis,self.query,visibility=state.get('course_visibility'))
+        self._sync_boundary_layers()
         self._preview()
         self._show_smoothing_summary()
         if (self.smooth_check.isChecked()

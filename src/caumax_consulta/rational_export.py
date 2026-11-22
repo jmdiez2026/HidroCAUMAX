@@ -27,7 +27,7 @@ BUTTON_STYLE = '''QPushButton { background-color: #D9F0FF; color: #173D52;
 border: 1px solid #7EB4D0; border-radius: 3px; padding: 5px 9px; }
 QPushButton:hover { background-color: #C7E8FF; }
 QPushButton:disabled { background-color: #EAF3F8; color: #7A8790; }'''
-_TITLE = 'HidroCAUMAX v1.2.2 · Guardar cuenca'
+_TITLE = 'HidroCAUMAX v1.2.3 · Guardar cuenca'
 
 
 @dataclass(frozen=True)

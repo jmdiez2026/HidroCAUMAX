@@ -1,6 +1,6 @@
 # HidroCAUMAX
 
-Complemento para **QGIS 3** que amplía **CAUMAX 3.0** con delimitación y análisis de cuencas, selección de MDT, morfología, curva hipsométrica, umbral de escorrentía P₀, precipitación diaria máxima Pd y consultas de cuantiles. Versión actual: **1.2.2**. Repositorio previsto: **jmdiez2026/HidroCAUMAX**.
+Complemento para **QGIS 3** que amplía **CAUMAX 3.0** con delimitación y análisis de cuencas, selección de MDT, morfología, curva hipsométrica, umbral de escorrentía P₀, precipitación diaria máxima Pd y consultas de cuantiles. Versión actual: **1.2.3**. Repositorio previsto: **jmdiez2026/HidroCAUMAX**.
 
 El diálogo integra los estadísticos de cuenca y recalcula los resultados al cambiar la resolución del MDT o el grado de suavizado. Conserva el punto original consultado y los caudales oficiales de CAUMAX: cambiar el MDT modifica la delimitación y los parámetros de la cuenca, sin inventar nuevos caudales de avenida.
 
@@ -12,27 +12,28 @@ El diálogo integra los estadísticos de cuenca y recalcula los resultados al ca
 - Conexión a los servicios oficiales IGN/CNIG para descargar MDT mejorados. Las fuentes conservan sus condiciones de disponibilidad y uso.
 - **TauDEM y MPI**, instalados por separado, para la función opcional de generación de productos D8 mediante TauDEM.
 
-La versión 1.2.2 se distribuye en el canal **estable** (`experimental=False`). El código contiene controles de cobertura, NoData y errores; sus resultados deben revisarse con las fuentes y la resolución de cada proyecto.
+La versión 1.2.3 se distribuye en el canal **estable** (`experimental=False`). El código contiene controles de cobertura, NoData y errores; sus resultados deben revisarse con las fuentes y la resolución de cada proyecto.
 
 ## Instalación
 
-1. Descarga el archivo **HidroCAUMAX_v1_2_2.zip** de la versión publicada en GitHub Releases. El ZIP de código fuente que ofrece GitHub no es el instalable de QGIS.
+1. Descarga el archivo **HidroCAUMAX_v1_2_3.zip** de la versión publicada en GitHub Releases. El ZIP de código fuente que ofrece GitHub no es el instalable de QGIS.
 2. En QGIS abre **Complementos → Administrar e instalar complementos → Instalar a partir de ZIP** y selecciona el instalable, sin descomprimirlo.
 3. Si ya utilizas HidroCAUMAX, acepta sustituir el complemento anterior y vuelve a abrir su diálogo. La carpeta interna permanece como **caumax_consulta** para conservar la identidad de instalación.
 4. Activa CAUMAX 3.0, carga sus capas y realiza una consulta válida. Pulsa **Cuenca hidrográfica** para abrir las herramientas ampliadas.
 
 La [guía detallada del complemento](src/caumax_consulta/README.md) describe las funciones, los cálculos y las limitaciones de cada sección.
 
-## Cambios incluidos en 1.2.2
+## Cambios incluidos en 1.2.3
 
-Esta versión prepara la distribución estable y la actualización desde 1.2.1. Conserva sus cálculos y sitúa la sección completa **Suavizado divisoria** inmediatamente debajo de **Resolución MDT**, con todos sus controles, texto y botón **Exportar shape**.
+Esta versión refuerza el contraste de la rampa altimétrica y utiliza un entorno de referencia cercano al tamaño de la cuenca para representar el relieve.
 
-- Diálogo alineado a la derecha de QGIS, tablas compactas, resultados centrados y textos legibles al cambiar la anchura.
-- Estadísticos de P₀ y Pd: media, mediana, mínimo, máximo y desviación típica según cada consulta; P₀ medio resaltado en rojo y negrita.
-- Consultas Qci/T y Pd/T con años enteros, presentación de resultados con un máximo de dos decimales y gráficas adaptables.
-- Recálculo automático al cambiar el suavizado o la resolución; selector de MDT al principio del diálogo y control de **Malla de celdas**.
-- Conservación de la visibilidad del relieve y colocación de las nuevas capas antes y encima del grupo oficial de CAUMAX.
-- Rampa de altitudes y leyenda ajustadas automáticamente al MDT visible al desplazar o ampliar el mapa, con colores naturales y sombreado multidireccional. La interpolación bilineal afecta solo a la representación; las cotas y cálculos conservan la malla original.
+- Rampa exacta **cpt-city → Topography → cd-a (California Dry)**, con sus 48 clases de color originales. Mantiene el sombreado multidireccional al **45 %**, el modo Multiplicar y el factor vertical **1**.
+- Las divisorias original y suavizada permanecen como capas de QGIS al cerrar el diálogo. Se guardan en GeoPackage dentro del perfil, se actualizan al recalcular y se reutilizan al abrir la misma consulta.
+- La ventana de referencia es el rectángulo que encierra la cuenca, ampliado un **10 % por cada lado**. El rango de cotas se obtiene de su intersección con el encuadre visible. Al acercar el mapa, utiliza el área visible dentro de ese entorno.
+- Si el mapa queda completamente fuera del entorno de la cuenca, utiliza una ventana centrada en el lienzo y limitada al tamaño de ese entorno: **1,2 veces la anchura y la altura del rectángulo de la cuenca**. Una vista lejana no incorpora automáticamente las cotas de todo el MDT.
+- Los proyectos antiguos sin este contexto mantienen el ajuste al área visible hasta abrir la consulta o recalcular, que incorpora el entorno de referencia.
+
+Se conservan las cotas y la malla del archivo, los cálculos hidrológicos, el suavizado, las tablas, las consultas, las exportaciones, la visibilidad y el orden de capas. La interpolación bilineal suaviza exclusivamente la representación en pantalla.
 
 ## Estructura
 
@@ -50,7 +51,7 @@ No se incluyen capas de proyectos, sesiones guardadas, cachés, credenciales ni 
 El empaquetado utiliza **Python 3.10 o posterior** y su biblioteca estándar; no necesita iniciar QGIS:
 
 ```text
-python scripts/build_release.py --output dist --tag v1.2.2
+python scripts/build_release.py --output dist --tag v1.2.3
 ```
 
 Genera el ZIP instalable, sus sumas SHA-256 y el índice XML de distribución. Los archivos resultantes quedan fuera del control de versiones mediante `.gitignore`.

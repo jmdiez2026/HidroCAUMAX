@@ -6,10 +6,57 @@ import numpy as np
 from osgeo import gdal
 from qgis.PyQt import sip
 from qgis.PyQt.QtCore import QObject, QTimer
-from qgis.core import (QgsApplication, QgsCoordinateTransform, QgsCsException, QgsProject,
-                       QgsRasterLayer, QgsSingleBandPseudoColorRenderer, QgsTask)
+from qgis.core import (QgsApplication, QgsCoordinateReferenceSystem, QgsCoordinateTransform,
+                       QgsCsException, QgsProject, QgsRasterLayer, QgsRectangle,
+                       QgsSingleBandPseudoColorRenderer, QgsTask)
 
 from .dem_display import ROLE_PROPERTY, apply_visible_elevation_range, smooth_terrain_display
+
+
+BASIN_BOUNDS_PROPERTY = 'hidrocaumax/dem_basin_bounds'
+BASIN_CRS_PROPERTY = 'hidrocaumax/dem_basin_crs'
+BASIN_MARGIN = 0.10
+
+
+def reference_extent(visible, basin=None):
+    """Use a basin-sized neighbourhood, narrowed further by the current zoom.
+
+    At an overview scale, distant terrain must not flatten the basin's colours.
+    Outside that neighbourhood the reference follows the map centre, with the
+    same maximum dimensions. Old projects without basin context retain their
+    visible-window behaviour until their saved basin is opened/recalculated.
+    """
+    if basin is None or basin.isEmpty():
+        return QgsRectangle(visible)
+    dx, dy = basin.width()*BASIN_MARGIN, basin.height()*BASIN_MARGIN
+    neighbourhood = QgsRectangle(basin.xMinimum()-dx, basin.yMinimum()-dy,
+                                 basin.xMaximum()+dx, basin.yMaximum()+dy)
+    overlap = visible.intersect(neighbourhood)
+    if not overlap.isEmpty():
+        return overlap
+    width = min(visible.width(), neighbourhood.width())
+    height = min(visible.height(), neighbourhood.height())
+    centre = visible.center()
+    return QgsRectangle(centre.x()-width/2, centre.y()-height/2,
+                        centre.x()+width/2, centre.y()+height/2)
+
+
+def layer_basin_extent(layer):
+    """Restore the persisted basin envelope in this raster's CRS."""
+    try:
+        bounds = layer.customProperty(BASIN_BOUNDS_PROPERTY, [])
+        if len(bounds) != 4:
+            return None
+        xmin, ymin, xmax, ymax = map(float, bounds)
+        if not all(math.isfinite(v) for v in (xmin, ymin, xmax, ymax)) or xmin >= xmax or ymin >= ymax:
+            return None
+        crs = QgsCoordinateReferenceSystem.fromWkt(layer.customProperty(BASIN_CRS_PROPERTY, ''))
+        if not crs.isValid():
+            return None
+        transform = QgsCoordinateTransform(crs, layer.crs(), QgsProject.instance().transformContext())
+        return transform.transformBoundingBox(QgsRectangle(xmin, ymin, xmax, ymax))
+    except (RuntimeError, ValueError, TypeError, OverflowError, QgsCsException):
+        return None
 
 
 def visible_elevation_range(source, bounds, cancelled=lambda: False):
@@ -100,6 +147,7 @@ class VisibleDemController(QObject):
         self._started = False
         self._serial = 0
         self._signals, self._tasks, self._applied = [], set(), {}
+        self._layer_signals = {}
 
     def start(self):
         if self._started:
@@ -122,6 +170,7 @@ class VisibleDemController(QObject):
             except (TypeError, RuntimeError):
                 pass
         self._signals.clear()
+        self._watch_layers([])
         for task in list(self._tasks):
             task.cancel()
         self._applied.clear()
@@ -142,19 +191,44 @@ class VisibleDemController(QObject):
                     and layer.opacity() > 0 and layer.isInScaleRange(self.canvas.scale())):
                 yield layer
 
+    def _context_changed(self, key):
+        if key in (BASIN_BOUNDS_PROPERTY, BASIN_CRS_PROPERTY):
+            self.schedule()
+
+    def _watch_layers(self, layers):
+        current = {layer.id(): layer for layer in layers}
+        for layer_id, previous in list(self._layer_signals.items()):
+            layer = previous()
+            if layer_id in current and layer is current[layer_id]:
+                continue
+            self._layer_signals.pop(layer_id)
+            self._applied.pop(layer_id, None)
+            if layer is not None and not sip.isdeleted(layer):
+                try:
+                    layer.customPropertyChanged.disconnect(self._context_changed)
+                except (TypeError, RuntimeError):
+                    pass
+        for layer_id, layer in current.items():
+            if layer_id not in self._layer_signals:
+                layer.customPropertyChanged.connect(self._context_changed)
+                self._layer_signals[layer_id] = weakref.ref(layer)
+
     def refresh(self):
         self._timer.stop()
         if not self._started:
             return
         for layer in self.canvas.layers():
             smooth_terrain_display(layer)
+        visible_layers = list(self._visible_layers())
+        self._watch_layers(visible_layers)
         current_ids = set()
-        for layer in self._visible_layers():
+        for layer in visible_layers:
             current_ids.add(layer.id())
             try:
                 transform = QgsCoordinateTransform(self.canvas.mapSettings().destinationCrs(),
                                                    layer.crs(), QgsProject.instance().transformContext())
-                extent = transform.transformBoundingBox(self.canvas.extent()).intersect(layer.extent())
+                visible = transform.transformBoundingBox(self.canvas.extent())
+                extent = reference_extent(visible, layer_basin_extent(layer)).intersect(layer.extent())
                 if extent.isEmpty():
                     continue
                 bounds = (extent.xMinimum(), extent.yMinimum(), extent.xMaximum(), extent.yMaximum())
@@ -178,6 +252,8 @@ class VisibleDemController(QObject):
         if layer is None:
             return
         self._applied[layer.id()] = task.signature
+        if task.result is not None:
+            layer.setCustomProperty('hidrocaumax/dem_reference_bounds', list(task.signature[1]))
         if task.result is not None and apply_visible_elevation_range(layer, *task.result):
             view = self.iface.layerTreeView() if hasattr(self.iface, 'layerTreeView') else None
             if view is not None:

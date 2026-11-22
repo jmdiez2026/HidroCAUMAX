@@ -12,7 +12,8 @@ import numpy as np
 from osgeo import gdal
 from qgis.PyQt.QtGui import QColor, QPainter
 from qgis.core import (
-    QgsBilinearRasterResampler, QgsColorRampShader, QgsHillshadeRenderer, QgsRasterLayer,
+    QgsBilinearRasterResampler, QgsColorRampShader, QgsCptCityColorRamp,
+    QgsGradientColorRamp, QgsGradientStop, QgsHillshadeRenderer, QgsRasterLayer,
     QgsRasterShader, QgsSingleBandPseudoColorRenderer,
 )
 
@@ -23,13 +24,53 @@ ROLE_PROPERTY = "hidrocaumax/dem_display_role"
 SOURCE_PROPERTY = "hidrocaumax/dem_source"
 RESOLUTION_PROPERTY = "hidrocaumax/dem_resolution"
 HILLSHADE_OPACITY = 0.45
-# Relative stops: green valleys, light grassland, ochre earth and beige-grey rock.
-# The early transition out of green keeps lower and middle slopes legible.
+# Exact cpt-city Topography / cd-a (California Dry), jm/cd/cd-a.svg.
+# Lower boundaries of its 48 discrete classes; the final endpoint repeats white.
+# Portions of this work include intellectual property of Jim Mossman and are
+# used herein with permission. Copyright (C) 2005 Jim Mossman. All rights reserved.
+# See CPT_CITY_LICENSE.txt for the original attribution and license agreement.
+CPT_CITY_SCHEME = 'jm/cd/cd-a'
 NATURAL_RAMP = (
-    (0.00, "#477754"), (0.16, "#83A86A"), (0.32, "#C3CC8C"),
-    (0.50, "#DAC293"), (0.70, "#C2A17E"), (0.86, "#B9B1A4"),
-    (1.00, "#DED8CB"),
+    (0.0000, '#18C6CA'), (0.0208, '#33D7B1'), (0.0417, '#51E49C'),
+    (0.0625, '#72F192'), (0.0833, '#97FE96'), (0.1042, '#A3FE9A'),
+    (0.1250, '#AFFE9D'), (0.1458, '#BAFEA1'), (0.1667, '#C5FEA5'),
+    (0.1875, '#CFFEA9'), (0.2083, '#D8FEAC'), (0.2292, '#E1FEB0'),
+    (0.2500, '#E9FEB4'), (0.2708, '#F0FEB8'), (0.2917, '#F7FEBB'),
+    (0.3125, '#FDFEBF'), (0.3333, '#FFFBC3'), (0.3542, '#FEF9BC'),
+    (0.3750, '#FEF7B5'), (0.3958, '#FEF5AF'), (0.4167, '#FEF3A8'),
+    (0.4375, '#FEEE9B'), (0.4583, '#FEE88E'), (0.4792, '#FEE080'),
+    (0.5000, '#FED873'), (0.5208, '#FBD779'), (0.5417, '#F7D580'),
+    (0.5625, '#F3D486'), (0.5833, '#EFD28B'), (0.6042, '#EBD191'),
+    (0.6250, '#E7CF96'), (0.6458, '#E3CE9B'), (0.6667, '#DFCC9F'),
+    (0.6875, '#DCCAA4'), (0.7083, '#D8C9A8'), (0.7292, '#D4C7AC'),
+    (0.7500, '#D0C6B0'), (0.7708, '#CCC4B3'), (0.7917, '#C8C2B6'),
+    (0.8125, '#C4C1B9'), (0.8333, '#CCC8C1'), (0.8542, '#D3D0CA'),
+    (0.8750, '#DAD8D2'), (0.8958, '#E1DFDB'), (0.9167, '#E9E7E4'),
+    (0.9375, '#F0EFED'), (0.9583, '#F7F7F5'), (0.9792, '#FFFFFF'),
+    (1.0000, '#FFFFFF'),
 )
+
+
+def _cpt_city_ramp():
+    """Use QGIS's named resource, with an exact discrete fallback if absent."""
+    native = QgsCptCityColorRamp(CPT_CITY_SCHEME, '')
+    if native.count() == len(NATURAL_RAMP):
+        return native
+    return QgsGradientColorRamp(
+        QColor(NATURAL_RAMP[0][1]), QColor(NATURAL_RAMP[-1][1]), True,
+        [QgsGradientStop(value, QColor(colour)) for value, colour in NATURAL_RAMP[1:-1]])
+
+
+def _cpt_city_items(bottom, top):
+    """Match QGIS's native discrete shader: upper limits and a final +infinity."""
+    items = []
+    for index, (fraction, colour) in enumerate(NATURAL_RAMP[:-1]):
+        lower = bottom + fraction*(top-bottom)
+        upper = (bottom + NATURAL_RAMP[index+1][0]*(top-bottom)
+                 if index < len(NATURAL_RAMP)-2 else math.inf)
+        items.append(QgsColorRampShader.ColorRampItem(
+            upper, QColor(colour), f'{lower:g}–{min(upper, top):g} m'))
+    return items
 
 
 def smooth_terrain_display(layer):
@@ -54,23 +95,29 @@ def apply_visible_elevation_range(layer, low, high):
     low, high = float(low), float(high)
     if not math.isfinite(low) or not math.isfinite(high) or low > high:
         return False
-    if layer.customProperty('hidrocaumax/dem_visible_range_m') == [low, high]:
-        return False
     renderer = layer.renderer()
     shader = renderer.shader()
     ramp = shader.rasterShaderFunction() if shader is not None else None
     if not isinstance(ramp, QgsColorRampShader):
         return False
     bottom, top = (low, high) if low < high else (low-.5, high+.5)
+    items = _cpt_city_items(bottom, top)
+    # Reopened projects may retain an older palette with the same visible range.
+    current = ramp.colorRampItemList()
+    if (layer.customProperty('hidrocaumax/dem_visible_range_m') == [low, high]
+            and ramp.colorRampType() == QgsColorRampShader.Discrete
+            and len(current) == len(items)
+            and all(old.value == new.value and old.color == new.color
+                    for old, new in zip(current, items))):
+        return False
     shader.setMinimumValue(bottom)
     shader.setMaximumValue(top)
     renderer.setClassificationMin(bottom)
     renderer.setClassificationMax(top)
-    ramp.setColorRampItemList([
-        QgsColorRampShader.ColorRampItem(bottom + fraction*(top-bottom), QColor(colour),
-                                       f'{bottom + fraction*(top-bottom):g} m')
-        for fraction, colour in NATURAL_RAMP
-    ])
+    ramp.setColorRampType(QgsColorRampShader.Discrete)
+    ramp.setClassificationMode(QgsColorRampShader.Continuous)
+    ramp.setSourceColorRamp(_cpt_city_ramp())
+    ramp.setColorRampItemList(items)
     layer.setCustomProperty('hidrocaumax/dem_visible_range_m', [low, high])
     layer.rendererChanged.emit()
     layer.triggerRepaint()
@@ -147,14 +194,11 @@ def build_terrain_layers(dem_path, *, elevation_range=None):
     # A nonzero shader interval makes the flat terrain render its middle colour.
     display_low, display_high = (low, high) if low < high else (low - .5, high + .5)
     ramp = QgsColorRampShader(display_low, display_high)
-    ramp.setColorRampType(QgsColorRampShader.Interpolated)
+    ramp.setColorRampType(QgsColorRampShader.Discrete)
+    ramp.setClassificationMode(QgsColorRampShader.Continuous)
     ramp.setClip(False)
-    ramp.setColorRampItemList([
-        QgsColorRampShader.ColorRampItem(
-            display_low + fraction * (display_high - display_low), QColor(colour),
-            f"{display_low + fraction * (display_high - display_low):g} m")
-        for fraction, colour in NATURAL_RAMP
-    ])
+    ramp.setSourceColorRamp(_cpt_city_ramp())
+    ramp.setColorRampItemList(_cpt_city_items(display_low, display_high))
     shader = QgsRasterShader(display_low, display_high)
     shader.setRasterShaderFunction(ramp)
     renderer = QgsSingleBandPseudoColorRenderer(colours.dataProvider(), 1, shader)
