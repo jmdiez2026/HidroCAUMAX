@@ -1,11 +1,15 @@
 """Release contract checks; standard library only, no QGIS installation required."""
 from __future__ import annotations
 import configparser
+from copy import deepcopy
 import importlib.util
+import io
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 import xml.etree.ElementTree as ET
 import zipfile
 
@@ -13,6 +17,10 @@ ROOT=Path(__file__).resolve().parents[1]
 SPEC=importlib.util.spec_from_file_location('release_builder',ROOT/'scripts'/'build_release.py')
 builder=importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(builder)
+PUBLISH_SPEC=importlib.util.spec_from_file_location('release_publisher',ROOT/'scripts'/'publish_release.py')
+publisher=importlib.util.module_from_spec(PUBLISH_SPEC)
+with patch.dict('sys.modules',{'build_release':builder}):
+    PUBLISH_SPEC.loader.exec_module(publisher)
 
 METADATA='''[general]
 name=HidroCAUMAX v1.2.2
@@ -160,6 +168,254 @@ class ReleasePackagingTests(unittest.TestCase):
         (self.source/'broken.py').write_text('def missing_syntax(',encoding='utf-8')
         with self.assertRaises(SyntaxError):
             self.build()
+
+
+class ReleasePublishingTests(unittest.TestCase):
+    """Real bundles and hashes, with a stateful fake for remote GitHub/CLI I/O."""
+    def setUp(self):
+        self.temporary=tempfile.TemporaryDirectory(prefix='hidrocaumax-publish-')
+        self.addCleanup(self.temporary.cleanup)
+        self.folder=Path(self.temporary.name)
+        self.source=self.folder/'src'/'caumax_consulta'
+        self.source.mkdir(parents=True)
+        (self.source/'metadata.txt').write_text(METADATA,encoding='utf-8')
+        (self.source/'__init__.py').write_text('def classFactory(iface):\n    return iface\n',encoding='utf-8')
+        self.output=self.folder/'dist'
+        self.manifest=builder.build(self.source,self.output)
+        self.names=[self.manifest['package'],'SHA256SUMS.txt','plugins.xml','release_manifest.json']
+        self.local={name:(self.output/name).read_bytes() for name in self.names}
+        self.remote={}
+        self.exists=True
+        self.release=dict(id=101,html_url='https://github.com/example/project/releases/tag/v1.2.2',
+                          draft=False,prerelease=False,body='Notes entered on the web.',name='Web title')
+        self.head='a'*40
+        self.reference=dict(type='commit',sha=self.head)
+        self.tracked=['src/'+name for name in self.manifest['source_files']]
+        self.dirty=False
+        self.events=[]
+        self.commands=[]
+        self.mutations=[]
+        self.fail_after=None
+        self.before_upload=None
+        self.after_upload=None
+        self.after_download=None
+        self.download_error=False
+        self.console=io.StringIO()
+        for mocked in (patch.object(publisher,'DEFAULT_ROOT',self.folder),
+                       patch.object(publisher,'run',side_effect=self.run_cli),
+                       patch.object(publisher,'api',side_effect=self.api),
+                       patch('sys.stdout',self.console)):
+            mocked.start()
+            self.addCleanup(mocked.stop)
+
+    def api(self, endpoint, *, missing_ok=False):
+        if '/git/ref/tags/' in endpoint:
+            return dict(object=deepcopy(self.reference))
+        if '/git/tags/' in endpoint:
+            return dict(object=dict(type='commit',sha=self.head))
+        if '/releases/tags/' in endpoint:
+            if not self.exists:
+                self.assertTrue(missing_ok)
+                return None
+            return dict(deepcopy(self.release),assets=[dict(name=name) for name in self.remote])
+        self.fail('Unexpected API request: '+endpoint)
+
+    def run_cli(self, args, *, check=True):
+        self.commands.append(list(args))
+        stdout=''
+        if args[:3]==['git','rev-parse','HEAD']:
+            stdout=self.head
+        elif args[:2]==['git','diff']:
+            if self.dirty:
+                raise RuntimeError('Uncommitted source changes')
+        elif args[:2]==['git','ls-files']:
+            stdout='\n'.join(self.tracked)
+        elif args[:3]==['gh','release','download']:
+            name=args[args.index('--pattern')+1]
+            self.events.append(('download',name))
+            if self.download_error:
+                raise RuntimeError('Download failed')
+            target=Path(args[args.index('--dir')+1])/name
+            self.assertFalse(target.exists(),'Verification must use a fresh download directory')
+            target.write_bytes(self.remote[name])
+            if self.after_download:
+                self.after_download(name)
+        elif args[:3] in (['gh','release','upload'],['gh','release','create']):
+            action=args[2]
+            self.assertNotIn('--clobber',args)
+            self.mutations.append(list(args))
+            paths=list(map(Path,args[4:args.index('--repo')]))
+            self.events.append((action,tuple(path.name for path in paths)))
+            if action=='create':
+                self.assertFalse(self.exists)
+                self.exists=True
+                self.release['body']=Path(args[args.index('--notes-file')+1]).read_text(encoding='utf-8')
+                self.release['name']=args[args.index('--title')+1]
+                self.release['prerelease']='--prerelease' in args
+            if self.before_upload:
+                self.before_upload()
+            for count,path in enumerate(paths,1):
+                if path.name in self.remote:
+                    raise RuntimeError('An asset with this name already exists')
+                self.remote[path.name]=path.read_bytes()
+                if count==self.fail_after:
+                    raise RuntimeError('Connection lost during upload')
+            if self.after_upload:
+                self.after_upload()
+        else:
+            self.fail('Unexpected command: '+repr(args))
+        return subprocess.CompletedProcess(args,0,stdout,'')
+
+    def publish(self, **kwargs):
+        publisher.publish(self.output,builder.DEFAULT_REPOSITORY,**kwargs)
+
+    def test_empty_web_release_receives_all_assets_and_preserves_notes(self):
+        before=deepcopy(self.release)
+        self.publish()
+        self.assertEqual(self.remote,self.local)
+        self.assertEqual(self.release,before)
+        self.assertEqual(len(self.mutations),1)
+        self.assertEqual(self.mutations[0][:4],['gh','release','upload','v1.2.2'])
+        self.assertEqual(self.events,[('upload',tuple(self.names))]+[('download',name) for name in self.names])
+
+    def test_partial_release_verifies_present_assets_before_uploading_only_missing(self):
+        present=[self.names[0],self.names[2]]
+        self.remote={name:self.local[name] for name in present}
+        self.publish()
+        missing=tuple(name for name in self.names if name not in present)
+        self.assertEqual(self.events,[('download',name) for name in present]+
+                         [('upload',missing)]+[('download',name) for name in self.names])
+        self.assertEqual(self.remote,self.local)
+        self.assertEqual(self.release['body'],'Notes entered on the web.')
+
+    def test_complete_matching_release_is_read_only_even_with_unrelated_asset(self):
+        self.remote=dict(self.local,**{'extra.txt':b'Untouched extra'})
+        before=dict(self.remote)
+        self.publish()
+        self.assertEqual(self.remote,before)
+        self.assertFalse(self.mutations)
+
+    def test_any_existing_asset_mismatch_prevents_every_upload(self):
+        for bad in self.names:
+            with self.subTest(asset=bad):
+                self.remote={bad:self.local[bad]+b'corrupt'}
+                before=dict(self.remote)
+                with self.assertRaisesRegex(ValueError,'Existing release asset differs'):
+                    self.publish()
+                self.assertFalse(self.mutations)
+                self.assertEqual(self.remote,before)
+
+    def test_later_mismatch_prevents_upload_after_other_assets_verify(self):
+        self.remote={self.names[0]:self.local[self.names[0]],self.names[2]:b'wrong XML'}
+        with self.assertRaisesRegex(ValueError,'Existing release asset differs'):
+            self.publish()
+        self.assertEqual(self.events,[('download',self.names[0]),('download',self.names[2])])
+        self.assertFalse(self.mutations)
+
+    def test_incomplete_release_with_unverifiable_extra_asset_is_not_mutated(self):
+        self.remote={'extra.txt':b'No matching file in the bundle'}
+        with self.assertRaisesRegex(ValueError,'outside the validated bundle'):
+            self.publish()
+        self.assertFalse(self.mutations)
+
+    def test_draft_and_wrong_channel_are_rejected_without_upload(self):
+        for draft,prerelease in ((True,False),(False,True)):
+            with self.subTest(draft=draft,prerelease=prerelease):
+                self.release.update(draft=draft,prerelease=prerelease)
+                with self.assertRaisesRegex(ValueError,'channel/draft'):
+                    self.publish()
+                self.assertFalse(self.mutations)
+
+    def test_bundle_tag_and_committed_source_checks_still_precede_mutations(self):
+        (self.output/'plugins.xml').write_bytes(b'changed')
+        with self.assertRaisesRegex(ValueError,'bundle is inconsistent'):
+            self.publish()
+        (self.output/'plugins.xml').write_bytes(self.local['plugins.xml'])
+        self.reference['sha']='b'*40
+        with self.assertRaisesRegex(ValueError,'tag does not point'):
+            self.publish()
+        self.reference['sha']=self.head
+        self.dirty=True
+        with self.assertRaisesRegex(RuntimeError,'Uncommitted source'):
+            self.publish()
+        self.dirty=False
+        self.tracked=[]
+        with self.assertRaisesRegex(ValueError,'must be committed'):
+            self.publish()
+        self.assertFalse(self.mutations)
+
+    def test_annotated_tag_to_checkout_is_still_supported(self):
+        self.reference=dict(type='tag',sha='b'*40)
+        self.remote=dict(self.local)
+        self.publish()
+        self.assertFalse(self.mutations)
+
+    def test_download_failure_prevents_upload(self):
+        self.remote={self.names[0]:self.local[self.names[0]]}
+        self.download_error=True
+        with self.assertRaisesRegex(RuntimeError,'Download failed'):
+            self.publish()
+        self.assertFalse(self.mutations)
+
+    def test_partial_upload_failure_can_be_retried_without_replacing_uploaded_file(self):
+        self.fail_after=1
+        with self.assertRaisesRegex(RuntimeError,'Connection lost'):
+            self.publish()
+        self.assertEqual(self.remote,{self.names[0]:self.local[self.names[0]]})
+        self.fail_after=None
+        self.events.clear()
+        self.publish()
+        self.assertEqual(self.events[0],('download',self.names[0]))
+        self.assertEqual(self.events[1],('upload',tuple(self.names[1:])))
+        self.assertEqual(self.remote,self.local)
+        self.assertEqual(len(self.mutations),2)
+
+    def test_concurrent_asset_name_collision_fails_without_overwriting_or_retrying(self):
+        def competing_upload():
+            self.remote[self.names[0]]=b'Another publisher uploaded this'
+        self.before_upload=competing_upload
+        with self.assertRaisesRegex(RuntimeError,'already exists'):
+            self.publish()
+        self.assertEqual(self.remote,{self.names[0]:b'Another publisher uploaded this'})
+        self.assertEqual(len(self.mutations),1)
+
+    def test_final_verification_rejects_changed_identity_channel_missing_file_and_wrong_bytes(self):
+        changes=(lambda:self.release.update(id=202),
+                 lambda:self.release.update(prerelease=True),
+                 lambda:self.remote.pop(self.names[-1]),
+                 lambda:self.remote.update({self.names[0]:b'Corrupted after upload'}))
+        messages=('Release changed','channel/draft','still lacks','asset differs')
+        for change,message in zip(changes,messages):
+            with self.subTest(message=message):
+                self.remote={}
+                self.release.update(id=101,prerelease=False)
+                self.after_upload=change
+                previous=len(self.mutations)
+                with self.assertRaisesRegex(ValueError,message):
+                    self.publish()
+                self.assertEqual(len(self.mutations),previous+1)
+
+    def test_local_missing_asset_changed_during_remote_verification_is_not_uploaded(self):
+        self.remote={self.names[0]:self.local[self.names[0]]}
+        self.after_download=lambda name:(self.output/self.names[1]).write_bytes(b'changed during network I/O')
+        with self.assertRaisesRegex(ValueError,'Local release asset changed'):
+            self.publish()
+        self.assertFalse(self.mutations)
+
+    def test_new_release_creation_keeps_tag_verification_and_verifies_uploaded_bytes(self):
+        self.exists=False
+        self.publish()
+        self.assertEqual(self.remote,self.local)
+        self.assertEqual(len(self.mutations),1)
+        self.assertIn('--verify-tag',self.mutations[0])
+        self.assertEqual(self.mutations[0][2],'create')
+        self.assertEqual(self.release['body'],(self.output/'release_notes.md').read_text(encoding='utf-8'))
+
+    def test_dry_run_validates_locally_without_remote_commands(self):
+        self.publish(dry_run=True)
+        self.assertFalse(self.commands)
+        self.assertFalse(self.mutations)
+        self.assertEqual(json.loads(self.console.getvalue())['action'],'validate-only')
 
 
 if __name__=='__main__':

@@ -1,7 +1,8 @@
 """Publish/verify the prepared bundle with an already authenticated GitHub CLI.
 
-Never replaces an existing asset. A retry validates its bytes, then leaves
-Pages deployment to the workflow. Use --dry-run to inspect the local bundle.
+Never replaces an existing asset. A retry validates its bytes before uploading
+only missing files, then leaves Pages deployment to the workflow. Use --dry-run
+to inspect the local bundle.
 """
 from __future__ import annotations
 import argparse
@@ -45,6 +46,14 @@ def validate_bundle(output: Path, repository: str) -> tuple[dict,list[Path]]:
     return manifest,assets
 
 
+def verify_assets(assets: list[Path], tag: str, repository: str, digests: dict[str,str]) -> None:
+    with tempfile.TemporaryDirectory(prefix='hidrocaumax-release-assets-') as folder:
+        for path in assets:
+            run(['gh','release','download',tag,'--repo',repository,'--pattern',path.name,'--dir',folder])
+            if sha256(Path(folder)/path.name)!=digests[path.name]:
+                raise ValueError('Existing release asset differs: '+path.name)
+
+
 def publish(output: Path, repository: str, dry_run: bool=False) -> None:
     manifest,assets=validate_bundle(output,repository)
     tag=manifest['tag']
@@ -52,6 +61,7 @@ def publish(output: Path, repository: str, dry_run: bool=False) -> None:
         print(json.dumps(dict(action='validate-only',repository=repository,tag=tag,
             assets=[path.name for path in assets],sha256=manifest['sha256']),indent=2))
         return
+    digests={path.name:sha256(path) for path in assets}
     # The release must be built from the exact committed/tagged source, never a
     # branch accidentally selected by a manual workflow dispatch.
     head=run(['git','rev-parse','HEAD']).stdout.strip()
@@ -76,13 +86,28 @@ def publish(output: Path, repository: str, dry_run: bool=False) -> None:
     if existing.get('draft') or bool(existing.get('prerelease'))!=manifest['experimental']:
         raise ValueError('Existing release channel/draft differs from metadata; no replacement performed.')
     names={item['name'] for item in existing['assets']}
-    if not {path.name for path in assets} <= names:
-        raise ValueError('Existing release lacks required assets; no overwrite performed.')
-    with tempfile.TemporaryDirectory(prefix='hidrocaumax-release-assets-') as folder:
-        for path in assets:
-            run(['gh','release','download',tag,'--repo',repository,'--pattern',path.name,'--dir',folder])
-            if sha256(Path(folder)/path.name)!=sha256(path):
-                raise ValueError('Existing release asset differs: '+path.name)
+    missing=[path for path in assets if path.name not in names]
+    if missing and names-set(digests):
+        raise ValueError('Incomplete release has assets outside the validated bundle; no upload performed.')
+    # Validate every already-published bundle asset before the first upload.
+    # A mismatching file must never be repaired by replacing or deleting it.
+    verify_assets([path for path in assets if path.name in names],tag,repository,digests)
+    if missing:
+        for path in missing:
+            if sha256(path)!=digests[path.name]:
+                raise ValueError('Local release asset changed after validation: '+path.name)
+        release_id=existing['id']
+        # Without --clobber, a concurrently uploaded name causes a safe failure.
+        # A partial upload can be retried: matching files are verified and kept.
+        run(['gh','release','upload',tag,*map(str,missing),'--repo',repository])
+        existing=api(f'repos/{repository}/releases/tags/{tag}')
+        if existing['id']!=release_id:
+            raise ValueError('Release changed during asset upload; verification stopped.')
+        if existing.get('draft') or bool(existing.get('prerelease'))!=manifest['experimental']:
+            raise ValueError('Existing release channel/draft differs from metadata; no replacement performed.')
+        if not set(digests)<={item['name'] for item in existing['assets']}:
+            raise ValueError('Release still lacks required assets after upload.')
+        verify_assets(assets,tag,repository,digests)
     print(json.dumps(dict(ok=True,release=existing['html_url'],sha256=manifest['sha256']),indent=2))
 
 
