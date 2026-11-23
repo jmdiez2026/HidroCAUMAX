@@ -49,11 +49,18 @@ jobs:
           RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
           RELEASE_REPOSITORY: ${{ github.repository }}
         run: python scripts/build_release.py --output dist --tag "$RELEASE_TAG" --repository "$RELEASE_REPOSITORY"
-      - name: Crear o verificar Release sin sustituir archivos existentes
+      - name: Preparar publicador de la revisión del workflow
+        env:
+          PUBLISHER_COMMIT: ${{ github.workflow_sha }}
+        run: |
+          # El complemento y build_release siguen siendo los de la etiqueta.
+          # El publicador corregido permite completar publicaciones existentes.
+          git show "$PUBLISHER_COMMIT:scripts/publish_release.py" > "$RUNNER_TEMP/hidrocaumax-publish-release.py"
+      - name: Crear o completar Release sin sustituir archivos existentes
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_REPOSITORY: ${{ github.repository }}
-        run: python scripts/publish_release.py --output dist --repository "$RELEASE_REPOSITORY"
+        run: PYTHONPATH="$GITHUB_WORKSPACE/scripts" python "$RUNNER_TEMP/hidrocaumax-publish-release.py" --output dist --repository "$RELEASE_REPOSITORY"
       - name: Preparar Pages
         uses: actions/configure-pages@v5
       - name: Subir índice QGIS
