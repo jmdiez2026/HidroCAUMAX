@@ -75,6 +75,184 @@ class DemHydrologyTests(unittest.TestCase):
         finally:
             dataset = None
 
+    def channel_fixture(self, *, small_join=True, unrelated=False):
+        codes = np.full((40 if unrelated else 15, 35), 255, dtype=np.uint8)
+        codes[8, :34] = 1
+        codes[8, 34] = 0
+        for col in range(2, 21):
+            codes[1:8, col] = 4
+        codes[6:8, 26] = 4  # Lateral clicked cell drains to the river two rows below.
+        if small_join:
+            codes[4:6, 25] = 4
+            codes[6, 25] = 2  # Three-cell hillslope joins before the actual river.
+        if unrelated:
+            codes[35, :34] = 1
+            codes[35, 34] = 0
+            codes[10:35, :] = 4  # Much larger, but not connected to the click's trace.
+        return codes
+
+    def snap_codes(self, codes, row, col, *, dx=0.0, dy=0.0, radius=250.0, reference=389e6):
+        path = self.raster(codes, nodata=255)
+        dataset = gdal.Open(str(path))
+        transform = dataset.GetGeoTransform()
+        counts = hydro._flow_accumulation(dataset.GetRasterBand(1))
+        dataset = None
+        x, y = self.point(path, row, col)
+        result = hydro._nearest_main_channel(counts, transform, x + dx, y + dy,
+                                             reference, .9, radius, directions_path=path)
+        return (*result, counts, path)
+
+    def test_lateral_click_crosses_small_hillslope_join_before_associating_the_river(self):
+        selected, snap, counts, _ = self.snap_codes(self.channel_fixture(), 6, 26)
+        self.assertEqual((selected.row, selected.col), (8, 26))
+        self.assertEqual((snap['channel_anchor_row'], snap['channel_anchor_col']), (8, 26))
+        self.assertEqual(snap['selection_mode'], 'upstream_lateral_main_course')
+        self.assertEqual(snap['downstream_connection_path'], [[6, 26, 4], [7, 26, 4], [8, 26, 1]])
+        self.assertEqual(snap['upstream_path'], [[8, 26, 1]])
+        self.assertEqual(snap['main_course_click_station_m'], 0.0)
+        self.assertEqual(snap['main_course_selected_station_m'], 0.0)
+        self.assertEqual(snap['section_projection_x'], selected.x)
+        self.assertEqual(snap['section_projection_y'], selected.y)
+        self.assertAlmostEqual(snap['association_lateral_distance_m'], 10.0)
+        self.assertEqual(snap['association_incoming_area_m2'], 5 * 25)
+        self.assertGreater(snap['association_other_inflow_area_m2'], 100 * 25)
+        self.assertGreater(snap['candidate_upstream_area_m2'], snap['original_cell_upstream_area_m2'])
+        self.assertEqual(snap['candidate_upstream_area_m2'], int(counts[8, 26]) * 25)
+        self.assertFalse(snap['reference_threshold_met'])  # Never force the original 90 % area.
+
+    def test_lateral_section_selects_upstream_centre_instead_of_downstream_receiver(self):
+        selected, snap, counts, _ = self.snap_codes(self.channel_fixture(), 6, 26, dx=-1.5)
+        self.assertEqual((selected.row, selected.col), (8, 25))
+        self.assertEqual(snap['upstream_path'], [[8, 25, 1], [8, 26, 1]])
+        self.assertAlmostEqual(snap['main_course_click_station_m'], 1.5)
+        self.assertAlmostEqual(snap['main_course_selected_station_m'], 5.0)
+        self.assertAlmostEqual(snap['section_offset_m'], -3.5)
+        self.assertLess(snap['candidate_upstream_area_m2'], snap['channel_anchor_upstream_area_m2'])
+        self.assertEqual(snap['candidate_upstream_area_m2'], int(counts[8, 25]) * 25)
+
+    def test_large_unconnected_channel_is_not_selected_by_accumulation(self):
+        selected, snap, counts, _ = self.snap_codes(self.channel_fixture(unrelated=True), 6, 26)
+        self.assertGreater(int(counts[35, 34]), int(counts[8, 26]))
+        self.assertEqual((selected.row, selected.col), (8, 26))
+        self.assertEqual(snap['channel_anchor_row'], 8)
+
+    def test_already_aligned_river_and_headwater_need_no_nine_cell_gate(self):
+        for col in (0, 1, 6):
+            with self.subTest(col=col):
+                selected, snap, counts, _ = self.snap_codes([[1, 1, 1, 1, 1, 1, 0]], 0, col)
+                self.assertEqual((selected.row, selected.col), (0, col))
+                self.assertEqual(snap['selection_mode'], 'upstream_main_course')
+                self.assertEqual(snap['status'], 'unchanged')
+                self.assertEqual(snap['candidate_upstream_area_m2'], (col + 1) * 25)
+                self.assertEqual(snap['minimum_upstream_area_m2'], 25)
+
+    def test_symmetric_confluence_is_explicitly_ambiguous(self):
+        codes = np.full((7, 11), 255, dtype=np.uint8)
+        codes[5, :5] = 1
+        codes[5, 6:] = 16
+        codes[5, 5] = 0
+        codes[4, 5] = 4
+        with self.assertRaisesRegex(ValueError, 'confluencia.*igual aporte'):
+            self.snap_codes(codes, 4, 5)
+
+    def test_unprojectable_receiver_does_not_fall_back_to_tiny_lateral_basin(self):
+        codes = np.full((7, 12), 255, dtype=np.uint8)
+        codes[5, :10] = 1
+        codes[5, 10] = 0
+        codes[4, 11] = 8  # Click NE of the terminal: foot lies beyond its east endpoint.
+        with self.assertRaisesRegex(ValueError, 'no se acepta.*pequeña cuenca lateral'):
+            self.snap_codes(codes, 4, 11)
+
+    def test_competing_relative_and_absolute_inflows_do_not_certify_a_tiny_basin(self):
+        codes = np.full((9, 14), 255, dtype=np.uint8)
+        codes[7, :10] = 1  # Ten river cells before the receiving node.
+        codes[7, 10] = 0
+        codes[5:7, 10] = 4  # Original cell contributes one, then five after the small join.
+        codes[6, 7:10] = 1  # Three-cell minor branch, relative inflow 3 / 1.
+        # River ratio 10 / 5 is smaller despite its larger contribution. The
+        # two associations are geometrically plausible: neither is certified.
+        with self.assertRaisesRegex(ValueError, 'asociación es ambigua'):
+            self.snap_codes(codes, 5, 10, dx=-1.0)
+
+    def test_receiver_search_preserves_mask_nodata_and_cancellation(self):
+        path = self.raster(self.channel_fixture(), nodata=255)
+        dataset = gdal.Open(str(path), gdal.GA_Update)
+        band = dataset.GetRasterBand(1)
+        band.CreateMaskBand(gdal.GMF_PER_DATASET)
+        flags = np.full((15, 35), 255, dtype=np.uint8)
+        flags[6, 26] = 0
+        band.GetMaskBand().WriteArray(flags)
+        dataset.FlushCache()
+        counts = hydro._flow_accumulation(band)
+        transform = dataset.GetGeoTransform()
+        dataset = None
+        x, y = self.point(path, 6, 26)
+        with self.assertRaisesRegex(ValueError, 'original.*D8.*NoData'):
+            hydro._nearest_main_channel(counts, transform, x, y, 1000, .9, 250, directions_path=path)
+        with self.assertRaises(InterruptedError):
+            hydro._nearest_main_channel(counts, transform, x, y, 1000, .9, 250,
+                                         cancelled=lambda: True, directions_path=path)
+
+    def test_fine_pipeline_keeps_native_five_metre_basin_course_and_outlet_together(self):
+        codes = self.channel_fixture()
+        row, col = np.indices(codes.shape)
+        dem = self.raster(np.where(codes == 255, -9999, 200 - col + abs(row - 8)), resolution=5)
+        source = gdal.Open(str(dem))
+        key = hydro._source_key(source, dem)
+        source = None
+        direction_source = self.raster(codes, nodata=255)
+        directions = self.cache / ('d8_' + key[:32] + '.tif')
+        cached = gdal.Translate(str(directions), str(direction_source), outputType=gdal.GDT_Byte)
+        cached.SetMetadata({'SOURCE_KEY': key, 'HYDRO_VERSION': hydro._VERSION})
+        cached = None
+        x, y = self.point(dem, 6, 26)
+        with patch.object(hydro, '_run_grass', side_effect=AssertionError('Prepared D8 must be reused')):
+            result = hydro.analyze_dem(dem, x - 1.5, y, self.cache,
+                                       reference_area_m2=389e6, reference_cell_width=500,
+                                       reference_cell_height=500, snap_enabled=True)
+        snap = result.diagnostics['outlet_snap']
+        self.assertEqual(result.cell_width, 5)
+        self.assertEqual(result.cell_height, 5)
+        self.assertEqual((result.selected_x, result.selected_y), (x - 1.5, y))
+        self.assertEqual(result.area_m2, result.cell_count * 25)
+        self.assertGreater(result.cell_count, 100)
+        self.assertEqual(result.area_m2, snap['candidate_upstream_area_m2'])
+        self.assertEqual((result.outlet_x, result.outlet_y), tuple(self.point(dem, 8, 25)))
+        geometry = ogr.CreateGeometryFromWkb(result.geometry_wkb)
+        self.assertAlmostEqual(geometry.GetArea(), result.area_m2)
+        course = ogr.CreateGeometryFromWkb(result.main_course_wkb)
+        self.assertEqual(course.GetPoint_2D(0), (result.outlet_x, result.outlet_y))
+        for index in range(course.GetPointCount()):
+            point = ogr.Geometry(ogr.wkbPoint)
+            point.AddPoint_2D(*course.GetPoint_2D(index))
+            self.assertTrue(geometry.Contains(point))
+        self.assertTrue(result.metadata['cache_reused'])
+        self.assertEqual(result.metadata['native_resolution'], (5, 5))
+        with patch.object(hydro, '_nearest_main_channel', side_effect=ValueError('Sección ambigua')):
+            with self.assertRaises(hydro.OutletSelectionRequired) as raised:
+                hydro.analyze_dem(dem, x - 1.5, y, self.cache,
+                                  reference_area_m2=389e6, reference_cell_width=500,
+                                  reference_cell_height=500, snap_enabled=True)
+        context = raised.exception.selection_context
+        self.assertEqual(str(raised.exception), 'Sección ambigua')
+        self.assertEqual((context['original_x'], context['original_y']), (x - 1.5, y))
+        self.assertEqual((context['cell_width'], context['cell_height']), (5, 5))
+        self.assertEqual(context['directions_path'], str(directions))
+        self.assertEqual(context['dem_path'], str(dem))
+        self.assertTrue(Path(context['metadata']['accumulation_path']).is_file())
+        with patch.object(hydro, '_accumulation', side_effect=ValueError('Red D8 inválida')):
+            with self.assertRaises(ValueError) as failed:
+                hydro.analyze_dem(dem, x - 1.5, y, self.cache,
+                                  reference_area_m2=389e6, reference_cell_width=500,
+                                  reference_cell_height=500, snap_enabled=True)
+        self.assertNotIsInstance(failed.exception, hydro.OutletSelectionRequired)
+
+    def test_diffuse_parallel_drainage_is_not_accepted_as_an_automatic_channel(self):
+        codes = np.full((15, 15), 4, dtype=np.uint8)
+        codes[-1, :] = 0
+        with self.assertRaisesRegex(ValueError, 'no distingue un cauce concentrado'):
+            self.snap_codes(codes, 7, 7)
+
     def test_inclusive_accumulation_obeys_all_eight_esri_codes_and_nodata(self):
         result = self.accumulation([[2, 4, 8], [1, 0, 16], [128, 64, 32]])
         expected = np.ones((3, 3), dtype=np.uint32)

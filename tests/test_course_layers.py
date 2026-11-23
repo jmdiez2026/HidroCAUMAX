@@ -211,6 +211,27 @@ class CourseLayersTests(unittest.TestCase):
         for layer in layers.values():
             self.assertEqual(layer.featureCount(),1)
 
+    def test_new_query_hides_previous_course_and_reactivation_preserves_child_checks(self):
+        first, second = self.controller(), self.controller()
+        old = first.update(self.analysis, self.query, {'main': False, 'central': True})
+        tree = self.project.layerTreeRoot()
+        old_main = tree.findLayer(old['main'].id())
+        old_central = tree.findLayer(old['central'].id())
+        unrelated = tree.insertGroup(0, 'Relieve del usuario')
+        unrelated.setCustomProperty('HidroCAUMAX/terrain_owner', 'terrain')
+        current = second.update(self.analysis, self.query)
+        current_main = tree.findLayer(current['main'].id())
+        self.assertFalse(old_central.isVisible())
+        self.assertTrue(old_central.itemVisibilityChecked())
+        self.assertFalse(old_main.itemVisibilityChecked())
+        self.assertTrue(current_main.isVisible())
+        self.assertTrue(unrelated.itemVisibilityChecked())
+        self.assertTrue(all(self.project.mapLayer(layer.id()) is layer for layer in old.values()))
+        first.update(self.analysis, self.query)
+        self.assertTrue(old_central.isVisible())
+        self.assertFalse(old_main.isVisible())
+        self.assertFalse(current_main.isVisible())
+
     def test_single_cell_has_empty_layers_and_can_update_in_place_both_directions(self):
         controller = self.controller()
         layers = controller.update(self.analysis,self.query)

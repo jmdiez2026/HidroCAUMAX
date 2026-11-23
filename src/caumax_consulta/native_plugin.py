@@ -8,6 +8,7 @@ from .basin_dialog import BasinDialog
 from .rational_export import RationalExportBridge
 from .rational_inputs import RationalInputsBridge
 from .visible_dem import VisibleDemController
+from .update_ui import UpdateNotifier
 
 
 class NativeCaumaxPlugin(QObject):
@@ -23,6 +24,7 @@ class NativeCaumaxPlugin(QObject):
         self._rational = RationalExportBridge(iface)
         self._rational_inputs = RationalInputsBridge(iface)
         self._visible_dem = VisibleDemController(iface, self)
+        self._updates = UpdateNotifier(iface, self)
 
     def initGui(self):
         self.action = QAction('Activar herramientas HidroCAUMAX', self.iface.mainWindow())
@@ -33,9 +35,16 @@ class NativeCaumaxPlugin(QObject):
         self.open_action = QAction('Abrir proyecto de cuenca…', self.iface.mainWindow())
         self.open_action.triggered.connect(self._open_saved_project)
         self.iface.addPluginToMenu(self.MENU, self.open_action)
+        self.update_action = QAction('Buscar actualizaciones…', self.iface.mainWindow())
+        self.update_action.triggered.connect(self._check_updates)
+        self.iface.addPluginToMenu(self.MENU, self.update_action)
         self.set_enabled(True)
 
+    def _check_updates(self, *args):
+        self._updates.check(manual=True)
+
     def _open_saved_project(self):
+        self._updates.check()
         source, _ = QFileDialog.getOpenFileName(
             self.iface.mainWindow(), 'Abrir proyecto de consulta', str(Path.home()),
             'Proyecto de consulta CAUMAX (*.caumax.json);;Archivos JSON (*.json)')
@@ -66,7 +75,9 @@ class NativeCaumaxPlugin(QObject):
             self._rational.start()
             self._rational_inputs.start()
             self._visible_dem.start()
+            self._updates.check()
         else:
+            self._updates.cancel()
             self._close_dialogs()
             self._bridge.stop()
             self._rational.stop()
@@ -81,6 +92,7 @@ class NativeCaumaxPlugin(QObject):
     def _open_basin(self, native_dialog, query):
         if not self._enabled:
             return
+        self._updates.check()
         previous = self._dialogs.get(native_dialog)
         if previous is not None:
             try:
@@ -116,6 +128,7 @@ class NativeCaumaxPlugin(QObject):
 
     def unload(self):
         self._enabled = False
+        self._updates.dispose()
         self._close_dialogs()
         self._bridge.stop()
         self._rational.stop()
@@ -135,3 +148,10 @@ class NativeCaumaxPlugin(QObject):
                 pass
             self.iface.removePluginMenu(self.MENU, self.open_action)
             self.open_action.deleteLater()
+        if hasattr(self, 'update_action'):
+            try:
+                self.update_action.triggered.disconnect(self._check_updates)
+            except (RuntimeError, TypeError):
+                pass
+            self.iface.removePluginMenu(self.MENU, self.update_action)
+            self.update_action.deleteLater()

@@ -91,12 +91,13 @@ class BasinDialog(QDialog):
     def __init__(self, query, iface, parent=None, saved_session=None):
         super().__init__(parent)
         self.setObjectName('CaumaxCuencaHidrograficaDialog')
-        self.setWindowTitle('HidroCAUMAX v1.2.5 · Cuenca hidrográfica')
+        self.setWindowTitle('HidroCAUMAX v1.2.6 · Cuenca hidrográfica')
         self.setStyleSheet(BLUE_BUTTON_STYLE)
         self.setAttribute(Qt.WA_DeleteOnClose)
         self.query, self.iface = query, iface
         self.analysis = None
         self._base_geometry_wkb = None
+        self._outlet_selector = None
         self._surface_task = None
         self._surface_generation = 0
         self._surface_pending = False
@@ -293,7 +294,16 @@ class BasinDialog(QDialog):
         self.cell_grid_check = QCheckBox('Malla de celdas', resolution_group)
         self.cell_grid_check.setChecked(True)
         self.cell_grid_check.toggled.connect(self._grid_visibility_changed)
-        resolution_layout.addWidget(self.cell_grid_check)
+        resolution_actions = QHBoxLayout()
+        resolution_actions.addWidget(self.cell_grid_check)
+        resolution_actions.addStretch()
+        self.outlet_adjust_button = QPushButton('Ajustar cierre…', resolution_group)
+        self.outlet_adjust_button.setStyleSheet('QPushButton { padding: 2px 9px; min-height: 0px; }')
+        self.outlet_adjust_button.setToolTip('Elegir el cierre en el mapa o desplazarlo por celdas; recalcula toda la cuenca.')
+        self.outlet_adjust_button.setEnabled(False)
+        self.outlet_adjust_button.clicked.connect(self._open_outlet_selection)
+        resolution_actions.addWidget(self.outlet_adjust_button)
+        resolution_layout.addLayout(resolution_actions)
         self.resolution_checkboxes = {}
         self._resolution_buttons = QButtonGroup(self)
         self._resolution_buttons.setExclusive(True)
@@ -499,13 +509,12 @@ class BasinDialog(QDialog):
         if snap:
             crs = QgsCoordinateReferenceSystem.fromWkt(analysis.crs_wkt)
             context += (
-                f'\nCierre ajustado al cauce (snap): X={analysis.outlet_x:.3f}; '
+                f'\nCierre de cálculo (centro de celda): X={analysis.outlet_x:.3f}; '
                 f'Y={analysis.outlet_y:.3f} · {crs.authid() or crs.description()}\n'
                 f"Desplazamiento desde el punto original: {snap['distance_m']:.2f} m. "
                 'Mapa: original naranja; cierre ajustado azul.')
-            if snap.get('selection_mode') == 'upstream_only':
-                context += ('\nSección conservada: cierre en la misma sección o aguas arriba. '
-                            'El área del MDT de 500 m se usa solo como referencia.')
+            context += ('\nCierre aproximado a centro de celda; no es una sección topográfica exacta. '
+                        'La referencia sigue siendo el punto original.')
         elif analysis is not None and analysis.diagnostics.get('dem_hydrology'):
             context += '\nResultado guardado sin ajuste al cauce. Una nueva consulta aplica el snap automático.'
         self.context.setText(context)
@@ -679,6 +688,7 @@ class BasinDialog(QDialog):
         self._refresh_basin_hydrology_controls()
 
     def _setup_resolutions(self, resolution_state=None):
+        self._close_outlet_selection()
         from .resolution_controller import ResolutionController
         if self._resolution_controller is not None:
             self._resolution_controller.dispose()
@@ -764,6 +774,7 @@ class BasinDialog(QDialog):
         self.resolution_refresh_button.setEnabled(not busy and not self._saving_project and not self._resolution_pending)
         self.export_button.setEnabled(available and self._smoothing_ready and not busy and not self._saving_project)
         self._refresh_drainage_controls()
+        self._refresh_outlet_button()
 
     def _basin_hydrology_status(self, text, progress):
         if not self._disposed:
@@ -923,6 +934,7 @@ class BasinDialog(QDialog):
     def _drainage_ready(self,key,products,state):
         if self._disposed or key != (self._active_resolution_key or str(self.analysis.cell_width)):
             return
+        self._close_outlet_selection()
         previous = self.analysis
         live_visibility = (self._drainage_layers.visibility()
             if self._drainage_state is not None and self._drainage_layers is not None
@@ -1068,6 +1080,7 @@ class BasinDialog(QDialog):
             box.clicked.connect(lambda checked=False, key=key: self._select_resolution(key))
             self.resolution_checkboxes[key] = box
         self._layout_resolution_options()
+        self._refresh_outlet_button()
 
     def _layout_resolution_options(self):
         """Use one row when possible and wrap whole labels without clipping."""
@@ -1122,8 +1135,76 @@ class BasinDialog(QDialog):
         self.save_project_button.setEnabled(self.analysis is not None)
         self.export_button.setEnabled(self._smoothing_ready)
         self._refresh_basin_hydrology_controls()
+        if controller is not None and getattr(controller, 'outlet_selection_context', None):
+            QTimer.singleShot(0, self._offer_outlet_selection)
+
+    def _refresh_outlet_button(self):
+        controller = self._resolution_controller
+        self.outlet_adjust_button.setEnabled(bool(controller is not None and not getattr(controller, 'busy', False)
+            and not self._resolution_pending and not self._saving_project
+            and not self._basin_hydrology_busy()
+            and not (self._drainage_controller and self._drainage_controller.busy)))
+
+    def _offer_outlet_selection(self):
+        controller = self._resolution_controller
+        if (not self._disposed and controller is not None
+                and getattr(controller, 'outlet_selection_context', None)):
+            self._open_outlet_selection()
+
+    def _close_outlet_selection(self):
+        dialog, self._outlet_selector = self._outlet_selector, None
+        if dialog is not None:
+            dialog.reject()
+
+    def _open_outlet_selection(self, *args):
+        controller = self._resolution_controller
+        if (self._disposed or controller is None or controller.busy or self._saving_project
+                or self._resolution_pending or self._basin_hydrology_busy()):
+            return
+        if self._outlet_selector is not None:
+            self._outlet_selector.raise_()
+            self._outlet_selector.activateWindow()
+            return
+        try:
+            from .outlet_selection import OutletSelectionDialog
+            context = controller.selection_context()
+            dialog = OutletSelectionDialog(self.iface, context, self)
+            dialog.setAttribute(Qt.WA_DeleteOnClose)
+            self._outlet_selector = dialog
+            dialog.accepted.connect(lambda: self._apply_outlet_selection(dialog, controller, context))
+            def finished(*args):
+                if self._outlet_selector is dialog:
+                    self._outlet_selector = None
+            dialog.finished.connect(finished)
+            dialog.show()
+        except Exception as error:
+            QMessageBox.warning(self, 'Ajustar cierre', str(error))
+
+    def _apply_outlet_selection(self, dialog, controller, context):
+        if (self._disposed or controller is not self._resolution_controller
+                or self._outlet_selector is not dialog or self._saving_project
+                or self._resolution_pending or controller.busy):
+            return
+        point = dialog.selection()
+        if point is None:
+            return
+        self._outlet_selector = None
+        self._cache_variant_state()
+        self._cancel_drainage()
+        self._cancel_basin_hydrology()
+        self._cancel_surface()
+        self._resolution_pending = True
+        self.resolution_progress.show()
+        self._refresh_basin_hydrology_controls()
+        try:
+            if not controller.select_outlet(context, *point):
+                self._resolution_pending = False
+                self._refresh_basin_hydrology_controls()
+        except Exception as error:
+            self._resolution_error(str(error))
 
     def _refresh_resolutions(self):
+        self._close_outlet_selection()
         if self._resolution_controller is not None and not self._saving_project:
             self._resolution_discovering = True
             self.save_project_button.setEnabled(False)
@@ -1138,6 +1219,7 @@ class BasinDialog(QDialog):
             controller.variants[key]['smoothing_state'] = self.get_smoothing_state()
 
     def _select_resolution(self, key):
+        self._close_outlet_selection()
         if self._disposed or self._saving_project or self._resolution_controller is None:
             return
         self._cancel_drainage()
@@ -1171,9 +1253,13 @@ class BasinDialog(QDialog):
     def _resolution_result(self, key, analysis, query):
         if self._disposed:
             return
+        self._close_outlet_selection()
         previous_hydrology = self.basin_hydrology_widget.snapshot() or {}
         previous_quantiles = self.quantiles_widget.snapshot() or {}
-        self._cache_variant_state()
+        # A manual outlet can replace the current resolution in the controller.
+        # Do not write the previous basin/smoothing back over that new result.
+        if key != self._active_resolution_key or analysis is self.analysis:
+            self._cache_variant_state()
         controller = self._resolution_controller
         state = controller.variants[key].get('smoothing_state')
         self._drainage_state = deepcopy(state.get('drainage_state')) if state else None
@@ -1367,6 +1453,7 @@ class BasinDialog(QDialog):
             if task.trace:
                 QgsMessageLog.logMessage(task.trace, 'HidroCAUMAX', Qgis.Warning)
             return
+        self._close_outlet_selection()
         self.analysis = task.result['analysis']
         if self._base_drainage_state is None and self._drainage_state is not None:
             self._base_drainage_state = deepcopy(self._drainage_state)
@@ -1587,6 +1674,7 @@ class BasinDialog(QDialog):
                                       self.smoothing_degree.value())
 
     def _state_for_output(self):
+        self._close_outlet_selection()
         if not self._surface_valid:
             raise ValueError('Espera al recálculo completo de la divisoria activa. ' + self._smoothing_error)
         if self._basin_hydrology_busy():
@@ -1878,6 +1966,7 @@ class BasinDialog(QDialog):
             self._queue_smoothing()
 
     def _choose_save_project(self):
+        self._close_outlet_selection()
         if self._basin_hydrology_busy():
             self.basin_hydrology_widget.set_busy(True, 'Espera a que termine el cálculo antes de guardar el proyecto.')
             return
@@ -1966,6 +2055,7 @@ class BasinDialog(QDialog):
         if self._disposed:
             return
         self._disposed = True
+        self._close_outlet_selection()
         self._cancel_save_surfaces()
         self._placement_timer.stop()
         self._row_timer.stop()

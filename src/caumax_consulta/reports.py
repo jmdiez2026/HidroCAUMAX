@@ -167,29 +167,56 @@ def _outlet_snap_report_html(analysis):
         'snapped': 'El cálculo utiliza una celda de cauce distinta de la celda del punto original.',
         'unchanged': 'Se mantiene la misma celda de cierre; las coordenadas indican el centro de esa celda.',
     }.get(snap.get('status'), '')
-    upstream = snap.get('selection_mode') == 'upstream_only'
-    criterion = (
-        'Criterio: misma sección o aguas arriba del punto original; solo celdas conectadas '
-        'como antecesores D8 y situadas en el semiplano aguas arriba. Se selecciona la más cercana. '
-        'La sección local es perpendicular a la dirección D8 y no sustituye una sección topográfica medida. '
-        'El área de referencia es informativa y nunca permite desplazar el cierre aguas abajo.'
-        if upstream else
-        'Criterio de la consulta guardada: celda D8 más próxima dentro del radio cuya área aportante cumple el umbral mínimo.'
-    )
+    mode = snap.get('selection_mode')
+    criteria = {
+        'user_selected_cell': (
+            'Cierre elegido expresamente por el usuario en el mapa o mediante desplazamiento por celdas. '
+            'Se ha recalculado toda la cuenca y su curso principal desde ese centro. Esta elección manual '
+            'puede situarse en cualquier orientación respecto al punto original; no se presenta como '
+            'una selección automática aguas arriba.'),
+        'upstream_main_course': (
+            'Snap sobre el curso principal D8 de la cuenca: se utiliza su primer tramo aguas arriba '
+            'para situar la sección del punto original. Si el centro de la celda queda aguas abajo '
+            'de esa sección, se elige el siguiente centro del mismo curso y se vuelve a delimitar la cuenca.'),
+        'upstream_lateral_main_course': (
+            'Snap al cauce del MDT activo: se sigue la conexión D8 del punto original para identificar '
+            'el cauce receptor mediante los aportes relativos de sus confluencias. El punto original se '
+            'proyecta sobre ese curso y el cierre es su primer centro de celda en la sección proyectada '
+            'o aguas arriba. El receptor de la conexión lateral no se adopta automáticamente como cierre. '
+            'No se exige un porcentaje del área de la malla de 500 m ni un umbral fijo de acumulación local.'),
+        'upstream_only': (
+            'Criterio de la consulta guardada en 1.2.5: antecesores D8 dentro del semiplano '
+            'definido por la dirección local; se seleccionó el centro más cercano que cumplía '
+            'los filtros de acumulación. Una consulta nueva aplica el snap actual sobre el curso principal.'),
+    }
+    criterion = criteria.get(mode,
+        'Criterio de la consulta guardada: celda D8 más próxima dentro del radio cuya área '
+        'aportante cumple el umbral mínimo.')
+    current = mode in ('upstream_main_course', 'upstream_lateral_main_course', 'user_selected_cell')
+    details = ''
+    if not current:
+        details += (' <b>Área mínima local:</b> ' if mode == 'upstream_only' else ' <b>Área mínima:</b> ')
+        details += area('minimum_upstream_area_m2') + ';'
+    details += ' <b>área de referencia:</b> ' + area('reference_area_m2')
+    details += '; <b>área aportante del cierre:</b> ' + area('candidate_upstream_area_m2')
+    if mode == 'upstream_lateral_main_course':
+        details += ('; <b>área de la celda original:</b> ' + area('original_cell_upstream_area_m2')
+                    + '; <b>área del receptor:</b> ' + area('channel_anchor_upstream_area_m2')
+                    + '. La celda original puede estar en una ladera y aportar menos superficie que el cauce elegido')
     return (
         '<h2>Ajuste de la sección de cierre</h2><p class="small">'
         '<b>Punto original:</b> X = ' + _text(_number(snap.get('original_x')))
         + '; Y = ' + _text(_number(snap.get('original_y')))
-        + '. <b>Cierre ajustado:</b> X = ' + _text(_number(snap.get('snapped_x')))
+        + '. <b>Cierre de cálculo (centro de celda):</b> X = ' + _text(_number(snap.get('snapped_x')))
         + '; Y = ' + _text(_number(snap.get('snapped_y')))
         + '. Coordenadas en el CRS de delimitación.<br>'
         '<b>Desplazamiento:</b> ' + _text(_number(snap.get('distance_m'), 2).replace('.', ','))
         + ' m; <b>radio de búsqueda:</b> ' + _text(_number(snap.get('search_radius_m'), 2).replace('.', ','))
         + ' m. ' + _text(status)
-        + '<br>' + _text(criterion) + (' <b>Área mínima local:</b> ' if upstream else ' <b>Área mínima:</b> ') + area('minimum_upstream_area_m2')
-        + '; <b>área de referencia:</b> ' + area('reference_area_m2')
-        + '; <b>área aportante del cierre:</b> ' + area('candidate_upstream_area_m2')
-        + '.<br>El caudal CAUMAX original se conserva en el punto consultado; '
+        + '<br>' + _text(criterion) + details
+        + '.<br>El curso principal y la cuenca se calculan desde el mismo cierre. La posición se aproxima '
+          'a centros de celda y no constituye una sección topográfica exacta.'
+        + '<br>El caudal CAUMAX original se conserva en el punto consultado; '
           'el ajuste modifica la sección de cierre del análisis de la cuenca.</p>'
     )
 
@@ -521,7 +548,7 @@ td {vertical-align: top;}
 .method {font-size: 8pt;}
 </style></head><body>
 <h1>''' + title + '''</h1>
-<p><b>HidroCAUMAX v1.2.5 - Parámetros morfológicos e hidrológicos</b></p>
+<p><b>HidroCAUMAX v1.2.6 - Parámetros morfológicos e hidrológicos</b></p>
 <table width="100%" cellspacing="0" cellpadding="3">''' + metadata_rows + '''</table>
 ''' + resolution_html + '''
 ''' + outlet_snap_html + '''
@@ -611,8 +638,8 @@ def _write_document(path, content):
     printer = QPrinter(QPrinter.HighResolution)
     printer.setOutputFormat(QPrinter.PdfFormat)
     printer.setOutputFileName(str(path))
-    printer.setDocName('HidroCAUMAX v1.2.5 - Cuenca hidrográfica')
-    printer.setCreator('HidroCAUMAX v1.2.5')
+    printer.setDocName('HidroCAUMAX v1.2.6 - Cuenca hidrográfica')
+    printer.setCreator('HidroCAUMAX v1.2.6')
     printer.setFontEmbeddingEnabled(True)
     printer.setPaperSize(QPrinter.A4)
     printer.setOrientation(QPrinter.Landscape)

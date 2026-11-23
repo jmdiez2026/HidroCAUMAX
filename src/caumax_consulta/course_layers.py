@@ -11,7 +11,7 @@ from qgis.core import (
     QgsLineSymbol, QgsPointXY, QgsProject, QgsSimpleLineSymbolLayer, QgsVectorLayer, QgsWkbTypes,
 )
 
-from .layer_order import create_result_group, ensure_results_above_official
+from .layer_order import activate_result_group, create_result_group, ensure_results_above_official
 
 
 _KINDS = ('main', 'central')
@@ -203,6 +203,7 @@ class CourseLayers:
                 node = self._group.insertLayer(0, layer)
             node.setItemVisibilityChecked(flags[kind])
         self._visibility = flags
+        activate_result_group(project, self._group, _OWNER_PROPERTY)
         ensure_results_above_official(project)
         self.note = ('La cuenca no contiene un curso principal de longitud positiva; '
                      'las dos capas están vacías.' if geometries['main'] is None else '')

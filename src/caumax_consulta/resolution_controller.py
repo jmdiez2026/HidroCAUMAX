@@ -43,6 +43,12 @@ def _analyze_dem(path,x,y,cache_dir,cancelled,progress,**snap_options):
     return analyze_dem(path,x,y,cache_dir,cancelled=cancelled,progress=progress,**snap_options)
 
 
+def _manual_analysis(context,x,y,cancelled,publish):
+    from .manual_outlet import build_manual_outlet
+    return build_manual_outlet(context,x,y,cancelled=cancelled,
+        publish=lambda percent:publish('Recalculando desde el cierre elegido',percent))
+
+
 def _engine_available():
     from .dem_hydrology import availability_engine
     return availability_engine()
@@ -141,6 +147,7 @@ class _WorkTask(QgsTask):
         self.kind,self.key=kind,key
         self.payload=None
         self.error=''
+        self.selection_context=None
         self._last_publish=0.0
 
     def publish(self,text,progress):
@@ -161,6 +168,7 @@ class _WorkTask(QgsTask):
             return False
         except Exception as error:
             self.error=str(error)
+            self.selection_context=deepcopy(getattr(error,'selection_context',None))
             return False
 
     def finished(self,success):
@@ -192,6 +200,7 @@ class ResolutionController(QObject):
         self.progress=0.0
         self.engine={}
         self.requested_key=None
+        self.outlet_selection_context=None
         self._set_base(base_analysis,base_query)
         self.active_key=self._base_key
         self.variants={self._base_key:{'analysis':base_analysis,'query':base_query,
@@ -237,6 +246,7 @@ class ResolutionController(QObject):
         self._ensure_queue=[]
         self._ensure_ready=None
         self.requested_key=None
+        self.outlet_selection_context=None
 
     def dispose(self,*args):
         if self._disposed:return
@@ -323,6 +333,43 @@ class ResolutionController(QObject):
         self._start_build(key,'select')
         return True
 
+    def selection_context(self):
+        """Return the unresolved DEM, or the active calculation, for user review."""
+        if self.outlet_selection_context:
+            return deepcopy(self.outlet_selection_context)
+        variant=self.variants[self.active_key]
+        analysis,query=variant['analysis'],variant['query']
+        x,y=_dem_point(query.dem_path,self._query_crs,self._query_x,self._query_y)
+        return dict(resolution_key=self.active_key,dem_path=str(query.dem_path),
+            directions_path=str(query.directions_path),crs_wkt=analysis.crs_wkt,
+            original_x=x,original_y=y,search_radius_m=self.snap_radius_m,
+            initial_x=float(analysis.outlet_x),initial_y=float(analysis.outlet_y),
+            reference_area_m2=float(self.base_analysis.area_m2),
+            metadata=deepcopy(variant.get('metadata') or {}),
+            reason='Elige el centro de cierre para esta resolución. Se recalculará toda la cuenca.')
+
+    def select_outlet(self,context,x,y):
+        """Apply an explicitly reviewed cell without changing the CAUMAX query."""
+        if self._disposed:return False
+        context=deepcopy(context)
+        key=_key(context.get('resolution_key'))
+        if not any(item['key']==key for item in self.options):
+            raise ValueError('La resolución del cierre elegido ya no está disponible.')
+        x,y=float(x),float(y)
+        if not all(math.isfinite(value) for value in (x,y)):
+            raise ValueError('Las coordenadas del cierre elegido no son válidas.')
+        self.cancel()
+        self.requested_key=key
+        def operation(cancelled,publish):
+            try:
+                return _manual_analysis(context,x,y,cancelled,publish)
+            except ValueError as error:
+                error.selection_context=deepcopy(context)
+                raise
+        self._on_status('Preparando la cuenca desde el cierre elegido…')
+        self._start('CAUMAX: cierre elegido por el usuario',operation,'select',key)
+        return True
+
     def _start_build(self,key,kind):
         option=self._option_objects[key]
         snap_options={
@@ -368,7 +415,7 @@ class ResolutionController(QObject):
         self.last_errors[key]=text
         for item in self.options:
             if item['key']==key and key not in self.variants:
-                item['available']=False
+                item['available']=bool(self.outlet_selection_context)
                 item['status']=text
         self._on_options(deepcopy(self.options))
         self._on_error(text)
@@ -396,12 +443,15 @@ class ResolutionController(QObject):
         key=task.key
         if success:
             data=task.payload
+            self.outlet_selection_context=None
             query=replace(self.base_query,directions_path=data['directions_path'],dem_path=data['dem_path'])
             self.variants[key]={'analysis':data['analysis'],'query':query,
                                 'smoothing_state':None,'metadata':data['metadata']}
             self.last_errors.pop(key,None)
             for item in self.options:
-                if item['key']==key:item['status']='Análisis disponible en caché'
+                if item['key']==key:
+                    item['status']='Análisis disponible en caché'
+                    item['available']=True
             self._on_options(deepcopy(self.options))
             if task.kind=='select':
                 self.active_key=key
@@ -411,6 +461,9 @@ class ResolutionController(QObject):
             if warning:self._on_status(warning)
         elif task.error:
             self.requested_key=None
+            context=getattr(task,'selection_context',None)
+            self.outlet_selection_context=(dict(deepcopy(context),resolution_key=key,
+                                                reason=task.error) if context else None)
             self._failed_key(key,task.error)
         if task.kind=='ensure':self._next_bulk()
 

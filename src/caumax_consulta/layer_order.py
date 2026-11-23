@@ -3,6 +3,7 @@ from qgis.core import QgsProject
 
 
 ORDER_PROPERTY = 'HidroCAUMAX/order_rank'
+_INACTIVE_PROPERTY = 'HidroCAUMAX/automatically_hidden_result'
 _OWNERS = (('HidroCAUMAX/course_owner', 0),
            ('HidroCAUMAX/drainage_owner', 10),
            ('HidroCAUMAX/terrain_owner', 30))
@@ -104,6 +105,32 @@ def create_result_group(project, name, rank):
     group = root.insertGroup(result_index(root, rank), name)
     group.setCustomProperty(ORDER_PROPERTY, rank)
     return group
+
+
+def activate_result_group(project, active, owner_property):
+    """Show one calculation's result group without deleting previous results.
+
+    Child legend choices stay intact. Only groups explicitly owned by this
+    result type are affected; terrain, official layers and user groups retain
+    their visibility. Reactivation restores groups hidden by this helper, but
+    never overrides a group the user had already hidden.
+    """
+    def groups(parent):
+        for node in parent.children():
+            if hasattr(node, 'children'):
+                yield node
+                yield from groups(node)
+
+    for group in groups(project.layerTreeRoot()):
+        if group.customProperty(owner_property, None) is None:
+            continue
+        if group is active:
+            if group.customProperty(_INACTIVE_PROPERTY, False):
+                group.setItemVisibilityChecked(True)
+                group.removeCustomProperty(_INACTIVE_PROPERTY)
+        elif group.itemVisibilityChecked():
+            group.setCustomProperty(_INACTIVE_PROPERTY, True)
+            group.setItemVisibilityChecked(False)
 
 
 def add_result_layer(layer, project=None):

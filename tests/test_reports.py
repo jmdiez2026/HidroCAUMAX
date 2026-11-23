@@ -296,7 +296,7 @@ class ReportTests(unittest.TestCase):
         )
         text = normalized(' '.join(page.extract_text() for page in PdfReader(str(result)).pages))
         for expected in (
-            'HidroCAUMAX v1.2.5', 'Resolución MDT seleccionada', 'MDT25 IGN',
+            'HidroCAUMAX v1.2.6', 'Resolución MDT seleccionada', 'MDT25 IGN',
             '25,00 × 25,00 m', 'IGN/CNIG', 'https://centrodedescargas.cnig.es/',
             'Mayor detalle espacial', 'Caudal CAUMAX original', '177.000000 m³/s',
             'no se recalcula al descargar o seleccionar otro MDT',
@@ -556,7 +556,7 @@ class ReportTests(unittest.TestCase):
         text = normalized(' '.join(page.extract_text() for page in PdfReader(str(result)).pages))
         for expected in (
             'Ajuste de la sección de cierre', 'Punto original: X = 338834.500; Y = 4715307.100',
-            'Cierre ajustado: X = 338925.000; Y = 4715400.000', 'Desplazamiento: 129,70 m',
+            'Cierre de cálculo (centro de celda): X = 338925.000; Y = 4715400.000', 'Desplazamiento: 129,70 m',
             'radio de búsqueda: 707,11 m', 'Área mínima: 162,000 km²',
             'área de referencia: 180,000 km²', 'área aportante del cierre: 181,250 km²',
             '177.000000 m³/s', 'El caudal CAUMAX original se conserva en el punto consultado',

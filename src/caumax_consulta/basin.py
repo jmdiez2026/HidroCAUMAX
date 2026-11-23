@@ -110,13 +110,16 @@ def _read(band, *window):
 
 def _upstream_section_cell(directions_band, transform, original_x, original_y,
                            radius=None, counts=None, require_channel=False,
-                           cancelled=lambda: False):
-    """Select a connected native centre on or upstream of the clicked section.
+                           cancelled=lambda: False, *, return_visit=False):
+    """Use the first incoming segment of the displayed longest D8 course.
 
-    The section through the exact click is perpendicular to its cell's D8
-    direction. Only that cell and its D8 ancestors may qualify; every candidate
-    must also lie in the upstream half-plane and inside the search radius.
-    This is an explicit grid policy, not a surveyed cross-section or a standard.
+    A click belongs to the root cell. Its projection on that incoming segment
+    determines whether its centre or the immediately upstream course centre is
+    admissible. The outgoing direction at a confluence never orients this
+    section, and a closer tributary never replaces the main course. Main-course
+    length is determined over the complete contributing network before applying
+    the local radius and channel filter. This is a raster policy, not a surveyed
+    cross-section. ``return_visit`` lets terrain reuse an unchanged delineation.
     """
     _check_cancel(cancelled)
     rows, cols = directions_band.YSize, directions_band.XSize
@@ -132,123 +135,104 @@ def _upstream_section_cell(directions_band, transform, original_x, original_y,
         raise ValueError('La acumulación y las direcciones no comparten dimensiones.')
     if require_channel and counts is None:
         raise ValueError('Se requiere acumulación para identificar el cauce local.')
-    dc, dr = math.ceil(radius / original.width) + 1, math.ceil(radius / original.height) + 1
-    left, right = max(0, original.col - dc), min(cols, original.col + dc + 1)
-    top, bottom = max(0, original.row - dr), min(rows, original.row + dr + 1)
-    window = (left, top, right - left, bottom - top)
-    data = _read(directions_band, *window)
-    valid = np.isfinite(data)
-    nodata = directions_band.GetNoDataValue()
-    if nodata is not None:
-        valid &= data != nodata
-    if not directions_band.GetMaskFlags() & gdal.GMF_ALL_VALID:
-        valid &= _read(directions_band.GetMaskBand(), *window) != 0
-    r0, c0 = original.row - top, original.col - left
-    if not valid[r0, c0] or (counts is not None and int(counts[original.row, original.col]) <= 0):
-        raise ValueError('La celda original no tiene dirección D8 válida (NoData); no se ajusta el cierre.')
-    if data[r0, c0] not in _VALID_CODES:
-        raise ValueError('La celda original tiene un código D8 desconocido.')
-    original_code = int(data[r0, c0])
+    visit = _visit_upstream(directions_band, original.row, original.col,
+                            cancelled, lambda n: None,
+                            path_cell_size=(original.width, original.height))
+    main_path, main_length = visit[4:]
+    original_code = main_path[0][2]
+    if counts is not None:
+        if int(counts[original.row, original.col]) != visit[2]:
+            raise ValueError('La acumulación no coincide con la cuenca D8 de la celda original.')
+        for downstream, upstream in zip(main_path, main_path[1:]):
+            if not 0 < int(counts[upstream[0], upstream[1]]) < int(counts[downstream[0], downstream[1]]):
+                raise ValueError('La acumulación no es coherente con la conexión D8 aguas arriba.')
+    source_cell = main_path[1] if len(main_path) > 1 else main_path[0]
+    section_code = source_cell[2]
+    direction_source = 'main_course_incoming_d8' if len(main_path) > 1 else 'cell_d8'
+    if not section_code:
+        if math.hypot(original.x - original_x, original.y - original_y) > 1e-7:
+            raise ValueError('No se puede orientar la sección: la celda terminal no tiene '
+                             'un tramo principal de entrada. Marca su centro o un tramo D8 definido.')
+        direction_source = 'exact_center'
     offsets = {code: (-dx * original.width, dy * original.height) for dx, dy, code in DIRECTIONS}
-    section_code, direction_source = original_code, 'cell_d8'
-    source_cell = [original.row, original.col, original_code]
-    if original_code == 0:
-        incoming = [(original.row + dy, original.col + dx, code) for dx, dy, code in DIRECTIONS
-                    if 0 <= r0 + dy < data.shape[0] and 0 <= c0 + dx < data.shape[1]
-                    and valid[r0 + dy, c0 + dx] and data[r0 + dy, c0 + dx] == code]
-        if len(incoming) == 1:
-            source_cell = list(incoming[0])
-            section_code, direction_source = source_cell[2], 'single_incoming_d8'
-        elif math.hypot(original.x - original_x, original.y - original_y) <= 1e-7:
-            section_code, direction_source = 0, 'exact_center'
-        else:
-            raise ValueError('No se puede orientar la sección del punto original: la celda D8 es terminal '
-                             'y no tiene una única rama de entrada. Marca un punto con dirección definida.')
-    vx, vy = offsets.get(section_code, (0.0, 0.0))
+    vx, vy = offsets.get(section_code, (0.0, 0.0))  # downstream vector of incoming course
     norm = math.hypot(vx, vy)
+    station = (-((original_x - original.x) * vx + (original_y - original.y) * vy) / norm
+               if norm else 0.0)
     tolerance = max(original.width, original.height) * 1e-7
-    rr, cc = np.ogrid[top:bottom, left:right]
-    xx = transform[0] + (cc + 0.5) * transform[1]
-    yy = transform[3] + (rr + 0.5) * transform[5]
-    distances = (xx - original_x) ** 2 + (yy - original_y) ** 2
+    selected_index = 1 if station > tolerance else 0
+    if selected_index >= len(main_path):
+        raise ValueError('No se encuentra un cierre del cauce principal aguas arriba de la sección '
+                         'marcada: la celda no tiene antecesor D8. No se desplaza aguas abajo.')
+    row, col, _ = main_path[selected_index]
+    x = transform[0] + (col + 0.5) * transform[1]
+    y = transform[3] + (row + 0.5) * transform[5]
+    distance = math.hypot(x - original_x, y - original_y)
+    if distance > radius + tolerance:
+        raise ValueError(f'No se encuentra un cierre del cauce principal aguas arriba dentro de {radius:g} m. '
+                         'Su primer centro anterior queda fuera del radio; no se cambia de ramal.')
     cell_area = original.width * original.height
     background, minimum = None, cell_area
     if require_channel:
+        dc, dr = math.ceil(radius / original.width) + 1, math.ceil(radius / original.height) + 1
+        left, right = max(0, original.col - dc), min(cols, original.col + dc + 1)
+        top, bottom = max(0, original.row - dr), min(rows, original.row + dr + 1)
+        window = (left, top, right - left, bottom - top)
+        data = _read(directions_band, *window)
+        valid = np.isfinite(data)
+        nodata = directions_band.GetNoDataValue()
+        if nodata is not None:
+            valid &= data != nodata
+        if not directions_band.GetMaskFlags() & gdal.GMF_ALL_VALID:
+            valid &= _read(directions_band.GetMaskBand(), *window) != 0
+        rr, cc = np.ogrid[top:bottom, left:right]
+        xx = transform[0] + (cc + 0.5) * transform[1]
+        yy = transform[3] + (rr + 0.5) * transform[5]
+        distances = (xx - original_x) ** 2 + (yy - original_y) ** 2
         local = counts[top:bottom, left:right]
         population = local[(local > 0) & (distances <= radius * radius) & valid]
         if not population.size:
             raise ValueError('No hay acumulación D8 válida en el radio de búsqueda.')
         background = float(np.median(population)) * cell_area
         minimum = max(9 * cell_area, 4 * background)
-    root = (original.row, original.col)
-    parents, pending, candidates = {root: None}, [root], []
-    while pending:
-        _check_cancel(cancelled)
-        row, col = pending.pop()
-        lr, lc = row - top, col - left
-        x = transform[0] + (col + 0.5) * transform[1]
-        y = transform[3] + (row + 0.5) * transform[5]
-        offset = ((x - original_x) * vx + (y - original_y) * vy) / norm if norm else 0.0
-        area = int(counts[row, col]) * cell_area if counts is not None else None
-        if (distances[lr, lc] <= radius * radius and offset <= tolerance
-                and (not require_channel or area >= minimum)):
-            candidates.append((float(distances[lr, lc]), row, col, offset))
-        for dx, dy, code in DIRECTIONS:
-            nr, nc = row + dy, col + dx
-            if not (top <= nr < bottom and left <= nc < right):
-                continue
-            if (not valid[nr - top, nc - left] or data[nr - top, nc - left] != code
-                    or distances[nr - top, nc - left] > radius * radius):
-                continue
-            if (nr, nc) in parents:
-                raise ValueError('La rama D8 del punto original contiene un ciclo; no se ajusta el cierre.')
-            if counts is not None and not 0 < int(counts[nr, nc]) < int(counts[row, col]):
-                raise ValueError('La acumulación no es coherente con la conexión D8 aguas arriba.')
-            parents[(nr, nc)] = (row, col)
-            pending.append((nr, nc))
-    if not candidates:
-        reason = (' con aporte concentrado (al menos 9 celdas y 4 veces la mediana local)'
-                  if require_channel else '')
-        raise ValueError('No se encuentra un cierre conectado en la misma sección o aguas arriba'
-                         + reason + f' dentro de {radius:g} m. No se desplaza aguas abajo ni a otra cuenca.')
-    _, row, col, offset = min(candidates)
-    x = transform[0] + (col + 0.5) * transform[1]
-    y = transform[3] + (row + 0.5) * transform[5]
+        if int(counts[row, col]) * cell_area < minimum:
+            raise ValueError('No se encuentra un cierre del cauce principal aguas arriba con aporte '
+                             'concentrado (al menos 9 celdas y 4 veces la mediana local). '
+                             'No se cambia de ramal ni se desplaza aguas abajo.')
     selected = cell_at_point(x, y, transform[0], transform[3] + rows * transform[5],
                              transform[0] + cols * transform[1], transform[3], cols, rows)
-    path, current = [], (row, col)
-    while current is not None:
-        r, c = current
-        path.append([r, c, int(data[r - top, c - left])])
-        current = parents[current]
+    path = list(reversed(main_path[:selected_index + 1]))
+    offset = (((x - original_x) * vx + (y - original_y) * vy) / norm if norm else 0.0)
     metadata = dict(
-        method='upstream_section_d8', selection_mode='upstream_only',
+        method='upstream_section_d8', selection_mode='upstream_main_course',
         original_x=float(original_x), original_y=float(original_y),
         snapped_x=float(x), snapped_y=float(y),
-        distance_m=float(math.hypot(x - original_x, y - original_y)), search_radius_m=radius,
-        status='unchanged' if (row, col) == root else 'snapped',
+        distance_m=float(distance), search_radius_m=radius,
+        status='unchanged' if selected_index == 0 else 'snapped',
         original_row=original.row, original_col=original.col, snapped_row=row, snapped_col=col,
         original_direction=original_code, section_direction=section_code,
-        section_direction_source=direction_source, section_source_cell=source_cell,
-        section_offset_m=float(offset),
-        upstream_path=path, candidate_count=len(candidates), tie_break='row_col',
-        upstream_path_length_m=sum(math.hypot((b[1] - a[1]) * original.width,
-                                             (b[0] - a[0]) * original.height)
-                                   for a, b in zip(path, path[1:])),
+        section_direction_source=direction_source, section_source_cell=list(source_cell),
+        section_offset_m=float(offset), main_course_click_station_m=float(station),
+        main_course_length_m=float(main_length), main_course_cells=len(main_path),
+        upstream_path=path, candidate_count=1, tie_break='main_course_d8_order',
+        upstream_path_length_m=float(norm if selected_index else 0.0),
         minimum_upstream_area_m2=float(minimum),
         channel_filter='local_concentration' if require_channel else 'native_cell',
-        policy='plugin: nearest D8 ancestor in upstream half-plane of exact original point; '
-               'coarse reference area never permits downstream movement')
+        original_cell_upstream_area_m2=visit[2] * cell_area,
+        policy='plugin: first centre upstream of click projection on the incoming longest D8 course; '
+               'complete course uses the same strict-length DFS tie order as the displayed line; '
+               'no alternative tributary and no downstream closure')
     if require_channel:
         metadata.update(local_median_upstream_area_m2=background,
                         local_concentration_factor=4.0, local_minimum_cells=9)
     if counts is not None:
-        metadata.update(candidate_upstream_area_m2=int(counts[row, col]) * cell_area,
-                        original_cell_upstream_area_m2=int(counts[original.row, original.col]) * cell_area)
-    return selected, metadata
+        metadata['candidate_upstream_area_m2'] = int(counts[row, col]) * cell_area
+    result = selected, metadata
+    return (*result, visit[:4]) if return_visit else result
 
 
-def _visit_upstream(directions_band, outlet_row, outlet_col, cancelled, progress):
+def _visit_upstream(directions_band, outlet_row, outlet_col, cancelled, progress, *,
+                    path_cell_size=None):
     directions = _read(directions_band)
     rows, cols = directions.shape
     if directions_band.GetMaskFlags() & gdal.GMF_ALL_VALID:
@@ -269,13 +253,19 @@ def _visit_upstream(directions_band, outlet_row, outlet_col, cancelled, progress
         raise ValueError("La celda de cierre no tiene datos de dirección (NoData).")
     steps = tuple(step for step in DIRECTIONS if step[2] != nodata)
     visited[outlet_row, outlet_col] = 1
-    pending = [outlet_row * cols + outlet_col]
+    root_index = outlet_row * cols + outlet_col
+    pending = [root_index] if path_cell_size is None else [(root_index, 0.0)]
+    longest, longest_length = root_index, 0.0
     count = 0
     minimum_row = maximum_row = outlet_row
     minimum_col = maximum_col = outlet_col
     touches_boundary = False
     while pending:
-        row, col = divmod(pending.pop(), cols)
+        item = pending.pop()
+        index, length = (item, 0.0) if path_cell_size is None else item
+        row, col = divmod(index, cols)
+        if length > longest_length:
+            longest, longest_length = index, length
         count += 1
         minimum_row, maximum_row = min(minimum_row, row), max(maximum_row, row)
         minimum_col, maximum_col = min(minimum_col, col), max(maximum_col, col)
@@ -293,7 +283,12 @@ def _visit_upstream(directions_band, outlet_row, outlet_col, cancelled, progress
             if visited[neighbour_row, neighbour_col] == 1:
                 raise ValueError("La red de direcciones D8 contiene un ciclo en la cuenca.")
             visited[neighbour_row, neighbour_col] = 1
-            pending.append(neighbour_row * cols + neighbour_col)
+            neighbour = neighbour_row * cols + neighbour_col
+            if path_cell_size is None:
+                pending.append(neighbour)
+            else:
+                pending.append((neighbour, length + math.hypot(
+                    dx * path_cell_size[0], dy * path_cell_size[1])))
     _check_cancel(cancelled)
     window = (minimum_col, minimum_row,
               maximum_col - minimum_col + 1, maximum_row - minimum_row + 1)
@@ -301,7 +296,25 @@ def _visit_upstream(directions_band, outlet_row, outlet_col, cancelled, progress
     np.equal(visited[minimum_row:maximum_row + 1, minimum_col:maximum_col + 1], 1, out=mask)
     progress(count)
     _check_cancel(cancelled)
-    return mask, window, count, bool(touches_boundary)
+    result = mask, window, count, bool(touches_boundary)
+    if path_cell_size is None:
+        return result
+    # Reconstruct by following native D8 downstream; no second distance array.
+    # Strict > and the same DIRECTIONS/LIFO order reproduce terrain._paths ties.
+    offsets = {code: (-dy, -dx) for dx, dy, code in DIRECTIONS}
+    path, index = [], longest
+    while True:
+        if len(path) % 1000 == 0:
+            _check_cancel(cancelled)
+        row, col = divmod(index, cols)
+        code = int(directions[row, col])
+        path.append([row, col, code])
+        if index == root_index:
+            break
+        dr, dc = offsets[code]
+        index = (row + dr) * cols + col + dc
+    path.reverse()
+    return (*result, path, float(longest_length))
 
 
 def _polygonize(mask, transform, reference, cancelled):
@@ -394,12 +407,20 @@ def delineate(directions_path, dem_path, outlet_x, outlet_y,
             outlet_x, outlet_y, transform[0], transform[3] + rows * transform[5],
             transform[0] + cols * transform[1], transform[3], cols, rows
         )
+        original_visit = None
         if upstream_only:
-            selected, _ = _upstream_section_cell(directions_ds.GetRasterBand(1), transform,
-                                                 outlet_x, outlet_y, cancelled=cancelled)
-        mask, window, count, touches_boundary = _visit_upstream(
-            directions_ds.GetRasterBand(1), selected.row, selected.col, cancelled, progress
-        )
+            selected, snap, original_visit = _upstream_section_cell(
+                directions_ds.GetRasterBand(1), transform, outlet_x, outlet_y,
+                cancelled=cancelled, return_visit=True)
+            if snap['status'] != 'unchanged':
+                original_visit = None
+        if original_visit is None:
+            mask, window, count, touches_boundary = _visit_upstream(
+                directions_ds.GetRasterBand(1), selected.row, selected.col, cancelled, progress
+            )
+        else:
+            mask, window, count, touches_boundary = original_visit
+            progress(count)
         _check_cancel(cancelled)
         window_transform = (
             transform[0] + window[0] * transform[1], transform[1], 0.0,

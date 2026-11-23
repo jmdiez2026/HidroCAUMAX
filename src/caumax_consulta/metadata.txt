@@ -1,8 +1,8 @@
 [general]
-name=HidroCAUMAX v1.2.5
+name=HidroCAUMAX v1.2.6
 description=Cierre en la sección o aguas arriba, análisis IA gratuito, MDT mejorado, TauDEM D8, curva hipsométrica, P₀ y precipitaciones medias de cuenca, cuantiles Q(T)/T(Q) en la consulta de caudales de CAUMAX.
 about=Análisis IA sin credenciales con Pollinations Classic y selección conservadora del cierre aguas arriba. Complemento auxiliar para Mapa de caudales máximos > Consulta de capas de caudales máximos. Morfometría, suavizado en el mapa, curva hipsométrica y consultas Q(T)/T(Q). Calcula P₀ medio y precipitaciones máximas diarias medias de la cuenca, con cobertura, consultas P(T)/T(P) y gráficos. Exporta MDT, direcciones D8 y red con umbral editable. PDF con mapa y apertura automática; proyectos multirresolución. TauDEM 5.5.0 y dependencias incluidos para Windows de 64 bits.
-version=1.2.5
+version=1.2.6
 qgisMinimumVersion=3.34
 qgisMaximumVersion=3.99
 author=JM

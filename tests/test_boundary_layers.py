@@ -95,7 +95,14 @@ class BoundaryLayersTests(unittest.TestCase):
         root = self.project.layerTreeRoot()
         self.assertFalse(root.findLayer(old['original'].id()).itemVisibilityChecked())
         self.assertTrue(root.findLayer(old['suavizada'].id()).itemVisibilityChecked())
+        self.assertFalse(root.findLayer(old['suavizada'].id()).isVisible())
+        self.assertTrue(root.findLayer(new['original'].id()).isVisible())
         self.assertEqual(new['original'].featureCount(), 1)
+        self.query.dem_path = str(self.folder/'dem.tif')
+        self.analysis.cell_width = self.analysis.cell_height = 25.
+        self.update(visibility={'original': False, 'suavizada': True})
+        self.assertTrue(root.findLayer(old['suavizada'].id()).isVisible())
+        self.assertFalse(root.findLayer(new['original'].id()).isVisible())
 
     def test_qgis_project_round_trip_keeps_geometries_styles_and_visibility(self):
         layers = self.update(visibility={'original': False, 'suavizada': True})

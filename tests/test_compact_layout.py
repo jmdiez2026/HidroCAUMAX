@@ -130,15 +130,15 @@ class CompactLayoutTests(unittest.TestCase):
         titles = [group.title() for group in dialog.findChildren(QGroupBox)]
         self.assertNotIn('P₀ y precipitación máxima diaria de la cuenca',titles)
 
-    def test_upstream_only_selection_is_identified_below_the_query_header(self):
+    def test_grid_outlet_approximation_is_identified_below_the_query_header(self):
         dialog = self.dialog
         diagnostics = dict(dialog.analysis.diagnostics)
         diagnostics['outlet_snap'] = dict(selection_mode='upstream_only',distance_m=12.5)
         dialog.analysis = replace(dialog.analysis,diagnostics=diagnostics)
         dialog._update_context()
-        self.assertIn('Sección conservada: cierre en la misma sección o aguas arriba',dialog.context.text())
+        self.assertIn('Cierre aproximado a centro de celda; no es una sección topográfica exacta.',dialog.context.text())
         self.assertIn('12.50 m',dialog.context.text())
-        self.assertIn('El área del MDT de 500 m se usa solo como referencia.',dialog.context.text())
+        self.assertIn('La referencia sigue siendo el punto original.',dialog.context.text())
 
 
 if __name__ == '__main__':

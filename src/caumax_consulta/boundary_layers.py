@@ -9,7 +9,7 @@ from qgis.core import (QgsApplication, QgsCoordinateReferenceSystem, QgsFeature,
                        QgsField, QgsFillSymbol, QgsGeometry, QgsProject,
                        QgsVectorFileWriter, QgsVectorLayer, QgsWkbTypes)
 
-from .layer_order import create_result_group, ensure_results_above_official, ORDER_PROPERTY
+from .layer_order import activate_result_group, create_result_group, ensure_results_above_official, ORDER_PROPERTY
 
 OWNER_PROPERTY = 'HidroCAUMAX/boundary_owner'
 KIND_PROPERTY = 'HidroCAUMAX/boundary_kind'
@@ -183,6 +183,7 @@ class BoundaryLayers:
                 group.addLayer(layer)
         self.layers, self.key = layers, key
         self.set_visibility(visibility or {'original': True, 'suavizada': smooth is not None})
+        activate_result_group(project, group, OWNER_PROPERTY)
         ensure_results_above_official(project)
         return dict(layers)
 

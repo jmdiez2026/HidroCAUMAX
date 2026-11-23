@@ -312,18 +312,23 @@ def analyze_basin(directions_path, dem_path, outlet_x, outlet_y,
             outlet_x, outlet_y, transform[0], transform[3] + rows * transform[5],
             transform[0] + cols * transform[1], transform[3], cols, rows,
         )
-        original_selected = selected
         outlet_snap = None
+        original_visit = None
         if upstream_only:
             if surface_wkb is not None:
                 raise ValueError('Una superficie ya fijada conserva su cierre; no se vuelve a ajustar.')
-            selected, outlet_snap = _b._upstream_section_cell(
+            selected, outlet_snap, original_visit = _b._upstream_section_cell(
                 directions_ds.GetRasterBand(1), transform, outlet_x, outlet_y,
-                cancelled=cancelled)
+                cancelled=cancelled, return_visit=True)
         weights = None
         if surface_wkb is None:
-            mask, window, count, touches_boundary = _b._visit_upstream(
-                directions_ds.GetRasterBand(1), selected.row, selected.col, cancelled, progress)
+            if original_visit is not None and outlet_snap['status'] == 'unchanged':
+                mask, window, count, touches_boundary = original_visit
+                progress(count)
+            else:
+                original_visit = None
+                mask, window, count, touches_boundary = _b._visit_upstream(
+                    directions_ds.GetRasterBand(1), selected.row, selected.col, cancelled, progress)
         else:
             from .terrain_surface import surface_window
             mask, window, count, touches_boundary, weights, area, perimeter = surface_window(
@@ -411,12 +416,7 @@ def analyze_basin(directions_path, dem_path, outlet_x, outlet_y,
             "basin_length_definition": "máxima distancia recta cierre-vértice exterior",
         })
         if outlet_snap is not None:
-            original_count = count
-            if (selected.row, selected.col) != (original_selected.row, original_selected.col):
-                _, _, original_count, _ = _b._visit_upstream(
-                    directions_ds.GetRasterBand(1), original_selected.row, original_selected.col,
-                    cancelled, lambda value: None)
-            original_area = original_count * selected.width * selected.height
+            original_area = outlet_snap['original_cell_upstream_area_m2']
             outlet_snap.update(reference_area_m2=area, candidate_upstream_area_m2=area,
                                original_cell_upstream_area_m2=original_area,
                                candidate_touches_boundary=bool(touches_boundary),
@@ -434,9 +434,11 @@ def analyze_basin(directions_path, dem_path, outlet_x, outlet_y,
         ]
         if outlet_snap is not None:
             notes.append(
-                'Cierre en la misma sección o aguas arriba del punto original; nunca aguas abajo. '
+                'Cierre aproximado al centro de la misma celda o al primer centro aguas arriba '
+                'de la proyección del punto sobre el tramo entrante del curso D8 de máxima longitud. '
                 f"Desplazamiento a centro de celda: {outlet_snap['distance_m']:.2f} m. "
-                'La sección local es perpendicular a la dirección D8; no sustituye una sección topográfica medida. '
+                'Se conserva ese curso principal; no se elige otro ramal por cercanía. '
+                'La aproximación raster no sustituye una sección topográfica medida. '
                 'La cuenca se ha delimitado de nuevo desde ese cierre efectivo.')
         if weights is not None:
             diagnostics['terrain_valid_area_m2'] = float(valid_weights.sum())

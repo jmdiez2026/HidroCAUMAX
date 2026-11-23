@@ -145,6 +145,64 @@ class ResolutionControllerTests(unittest.TestCase):
         self.assertTrue(all(t is self.app.thread() for t in self.threads))
         self.assertEqual(self.downloads,[])
 
+    def test_ambiguous_snap_keeps_active_basin_and_offers_reviewable_native_context(self):
+        c=self.controller()
+        self.discover(c)
+        context=dict(dem_path='/fine/dem.tif',directions_path='/fine/d8.tif',
+            crs_wkt=self.query.crs.toWkt(),original_x=self.query.x,original_y=self.query.y,
+            search_radius_m=707.106781,reference_area_m2=self.base.area_m2)
+        error=ValueError('Dos ramales posibles: elige el cierre.')
+        error.selection_context=context
+        with patch.object(rc,'_analyze_dem',side_effect=error):
+            self.assertTrue(c.select('25'))
+            self.wait(lambda:not c.busy)
+        self.assertEqual(c.active_key,'500')
+        self.assertNotIn('25',c.variants)
+        self.assertEqual(self.results,[])
+        self.assertTrue(next(item for item in c.options if item['key']=='25')['available'])
+        offered=c.selection_context()
+        self.assertEqual(offered['resolution_key'],'25')
+        self.assertEqual(offered['original_x'],self.query.x)
+        self.assertEqual(offered['directions_path'],'/fine/d8.tif')
+        offered['original_x']=-123
+        self.assertEqual(c.selection_context()['original_x'],self.query.x)
+
+    def test_manual_choice_applies_complete_variant_without_requerying_caumax_or_downloading(self):
+        c=self.controller()
+        self.discover(c)
+        context=dict(resolution_key='25',dem_path='/fine/dem.tif',directions_path='/fine/d8.tif',
+            original_x=self.query.x,original_y=self.query.y,search_radius_m=707.106781,
+            reference_area_m2=self.base.area_m2)
+        result=sample(25)
+        payload=dict(analysis=result,directions_path=context['directions_path'],
+                     dem_path=context['dem_path'],metadata={'manual_outlet_selected':True})
+        with patch.object(rc,'_manual_analysis',return_value=payload) as manual:
+            self.assertTrue(c.select_outlet(context,237.5,212.5))
+            self.assertEqual(c.active_key,'500')
+            self.wait(lambda:not c.busy)
+        self.assertEqual(manual.call_args.args[1:3],(237.5,212.5))
+        self.assertEqual(c.active_key,'25')
+        self.assertIs(c.variants['25']['analysis'],result)
+        self.assertEqual((self.results[-1][2].x,self.results[-1][2].y),
+                         (self.query.x,self.query.y))
+        self.assertEqual((self.results[-1][2].flow,self.results[-1][2].period),(177,100))
+        self.assertEqual(self.downloads,[])
+        self.assertEqual(self.analyses,[])
+        self.assertIsNone(c.outlet_selection_context)
+
+    def test_invalid_manual_cell_preserves_previous_result_and_allows_another_choice(self):
+        c=self.controller()
+        context=dict(resolution_key='500',dem_path='/original/mdt.tif',
+            directions_path='/original/dir.tif',original_x=self.query.x,original_y=self.query.y,
+            search_radius_m=707.106781,reference_area_m2=self.base.area_m2)
+        with patch.object(rc,'_manual_analysis',side_effect=ValueError('Celda NoData')):
+            self.assertTrue(c.select_outlet(context,250,250))
+            self.wait(lambda:not c.busy)
+        self.assertIs(c.variants['500']['analysis'],self.base)
+        self.assertEqual(self.results,[])
+        self.assertEqual(c.selection_context()['reason'],'Celda NoData')
+        self.assertIn('NoData',self.errors[-1])
+
     def test_selection_keeps_native_point_flow_period_and_uses_cache(self):
         c=self.controller()
         self.discover(c)

@@ -188,12 +188,19 @@ def build_context(analysis, query, smoothing_state=None):
                    'minimum_area_km2', 'path_distance_m', 'threshold_fraction',
                    'section_offset_m', 'upstream_path_length_m',
                    'area_change_vs_original_cell_m2', 'area_change_vs_reference_pct',
-                   'candidate_upstream_area_m2', 'original_cell_upstream_area_m2')
+                   'candidate_upstream_area_m2', 'original_cell_upstream_area_m2',
+                   'main_course_click_station_m', 'main_course_selected_station_m',
+                   'main_course_length_m', 'association_lateral_distance_m',
+                   'association_trace_length_m', 'channel_anchor_upstream_area_m2',
+                   'association_incoming_area_m2', 'association_other_inflow_area_m2')
         context['outlet_adjustment'] = {key: _number(snap.get(key)) for key in numeric if key in snap}
         mode = snap.get('selection_mode')
         if mode in ('nearest_main_channel', 'upstream', 'original',
-                    'upstream_local', 'upstream_section', 'section_upstream', 'upstream_only'):
+                    'upstream_local', 'upstream_section', 'section_upstream', 'upstream_only',
+                    'upstream_main_course', 'upstream_lateral_main_course', 'user_selected_cell'):
             context['outlet_adjustment']['selection_mode'] = mode
+        if snap.get('explicit_user_choice') is True:
+            context['outlet_adjustment']['explicit_user_choice'] = True
         if type(snap.get('reference_threshold_met')) is bool:
             context['outlet_adjustment']['reference_threshold_met'] = snap['reference_threshold_met']
     hydrology = state.get('basin_hydrology') or {}
@@ -414,7 +421,7 @@ def network_request():
     request = QNetworkRequest(url)
     request.setHeader(QNetworkRequest.ContentTypeHeader, 'application/json')
     request.setRawHeader(b'Accept', b'application/json')
-    request.setRawHeader(b'User-Agent', b'HidroCAUMAX/1.2.5')
+    request.setRawHeader(b'User-Agent', b'HidroCAUMAX/1.2.6')
     request.setRawHeader(b'Cache-Control', b'no-store')
     request.setAttribute(QNetworkRequest.CacheLoadControlAttribute, QNetworkRequest.AlwaysNetwork)
     request.setAttribute(QNetworkRequest.CacheSaveControlAttribute, False)

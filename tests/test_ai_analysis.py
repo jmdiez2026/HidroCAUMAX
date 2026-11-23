@@ -99,6 +99,25 @@ class ContextTests(unittest.TestCase):
             self.assertIsNone(metrics[key])
         json.dumps(context,allow_nan=False)
 
+    def test_new_snap_modes_share_numeric_diagnostics_without_the_location_proof(self):
+        for mode in ('upstream_main_course','upstream_lateral_main_course','user_selected_cell'):
+            analysis,query,state=sample_state()
+            snap=analysis.diagnostics['outlet_snap']
+            snap.update(selection_mode=mode,association_lateral_distance_m=18.,
+                channel_anchor_upstream_area_m2=25000.,section_projection_x=1234567,
+                section_projection_y=7654321,manual_requested_x=1234567,
+                manual_requested_y=7654321,downstream_connection_path=[[1234567,7654321]],
+                explicit_user_choice=(mode=='user_selected_cell'))
+            context=ai.build_context(analysis,query,state)
+            self.assertEqual(context['outlet_adjustment']['selection_mode'],mode)
+            self.assertEqual(context['outlet_adjustment']['association_lateral_distance_m'],18.)
+            encoded=json.dumps(context,allow_nan=False)
+            for forbidden in ('1234567','7654321','section_projection','manual_requested',
+                              'downstream_connection_path','upstream_path'):
+                self.assertNotIn(forbidden,encoded)
+            if mode=='user_selected_cell':
+                self.assertIs(context['outlet_adjustment']['explicit_user_choice'],True)
+
     def test_precipitation_query_uses_shared_cell_statistics_not_interpolated_map_means(self):
         analysis,query,state=sample_state()
         rain=state['basin_hydrology']['rainfall_results']
