@@ -317,9 +317,17 @@ def analyze_basin(directions_path, dem_path, outlet_x, outlet_y,
         if upstream_only:
             if surface_wkb is not None:
                 raise ValueError('Una superficie ya fijada conserva su cierre; no se vuelve a ajustar.')
-            selected, outlet_snap, original_visit = _b._upstream_section_cell(
-                directions_ds.GetRasterBand(1), transform, outlet_x, outlet_y,
-                cancelled=cancelled, return_visit=True)
+            from .outlet_errors import OutletSelectionRequired
+            try:
+                selected, outlet_snap, original_visit = _b._upstream_section_cell(
+                    directions_ds.GetRasterBand(1), transform, outlet_x, outlet_y,
+                    cancelled=cancelled, return_visit=True)
+            except OutletSelectionRequired as error:
+                context = dict(error.selection_context)
+                context.update(dem_path=str(dem_path), directions_path=str(directions_path),
+                               crs_wkt=reference.ExportToWkt(), original_x=float(outlet_x),
+                               original_y=float(outlet_y), reason=str(error))
+                raise OutletSelectionRequired(str(error), context) from error
         weights = None
         if surface_wkb is None:
             if original_visit is not None and outlet_snap['status'] == 'unchanged':
@@ -435,9 +443,11 @@ def analyze_basin(directions_path, dem_path, outlet_x, outlet_y,
         if outlet_snap is not None:
             notes.append(
                 'Cierre aproximado al centro de la misma celda o al primer centro aguas arriba '
-                'de la proyección del punto sobre el tramo entrante del curso D8 de máxima longitud. '
+                'de la proyección del punto sobre el segmento D8 local inequívocamente más próximo. '
                 f"Desplazamiento a centro de celda: {outlet_snap['distance_m']:.2f} m. "
-                'Se conserva ese curso principal; no se elige otro ramal por cercanía. '
+                'La proximidad identifica el ramal antes de calcular el curso de máxima longitud '
+                'de la cuenca resultante. Un margen del 5 % del menor lado de celda solicita '
+                'revisión cuando dos cierres distintos son demasiado próximos. '
                 'La aproximación raster no sustituye una sección topográfica medida. '
                 'La cuenca se ha delimitado de nuevo desde ese cierre efectivo.')
         if weights is not None:

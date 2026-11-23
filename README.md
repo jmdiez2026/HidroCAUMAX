@@ -1,6 +1,6 @@
 # HidroCAUMAX
 
-Complemento para **QGIS 3** que amplía **CAUMAX 3.0** con delimitación y análisis de cuencas, selección de MDT, morfología, curva hipsométrica, umbral de escorrentía P₀, precipitación diaria máxima Pd y consultas de cuantiles. Versión actual: **1.2.6**. Repositorio: **jmdiez2026/HidroCAUMAX**.
+Complemento para **QGIS 3** que amplía **CAUMAX 3.0** con delimitación y análisis de cuencas, selección de MDT, morfología, curva hipsométrica, umbral de escorrentía P₀, precipitación diaria máxima Pd y consultas de cuantiles. Versión actual: **1.2.7**. Repositorio: **jmdiez2026/HidroCAUMAX**.
 
 El diálogo integra los estadísticos de cuenca y recalcula los resultados al cambiar la resolución del MDT o el grado de suavizado. Conserva el punto original consultado y los caudales oficiales de CAUMAX: cambiar el MDT modifica la delimitación y los parámetros de la cuenca, sin inventar nuevos caudales de avenida.
 
@@ -13,26 +13,31 @@ El diálogo integra los estadísticos de cuenca y recalcula los resultados al ca
 - Conexión a **Pollinations Classic** para el botón **Análisis IA**, gratuito y sin credenciales. No se requiere una cuenta, una clave ni una biblioteca adicional. La disponibilidad y los límites temporales dependen de ese servicio externo.
 - En **Windows de 64 bits**, TauDEM 5.5.0, MPI y las bibliotecas de GDAL/PROJ están incluidos en el ZIP. No requieren una instalación separada. En Linux/macOS se utiliza una instalación externa de TauDEM y MPI.
 
-La versión 1.2.6 se distribuye en el canal **estable** (`experimental=False`). El código contiene controles de cobertura, NoData y errores; sus resultados deben revisarse con las fuentes y la resolución de cada proyecto.
+La versión 1.2.7 se distribuye en el canal **estable** (`experimental=False`). El código contiene controles de cobertura, NoData y errores; sus resultados deben revisarse con las fuentes y la resolución de cada proyecto.
 
 ## Instalación
 
-1. Descarga el archivo **HidroCAUMAX_v1_2_6.zip** de la versión publicada en GitHub Releases. El ZIP de código fuente que ofrece GitHub no es el instalable de QGIS.
+1. Descarga el archivo **HidroCAUMAX_v1_2_7.zip** de la versión publicada en GitHub Releases. El ZIP de código fuente que ofrece GitHub no es el instalable de QGIS.
 2. En QGIS abre **Complementos → Administrar e instalar complementos → Instalar a partir de ZIP** y selecciona el instalable, sin descomprimirlo.
 3. Si ya utilizas HidroCAUMAX, acepta sustituir el complemento anterior y vuelve a abrir su diálogo. La carpeta interna permanece como **caumax_consulta** para conservar la identidad de instalación.
 4. Activa CAUMAX 3.0, carga sus capas y realiza una consulta válida. Pulsa **Cuenca hidrográfica** para abrir las herramientas ampliadas.
 
 La [guía detallada del complemento](src/caumax_consulta/README.md) describe las funciones, los cálculos y las limitaciones de cada sección.
 
-## Cambios incluidos en 1.2.6
+## Cambios incluidos en 1.2.7
 
-- **Snap al cauce del MDT activo:** en la malla de 500 m, la sección se orienta con el tramo entrante del curso principal, evitando usar la salida de una confluencia como referencia equivocada. En 25 y 5 m se sigue la conexión D8 desde el punto original y se analizan los aportes de las confluencias para asociar el cauce receptor; el cierre se sitúa en el primer centro de su curso sobre la sección proyectada o aguas arriba.
-- **Selección asistida del cierre:** si el ajuste automático es ambiguo, se ofrece elegir el cierre en el mapa. **Ajustar cierre…** permite revisar también un resultado ya calculado. El selector tiene movimientos Norte, Sur, Este y Oeste por celdas, muestra las coordenadas y la distancia, y solo aplica el cambio al aceptar. Una elección manual puede desplazarse aguas abajo de forma explícita. La divisoria, el curso y los parámetros se recalculan conjuntamente.
-- **Mapa coherente con la cuenca activa:** al cambiar de resolución o consulta se ocultan los grupos anteriores de curso principal y divisorias. Se conservan sus geometrías y sus casillas internas, y se recuperan al reactivar el resultado. Las capas del terreno mantienen su visibilidad.
-- **Actualizaciones desde QGIS:** el complemento consulta el índice al cargar/activar sus herramientas y cada vez que se abre o reutiliza una consulta o se invoca la apertura de un proyecto. Avisa con **Actualizar** cuando hay una versión compatible. El botón abre el administrador de complementos; la instalación la realiza el usuario. También existe **Buscar actualizaciones…** en el menú.
-- **Trazabilidad:** pantalla, PDF y proyectos distinguen el ajuste automático de la elección manual y conservan el punto original. Los proyectos anteriores mantienen sus resultados guardados; una consulta nueva aplica el algoritmo actual.
+- **Tabla con un máximo de dos decimales:** el redondeo afecta a la presentación de los valores y del informe, sin alterar los cálculos; el número de celdas sigue siendo entero.
+- **El ramal próximo al clic tiene prioridad:** el snap compara la distancia del punto a los segmentos D8 conectados antes de elegir el cierre. Un río situado a un lado no se selecciona por tener un curso más largo. El curso de máxima longitud se calcula después, dentro de la cuenca elegida. La corrección se aplica a la malla de 500 m y a los MDT mejorados.
+- **Confluencias ambiguas:** cuando dos ramales distintos están casi igual de cerca, se solicita una elección. La tolerancia geométrica es el 5 % del menor lado de la celda; es un criterio del complemento. No se utiliza el área ni la longitud total para desempatar entre ríos.
+- **Ajuste repetido con la cuenca abierta:** **Ajustar cierre…** mantiene el selector disponible tras aplicar y recalcular. Permite mover el cierre Norte, Sur, Este u Oeste, con pasos en celdas, y elegirlo directamente mediante **Elegir en el mapa**. Cada aplicación recalcula divisoria, curso y parámetros.
+- **Elección manual en el MDT disponible:** el límite de unos 707 m corresponde al snap automático de la malla original. Una selección manual expresa puede utilizar cualquier celda válida del ráster cargado, también aguas abajo. Se comprueban extensión, NoData, cota y D8, y se conserva la distancia al punto original.
+- **Borrar divisoria:** situado inmediatamente después de **Malla de celdas → Ajustar cierre…**, retira los trazados, marcadores y capas de resultado de esta cuenca, incluidas sus variantes de divisoria y MDT. Conserva las demás capas y los archivos de datos. Un nuevo ajuste puede volver a representar la cuenca.
+- **Generación capas resolución mejorada:** se retiran los selectores de motor y codificación; se utiliza TauDEM predeterminado y la exportación de direcciones CAUMAX/ESRI. Modelo de Elevaciones, Modelo de Dirección de Flujo D8 y Red de drenaje se presentan en tres columnas, con títulos centrados y botones compactos debajo.
+- **Trazabilidad y compatibilidad:** proyectos e informes distinguen el nuevo criterio local del algoritmo de 1.2.6 y de una elección manual. Las sesiones anteriores conservan sus resultados; realiza una consulta nueva o ajusta el cierre para recalcular.
 
-El snap utiliza centros de celdas y conectividad D8. La geometría y la exactitud siguen limitadas por la resolución del MDT. No se exige alcanzar el 90 % del área de 500 m ni se utiliza el filtro fijo de 9 celdas/4 veces la mediana para decidir el cauce. Una asociación dudosa se remite al selector, en lugar de publicarse como una cuenca lateral fiable.
+Se conservan la comprobación de actualizaciones desde QGIS y el control de las capas activas de 1.2.6. El punto original y su caudal CAUMAX permanecen registrados: un cambio manual del cierre no recalcula por sí solo el caudal oficial del punto consultado.
+
+El snap utiliza centros de celdas y conectividad D8. La geometría y la exactitud siguen limitadas por la resolución del MDT. No se exige alcanzar el 90 % del área de 500 m ni se utiliza un filtro fijo de 9 celdas/4 veces la mediana para decidir el cauce.
 
 ### Interfaz y funciones conservadas de 1.2.5
 
@@ -46,7 +51,7 @@ El [registro de la revisión](src/caumax_consulta/CHANGELOG.md) explica los camb
 
 ### Funciones conservadas de la 1.2.4
 
-- **Generar capas D8** utiliza el TauDEM real incluido en Windows de 64 bits. Los componentes se preparan automáticamente en una carpeta privada del usuario, sin descargas adicionales ni cambios en las bibliotecas de QGIS. La extracción y el cálculo se ejecutan en segundo plano y admiten cancelación. **Motor TauDEM…** permite volver al motor incluido o elegir una instalación externa.
+- **Generar capas D8** utiliza el TauDEM real incluido en Windows de 64 bits. Los componentes se preparan automáticamente en una carpeta privada del usuario, sin descargas adicionales ni cambios en las bibliotecas de QGIS. La extracción y el cálculo se ejecutan en segundo plano y admiten cancelación. El motor predeterminado se utiliza directamente, sin selector de carpeta externa.
 - Curva hipsométrica: eje horizontal dimensional con marcas enteras y aproximadamente diez divisiones. Para cuencas menores de 1 km², el eje muestra m². Los valores internos mantienen su precisión.
 
 Esta versión ajusta la representación del MDT con una paleta natural de verdes salvia luminosos, ocres suaves y tonos de roca, y un sombreado más marcado para apreciar el relieve. El cambio es visual; conserva la ventana de referencia cercana al tamaño de la cuenca.
@@ -75,7 +80,7 @@ No se incluyen capas de proyectos, sesiones guardadas, cachés, credenciales ni 
 El empaquetado utiliza **Python 3.10 o posterior** y su biblioteca estándar; no necesita iniciar QGIS:
 
 ```text
-python scripts/build_release.py --output dist --tag v1.2.6
+python scripts/build_release.py --output dist --tag v1.2.7
 ```
 
 Genera el ZIP instalable, sus sumas SHA-256 y el índice XML de distribución. Los archivos resultantes quedan fuera del control de versiones mediante `.gitignore`.

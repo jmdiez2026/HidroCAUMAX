@@ -99,13 +99,40 @@ class ManualOutletTests(unittest.TestCase):
                 self.assertEqual((analysis.outlet_x, analysis.outlet_y), tuple(target))
                 self.assertTrue(analysis.diagnostics['outlet_snap']['explicit_user_choice'])
 
-    def test_manual_point_and_snapped_centre_must_both_remain_in_radius(self):
+    def test_manual_choice_can_exceed_automatic_radius_within_the_native_extent(self):
         context, _ = self.fixture()
         context['search_radius_m'] = 8
-        with self.assertRaisesRegex(ValueError, 'punto manual.*fuera'):
-            manual.build_manual_outlet(context, context['original_x'] + 9, context['original_y'])
-        with self.assertRaisesRegex(ValueError, 'centro.*fuera'):
-            manual.build_manual_outlet(context, context['original_x'] + 7.6, context['original_y'])
+        for dx in (7.6, 9, 30):
+            with self.subTest(dx=dx):
+                analysis = manual.build_manual_outlet(
+                    context, context['original_x'] + dx, context['original_y'])['analysis']
+                snap = analysis.diagnostics['outlet_snap']
+                self.assertGreater(snap['distance_m'], snap['search_radius_m'])
+                self.assertEqual(snap['manual_selection_scope'], 'raster_extent')
+                self.assertEqual(snap['manual_raster_size'], [11, 7])
+                self.assertEqual(snap['manual_raster_bounds'], [300000, 4699965, 300055, 4700000])
+                self.assertEqual((analysis.selected_x, analysis.selected_y),
+                                 (context['original_x'], context['original_y']))
+
+    def test_manual_2745_metre_adjustment_is_not_limited_to_707_metres(self):
+        context, _ = self.fixture(resolution=500)
+        context['search_radius_m'] = math.hypot(500, 500)
+        analysis = manual.build_manual_outlet(context, context['original_x'] + 2745,
+                                              context['original_y'])['analysis']
+        snap = analysis.diagnostics['outlet_snap']
+        self.assertEqual(snap['distance_m'], 2500)
+        self.assertGreater(snap['distance_m'], snap['search_radius_m'])
+        self.assertEqual(snap['manual_selection_scope'], 'raster_extent')
+        self.assertEqual(snap['manual_raster_bounds'], [300000, 4696500, 305500, 4700000])
+        course = ogr.CreateGeometryFromWkb(analysis.main_course_wkb)
+        self.assertEqual(course.GetPoint_2D(0), (analysis.outlet_x, analysis.outlet_y))
+
+    def test_manual_choice_cannot_leave_the_native_raster_extent(self):
+        context, _ = self.fixture()
+        for x, y in ((299999, context['original_y']), (300056, context['original_y']),
+                     (context['original_x'], 4700001), (context['original_x'], 4699964)):
+            with self.subTest(x=x, y=y), self.assertRaisesRegex(ValueError, 'fuera'):
+                manual.build_manual_outlet(context, x, y)
 
     def test_manual_choice_rejects_direction_and_elevation_nodata(self):
         for key, nodata in (('directions_path', 255), ('dem_path', -9999)):

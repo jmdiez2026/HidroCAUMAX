@@ -12,11 +12,12 @@ from .terrain import analyze_basin
 
 
 def build_manual_outlet(context, x, y, cancelled=lambda: False, publish=lambda percent: None):
-    """Build one native-grid result for a user-selected cell in the local radius.
+    """Build one result for a user-selected cell anywhere in the native raster.
 
     The user may move in any direction, including downstream. The original
     query coordinates remain unchanged; the selected cell controls every basin
-    metric and the displayed main course. No automatic upstream rule applies.
+    metric and the displayed main course. The automatic search radius remains
+    diagnostic context, not a restriction on an explicit manual choice.
     ``publish`` receives progress percentages. This function never changes map
     layers, settings, source rasters or the D8 cache.
     """
@@ -29,14 +30,12 @@ def build_manual_outlet(context, x, y, cancelled=lambda: False, publish=lambda p
         requested_x, requested_y = float(x), float(y)
         directions_path = str(Path(context['directions_path']).expanduser().resolve())
         dem_path = str(Path(context['dem_path']).expanduser().resolve())
-        radius = _positive_finite(context['search_radius_m'], 'El radio de selección manual')
+        radius = _positive_finite(context['search_radius_m'], 'El radio automático de referencia')
         reference_area = _positive_finite(context['reference_area_m2'], 'El área original de referencia')
     except (KeyError, TypeError, OverflowError) as error:
         raise ValueError('El contexto de selección manual está incompleto.') from error
     if not all(math.isfinite(value) for value in (original_x, original_y, requested_x, requested_y)):
         raise ValueError('Las coordenadas de selección manual deben ser finitas.')
-    if math.hypot(requested_x - original_x, requested_y - original_y) > radius:
-        raise ValueError(f'El punto manual queda fuera del radio de {radius:g} m del punto original.')
     directions = dem = None
     try:
         directions = _b._open_raster(directions_path, 'direcciones de la selección manual')
@@ -48,8 +47,6 @@ def build_manual_outlet(context, x, y, cancelled=lambda: False, publish=lambda p
         selected = cell_at_point(requested_x, requested_y, *bounds, cols, rows)
         original = cell_at_point(original_x, original_y, *bounds, cols, rows)
         distance = math.hypot(selected.x - original_x, selected.y - original_y)
-        if distance > radius:
-            raise ValueError(f'El centro de la celda elegida queda fuera del radio de {radius:g} m.')
         band = directions.GetRasterBand(1)
         value = float(_b._read(band, selected.col, selected.row, 1, 1)[0, 0])
         if (not math.isfinite(value) or value == band.GetNoDataValue()
@@ -86,6 +83,8 @@ def build_manual_outlet(context, x, y, cancelled=lambda: False, publish=lambda p
         raise ValueError('La cuenca recalculada no coincide con la celda manual seleccionada.')
     snap = dict(
         method='manual_cell_d8', selection_mode='user_selected_cell', explicit_user_choice=True,
+        manual_selection_scope='raster_extent', manual_raster_bounds=list(bounds),
+        manual_raster_size=[cols, rows],
         manual_requested_x=requested_x, manual_requested_y=requested_y,
         original_x=original_x, original_y=original_y,
         snapped_x=selected.x, snapped_y=selected.y,
@@ -98,8 +97,9 @@ def build_manual_outlet(context, x, y, cancelled=lambda: False, publish=lambda p
         candidate_touches_boundary=bool(boundary),
         area_change_vs_original_cell_m2=candidate_area - original_area,
         area_change_vs_reference_pct=100 * (candidate_area / reference_area - 1),
-        policy='explicit user choice of a native D8 cell within the original local radius; '
-               'any direction is allowed; basin, main course and metrics are recomputed together')
+        policy='explicit user choice of any valid native D8 cell inside the raster extent; '
+               'the automatic search radius is retained only as a reference; '
+               'basin, main course and metrics are recomputed together')
     provenance = context.get('metadata')
     metadata = dict(provenance) if isinstance(provenance, dict) else {}
     metadata.update(native_resolution=(selected.width, selected.height),
@@ -120,6 +120,7 @@ def build_manual_outlet(context, x, y, cancelled=lambda: False, publish=lambda p
              f'Cierre elegido explícitamente por el usuario en la celda nativa '
              f'({selected.x:.3f}, {selected.y:.3f}), a {distance:.2f} m del punto original. '
              'La selección manual puede situarse en cualquier dirección, también aguas abajo. '
+             'Su límite es la extensión válida del MDT; el radio automático se conserva solo como referencia. '
              'La divisoria, el curso principal y todos los parámetros se han recalculado con esa celda; '
              'el punto original de consulta permanece registrado.')
     analysis = replace(analysis, selected_x=original_x, selected_y=original_y,

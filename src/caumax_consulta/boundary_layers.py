@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 
+from qgis.PyQt import sip
 from qgis.PyQt.QtCore import QVariant
 from qgis.core import (QgsApplication, QgsCoordinateReferenceSystem, QgsFeature,
                        QgsField, QgsFillSymbol, QgsGeometry, QgsProject,
@@ -55,6 +56,7 @@ class BoundaryLayers:
         self.directory = Path(directory) if directory is not None else storage_directory()
         self.layers = {}
         self.key = None
+        self._result_keys = set()
 
     @staticmethod
     def _existing(key):
@@ -160,6 +162,7 @@ class BoundaryLayers:
         geometries = {'original': _polygon(original)}
         if smooth is not None:
             geometries['suavizada'] = _polygon(smooth)
+        self._result_keys.add(key)
         layers = self._existing(key)
         root = project.layerTreeRoot()
         group = next((node for node in root.children() if node.customProperty(OWNER_PROPERTY) == key), None)
@@ -190,6 +193,35 @@ class BoundaryLayers:
     def set_visibility(self, flags):
         root = QgsProject.instance().layerTreeRoot()
         for kind, layer in self.layers.items():
+            if sip.isdeleted(layer):
+                continue
             node = root.findLayer(layer.id())
             if node is not None and kind in flags:
                 node.setItemVisibilityChecked(bool(flags[kind]))
+
+    def remove(self):
+        """Remove this result's outlines, including earlier outlet/resolution variants.
+
+        Keep the stored GeoPackages and unrelated project layers. Groups that
+        contain layers added by the user remain in the tree, even if they also
+        used to contain one of our outlines.
+        """
+        project = QgsProject.instance()
+        keys = self._result_keys | ({self.key} if self.key else set())
+        ids = [layer.id() for layer in project.mapLayers().values()
+               if isinstance(layer, QgsVectorLayer)
+               and layer.customProperty(OWNER_PROPERTY) in keys
+               and layer.customProperty(KIND_PROPERTY) in _NAMES]
+        if ids:
+            project.removeMapLayers(ids)
+        # findGroups also includes groups the user has moved below another one.
+        for group in reversed(project.layerTreeRoot().findGroups()):
+            if (not sip.isdeleted(group) and group.customProperty(OWNER_PROPERTY) in keys
+                    and not group.children()):
+                parent = group.parent()
+                if parent is not None:
+                    parent.removeChildNode(group)
+        self.layers = {}
+        self.key = None
+        self._result_keys.clear()
+        return len(ids)

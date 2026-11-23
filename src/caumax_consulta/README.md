@@ -1,10 +1,10 @@
-# HidroCAUMAX v1.2.6
+# HidroCAUMAX v1.2.7
 
-Complemento auxiliar para **CAUMAX 3.0 y QGIS 3 con Qt 5**. La versión del paquete y del diálogo es **1.2.6**. Conserva procesamiento con TauDEM, exportación de MDT, direcciones y red, curva hipsométrica, los seis cuantiles originales y **P₀ y precipitación máxima diaria de la cuenca**. Incluye snap automático al cauce, selección manual del cierre cuando hace falta, comprobación de actualizaciones, interfaz compacta y **Análisis IA gratuito sin credenciales**. Esta revisión se verifica en Linux con QGIS 3.40.6 y GDAL 3.10.3; las pruebas históricas en Windows/QGIS 3.44.15 corresponden a la entrega anterior. Las pruebas reproducibles se encuentran en la carpeta `tests` del repositorio; los registros locales de sesiones no se publican.
+Complemento auxiliar para **CAUMAX 3.0 y QGIS 3 con Qt 5**. La versión del paquete y del diálogo es **1.2.7**. Conserva procesamiento con TauDEM, exportación de MDT, direcciones y red, curva hipsométrica, los seis cuantiles originales y **P₀ y precipitación máxima diaria de la cuenca**. Incluye snap automático al cauce, selección manual del cierre cuando hace falta, comprobación de actualizaciones, interfaz compacta y **Análisis IA gratuito sin credenciales**. Esta revisión se verifica en Linux con QGIS 3.40.6 y GDAL 3.10.3; las pruebas históricas en Windows/QGIS 3.44.15 corresponden a la entrega anterior. Las pruebas reproducibles se encuentran en la carpeta `tests` del repositorio; los registros locales de sesiones no se publican.
 
 ## Instalación y uso
 
-1. Instala **HidroCAUMAX_v1_2_6.zip**, sin descomprimir, desde **Complementos → Administrar e instalar complementos → Instalar a partir de ZIP**. Acepta sustituir la instalación auxiliar anterior. El nombre visible es **HidroCAUMAX v1.2.6**; la carpeta interna sigue siendo **caumax_consulta** para conservar la continuidad de la actualización.
+1. Instala **HidroCAUMAX_v1_2_7.zip**, sin descomprimir, desde **Complementos → Administrar e instalar complementos → Instalar a partir de ZIP**. Acepta sustituir la instalación auxiliar anterior. El nombre visible es **HidroCAUMAX v1.2.7**; la carpeta interna sigue siendo **caumax_consulta** para conservar la continuidad de la actualización.
 2. Activa CAUMAX, carga sus capas y abre **Mapa de caudales máximos → Consulta de capas de caudales máximos**. Selecciona periodo y punto; pulsa **Consultar**.
 3. Una consulta válida habilita **Cuenca hidrográfica**, a la izquierda del informe nativo. Su texto y su altura son el **110 %** de los botones de la derecha, con redondeo al píxel más cercano para la altura. La anchura reserva espacio para el texto completo y el logotipo **GEA-UVa**.
 4. Pulsa el botón para calcular la cuenca. El diálogo se alinea con el borde derecho de QGIS, usa toda su altura y aproximadamente el **36 %** de su anchura. Sigue los cambios de posición y tamaño de QGIS. **Morfología de la Cuenca** presenta la tabla blanca de 19 parámetros: **Parámetro, Valor, Unidad e Interpretación**, con anchuras relativas **46/13/9/32 %**. Valor y Unidad se centran; la interpretación ocupa como máximo tres líneas y conserva el texto completo en su ayuda. Las observaciones del cálculo quedan inmediatamente debajo de esta tabla.
@@ -12,7 +12,7 @@ Complemento auxiliar para **CAUMAX 3.0 y QGIS 3 con Qt 5**. La versión del paqu
 6. En **Suavizado divisoria**, elige **Original**, **Suavizada** o ambas y ajusta un grado entero. Cada cambio vuelve a calcular todos los resultados sobre la superficie activa, con cancelación de trabajos anteriores y publicación del conjunto completo. **Exportar shape**, compacto y alineado a la izquierda, guarda las divisorias ya mostradas.
 7. La franja **Informe** reúne **Informe (PDF)**, **Guardar proyecto** y **Abrir proyecto**. El cuerpo de la ventana tiene desplazamiento y esa franja permanece visible.
 
-En la sección de drenaje puedes pulsar **Generar capas D8** para procesar el MDT activo con TauDEM y preparar sus tres productos exportables. En Windows de 64 bits, los ejecutables y todas sus dependencias están incluidos en el ZIP y se preparan automáticamente al primer cálculo. **Motor TauDEM…** permite usar el motor incluido o seleccionar opcionalmente una carpeta externa.
+En la sección de drenaje puedes pulsar **Generar capas D8** para procesar el MDT activo con TauDEM y preparar sus tres productos exportables. En Windows de 64 bits, los ejecutables y todas sus dependencias están incluidos en el ZIP y se preparan automáticamente al primer cálculo. Se utiliza directamente el motor predeterminado, sin selector de carpeta externa.
 
 El menú **Complementos → HidroCAUMAX** permite activar las herramientas, **Abrir proyecto de cuenca…** y **Buscar actualizaciones…** sin realizar otra consulta nativa. Los botones de cálculo tienen fondo azul claro; Análisis IA utiliza azul oscuro. El botón general **Identificar objetos espaciales** conserva su funcionamiento habitual.
 
@@ -24,24 +24,30 @@ Si existe una versión estable compatible con tu QGIS, aparece un aviso con **Ac
 
 Para actualizar desde 1.2.5, añade el índice una vez en **Complementos → Administrar e instalar complementos → Configuración → Repositorios de complementos** y utiliza **Actualizable → Actualizar complemento**. El ZIP instalable es una alternativa. Después de actualizar, realiza una consulta nueva para usar el snap actual: abrir un proyecto antiguo restaura sus resultados guardados.
 
+La tabla morfológica y su informe muestran como máximo dos decimales. Los cálculos y proyectos conservan los valores completos. Las magnitudes positivas menores de 0,01 se presentan como **<0,01**; el número de celdas se muestra entero.
+
 ## Punto de cierre y elección de MDT
 
 Se conserva el **punto exacto de la última consulta válida de CAUMAX**, junto con su caudal Q y periodo T. El ajuste al cauce o **snap** intenta aproximar el cierre a ese punto sobre una red D8 conectada. El **extremo aguas abajo del curso principal, la celda de cierre y la cuenca** pertenecen al mismo cálculo; se vuelve a delimitar y a calcular todos los parámetros desde el cierre efectivo.
 
-En la malla original de **500 m**, la orientación se obtiene del primer tramo entrante del curso principal de máxima longitud. Si el centro de la celda original queda aguas abajo de la sección proyectada, se selecciona el primer centro aguas arriba de esa misma ruta. La dirección de salida de una confluencia ya no decide qué significa aguas arriba del tramo dibujado.
+En la malla original de **500 m**, el algoritmo compara la distancia del clic a los segmentos D8 entrantes. Selecciona el ramal conectado más próximo y, sobre ese ramal, el centro de celda situado en la sección proyectada o inmediatamente aguas arriba. Conserva la celda original cuando su centro ya es un cierre admisible. La longitud global de los ríos no decide qué ramal corresponde al clic: el curso principal de máxima longitud se calcula una vez fijada la cuenca.
 
-En un **MDT de 25 o 5 m**, la búsqueda parte siempre del **punto ORIGINAL** transformado al CRS del MDT. Un clic próximo al río puede caer en una celda lateral cuya pequeña escorrentía desemboca en el cauce. El algoritmo sigue esa conexión D8 dentro del radio, compara los aportes relativos de las confluencias y proyecta el punto original sobre el curso asociado. El receptor de la conexión lateral sirve para identificar el cauce; no se convierte automáticamente en el cierre. Se elige el primer centro del recorrido sobre la sección proyectada o aguas arriba. El área de 500 m es informativa: no se exige su 90 % ni se baja aguas abajo para alcanzarlo. Se han retirado los umbrales rígidos de 9 celdas y 4 veces la mediana local; una ladera sin concentración de flujo no se acepta automáticamente como un cauce.
+Si dos ramales distintos presentan distancias que difieren como máximo el **5 % del menor lado de la celda**, se solicita una elección manual. Es una tolerancia geométrica propia del complemento: 25 m en una malla de 500 m y 1,25 m en una de 25 m. No se dibuja una conexión inexistente en las direcciones D8 para forzar el ramal deseado.
+
+En un **MDT de 25 o 5 m**, la búsqueda parte siempre del **punto ORIGINAL** transformado al CRS del MDT. Un clic próximo al río puede caer en una celda lateral cuya pequeña escorrentía desemboca en el cauce. El algoritmo sigue esa conexión D8 dentro del radio, compara los aportes relativos de las confluencias para identificar el cauce receptor y compara los segmentos de sus ramales antes de proyectar el clic. La cercanía geométrica del ramal prevalece sobre su longitud total. El receptor de la conexión lateral sirve para identificar el cauce; no se convierte automáticamente en el cierre. Se elige el primer centro del recorrido sobre la sección proyectada o aguas arriba. El área de 500 m es informativa: no se exige su 90 % ni se baja aguas abajo para alcanzarlo. Se han retirado los umbrales rígidos de 9 celdas y 4 veces la mediana local; una ladera sin concentración de flujo no se acepta automáticamente como un cauce.
 
 Si la asociación no es inequívoca, se abre **Ajustar cierre**. También puedes utilizar **Ajustar cierre…** junto a **Malla de celdas** para revisar un resultado. El selector permite:
 
 - Pulsar **Elegir en mapa** y señalar el cierre deseado.
 - Mover el candidato **Norte, Sur, Este u Oeste**, en pasos de una o varias celdas del MDT activo.
 - Revisar coordenadas y distancia al punto original antes de **Aplicar cierre**.
-- Cancelar y conservar el resultado anterior.
+- Repetir varios ajustes después de recalcular, manteniendo abiertas la ventana de la cuenca y la del selector. Cerrar el selector conserva el último resultado aplicado.
 
-El clic del mapa se transforma al CRS del MDT y se ajusta al centro de una celda válida. Se comprueban dirección D8, cota, cobertura y radio. La selección manual permite cualquier orientación, también aguas abajo, porque expresa una elección del usuario. Aceptar recalcula el polígono, el curso, la morfología y los resultados asociados; no desplaza únicamente el símbolo. El informe y el proyecto registran expresamente esta elección. El punto rojo original y el caudal consultado se conservan.
+El clic del mapa se transforma al CRS del MDT y se ajusta al centro de una celda válida. Se comprueban dirección D8, cota y cobertura de la celda. La selección manual permite cualquier orientación, también aguas abajo, porque expresa una elección del usuario. Pulsar **Aplicar cierre** recalcula el polígono, el curso, la morfología y los resultados asociados; no desplaza únicamente el símbolo. El informe y el proyecto registran expresamente esta elección. El punto rojo original y el caudal consultado se conservan.
 
-El radio local procede de la malla original, con un mínimo de 500 m y su diagonal cuando es mayor: en la malla 500×500 m equivale a unos 707,1 m. Para cambiar la sección fuera de ese entorno se realiza una nueva consulta. Las flechas expresan direcciones de la malla proyectada, no una deducción del sentido hidrológico.
+El radio del **snap automático** procede de la malla original, con un mínimo de 500 m y su diagonal cuando es mayor: en la malla 500×500 m equivale a unos 707,1 m. Este radio **no limita una selección manual expresa**. Las flechas y el clic pueden elegir cualquier celda válida dentro de la extensión del MDT disponible. El diálogo informa de la distancia al punto original; si falta cobertura, hay que disponer de un MDT que incluya la nueva sección y toda su cuenca. Las flechas expresan direcciones de la malla proyectada, no una deducción del sentido hidrológico.
+
+La fila superior presenta **Malla de celdas → Ajustar cierre… → Borrar divisoria**. **Borrar divisoria** limpia los trazados y marcadores del mapa y retira las capas generadas para el resultado, incluidas las variantes de divisoria, curso, drenaje y MDT. Conserva las capas ajenas, los datos de origen y los resultados calculados del diálogo. Al aplicar un nuevo cierre se representa de nuevo la cuenca.
 
 La política de selección es propia del complemento. Se trabaja con centros y contornos de celdas, por lo que no equivale a una sección topográfica exacta. Una línea azul cartográfica puede no coincidir con el drenaje del MDT; si se necesitan decisiones a escala de una obra, deben comprobarse el relieve y el cauce del lugar.
 
@@ -156,19 +162,22 @@ El mensaje incluye los 19 parámetros y sus definiciones, resolución, tipo de c
 
 El contexto del modelo remite al [texto consolidado oficial de 5.2-IC](https://cdn.transportes.gob.es/portal-web-transportes/carreteras/normativa_tecnica/07_drenaje/52ic_fom2982016_err_fom1852017_res180326_consolidado.pdf). Pide distinguir el uso del método según el área, Tc del cauce completo frente a Tc10–85, selección del recorrido más desfavorable, P₀ sin β, factores de precipitación pendientes, dispersión espacial y cuantiles originales de CAUMAX. La respuesta debe ligar cada parámetro a comprobaciones aplicadas, señalar los datos ausentes y evitar atribuir categorías de riesgo o una conformidad normativa a los índices morfométricos. El técnico debe contrastar la interpretación antes de incorporarla a un proyecto.
 
-## TauDEM real y tres productos exportables
+## Generación capas resolución mejorada
 
 **Generar capas D8** ejecuta **PitRemove → D8FlowDir → AreaD8 → Threshold → StreamNet** con TauDEM real y actualiza la cuenca y su red con esas direcciones. El programa registra herramientas, versión, procedencia y umbral. Si faltan ejecutables o falla una etapa, informa del problema; no presenta otro motor como si fuera TauDEM. La consulta Q/T original permanece intacta. Las estadísticas de altitud, pendiente local y TRI siguen usando el **MDT original**; el MDT rellenado se usa para encaminar el flujo.
 
 El **umbral de inicio de corriente**, expresado en km², controla la densidad de red: reducirlo incorpora más cauces. El modo automático propone el mayor entre **100 celdas nativas y el 1 % del área de la cuenca TauDEM**, convertido a un número entero de celdas. Es un criterio inicial del complemento, editable; al cambiarlo se regenera la red. **Mostrar red** controla su visibilidad.
 
+Los tres productos se muestran en una fila con títulos centrados —**Modelo de Elevaciones**, **Modelo de Dirección de Flujo D8** y **Red de drenaje**— y sus botones compactos debajo. El estado del cálculo, la disponibilidad de TauDEM para Windows y el enlace a documentación forman un único texto continuo.
+
+
 | Botón | Producto |
 |---|---|
 | **Exportar MDT (TIFF)…** | MDT original, con sus cotas, resolución, extensión, CRS y NoData. |
-| **Exportar dirección (TIFF)…** | Direcciones D8 en la misma malla, con la codificación seleccionada. |
-| **Exportar red (SHP)…** | Red de cauces generada por TauDEM, con geometrías y atributos conservados. |
+| **Exportar dirección de drenaje (TIFF)…** | Direcciones D8 en la misma malla, con codificación CAUMAX/ESRI para Método Racional. |
+| **Exportar Red de Drenaje (SHP)…** | Red de cauces generada por TauDEM, con geometrías y atributos conservados. |
 
-Para utilizar las direcciones en el **Método Racional de CAUMAX**, selecciona **CAUMAX / ESRI**. La opción **TauDEM** conserva sus códigos nativos. Los números representan direcciones diferentes:
+Las direcciones se exportan siempre como **CAUMAX / ESRI · Método Racional**. No hay un desplegable de codificación; el TIFF nativo de TauDEM sigue siendo un producto interno. La recodificación utiliza estas correspondencias:
 
 | Dirección | TauDEM | CAUMAX / ESRI |
 |---|---:|---:|
@@ -181,7 +190,7 @@ Para utilizar las direcciones en el **Método Racional de CAUMAX**, selecciona *
 | S | 7 | 4 |
 | SE | 8 | 2 |
 
-No basta con renombrar el TIFF: el exportador realiza la recodificación y conserva la malla. En **Windows de 64 bits**, el ZIP incluye **TauDEM 5.5.0, Microsoft MPI y GDAL/PROJ**, con sus licencias y procedencia. Al primer cálculo se verifica y extrae el conjunto en una carpeta privada del usuario, sin permisos de administrador, descargas adicionales, ArcGIS ni modificaciones del PATH global. Las bibliotecas se utilizan únicamente en los procesos de TauDEM. **Motor TauDEM… → Usar motor incluido** restablece esta opción si antes se había seleccionado una carpeta externa. Una instalación externa sigue siendo opcional en Windows y necesaria en Linux/macOS. El archivo `vendor/README.md` documenta el conjunto incluido.
+No basta con renombrar el TIFF: el exportador realiza la recodificación y conserva la malla. En **Windows de 64 bits**, el ZIP incluye **TauDEM 5.5.0, Microsoft MPI y GDAL/PROJ**, con sus licencias y procedencia. Al primer cálculo se verifica y extrae el conjunto en una carpeta privada del usuario, sin permisos de administrador, descargas adicionales, ArcGIS ni modificaciones del PATH global. Las bibliotecas se utilizan únicamente en los procesos de TauDEM. La interfaz utiliza siempre el motor predeterminado e ignora las carpetas externas elegidas en versiones anteriores. En Windows se emplea el conjunto incluido; en Linux/macOS sigue siendo necesaria una instalación de TauDEM y MPI disponible para el sistema, sin selector de carpeta en este diálogo. El archivo `vendor/README.md` documenta el conjunto incluido.
 
 ## Cursos principal y central en QGIS
 
@@ -290,5 +299,5 @@ El ZIP conserva además el script original íntegro del usuario en **extras/CAUM
 - [GDAL: TRI Riley y Wilson](https://gdal.org/en/stable/programs/gdal_raster_tri.html) y [Riley, DeGloria y Elliot (1999)](https://arc.lib.montana.edu/ojs/index.php/IJS/article/view/2914).
 
 - [Pollinations Classic: documentación](https://github.com/pollinations/hive/blob/main/POLLINATIONS_APIDOCS.md) y [catálogo público de modelos anónimos](https://text.pollinations.ai/models). La integración usa el servicio Classic comprobado, no la API de pago gen.pollinations.ai.
-El repositorio incluye pruebas reproducibles de cálculo, interfaz, recuperación de resultados y exportación. Los registros históricos locales se mantienen fuera de esta publicación porque contienen rutas y referencias a sesiones de trabajo. HidroCAUMAX v1.2.6 se distribuye en el canal **estable**; la comprobación de un proyecto concreto debe realizarse en su instalación de QGIS y con sus fuentes de datos.
+El repositorio incluye pruebas reproducibles de cálculo, interfaz, recuperación de resultados y exportación. Los registros históricos locales se mantienen fuera de esta publicación porque contienen rutas y referencias a sesiones de trabajo. HidroCAUMAX v1.2.7 se distribuye en el canal **estable**; la comprobación de un proyecto concreto debe realizarse en su instalación de QGIS y con sus fuentes de datos.
 

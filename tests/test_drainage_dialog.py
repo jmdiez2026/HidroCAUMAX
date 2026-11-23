@@ -19,6 +19,8 @@ os.environ.setdefault('QT_QPA_PLATFORM','offscreen')
 from qgis.PyQt import sip
 from qgis.PyQt.QtCore import QCoreApplication, QEvent, QSettings, Qt
 from qgis.PyQt.QtTest import QTest
+from qgis.PyQt.QtWidgets import QComboBox, QGridLayout, QLabel
+from qgis.PyQt.QtGui import QFontMetrics
 from qgis.core import QgsApplication, QgsCoordinateReferenceSystem, QgsGeometry, QgsProject
 from qgis.gui import QgsMapCanvas
 
@@ -208,48 +210,104 @@ class DrainageDialogTests(unittest.TestCase):
             QTest.qWait(550)
         self.assertEqual(len(dialog._drainage_controller.calls),1)
 
-    def test_bundled_engine_menu_removes_external_override_only_when_available(self):
+    def test_prepare_uses_default_engine_and_caumax_even_with_old_external_setting(self):
         settings_path=str(self.folder/'isolated-settings.ini')
         settings=QSettings(settings_path,QSettings.IniFormat)
-        settings.setValue('HidroCAUMAX/taudem_bin',str(self.folder/'external-engine'))
+        external=str(self.folder/'external-engine')
+        settings.setValue('HidroCAUMAX/taudem_bin',external)
         settings.setValue('HidroCAUMAX/unrelated-setting','preserved')
         settings.sync()
         dialog=self.dialog
-        actions=dialog.taudem_folder_button.menu().actions()
-        self.assertEqual([action.text() for action in actions],
-            ['Usar motor incluido (Windows 64 bits)','Seleccionar carpeta externa…'])
+        self.assertFalse(hasattr(dialog,'taudem_folder_button'))
+        self.assertFalse(hasattr(dialog,'direction_encoding'))
+        self.assertFalse(dialog.drainage_group.findChildren(QComboBox))
         with patch('caumax_consulta.basin_dialog.QSettings',return_value=settings), \
                 patch('caumax_consulta.taudem_engine.probe_taudem',return_value={'available':True}) as probe:
-            actions[0].trigger()
-        probe.assert_called_once_with()
-        settings.sync()
-        restored=QSettings(settings_path,QSettings.IniFormat)
-        self.assertFalse(restored.contains('HidroCAUMAX/taudem_bin'))
-        self.assertEqual(restored.value('HidroCAUMAX/unrelated-setting'),'preserved')
-        self.assertIn('Motor TauDEM predeterminado seleccionado',dialog.drainage_status.text())
-        dialog._drainage_controller.busy=True
-        dialog._refresh_drainage_controls()
-        self.assertFalse(dialog.taudem_folder_button.isEnabled())
+            dialog._prepare_drainage()
+        probe.assert_called_once_with(bin_dir=None)
+        kwargs=dialog._drainage_controller.calls[-1][1]
+        self.assertIsNone(kwargs['bin_dir'])
+        self.assertEqual(kwargs['encoding'],'caumax')
+        self.assertEqual(settings.value('HidroCAUMAX/taudem_bin'),external)
+        self.assertEqual(settings.value('HidroCAUMAX/unrelated-setting'),'preserved')
         self.assertFalse(dialog.drainage_prepare_button.isEnabled())
-        dialog._drainage_controller.busy=False
-        dialog._refresh_drainage_controls()
-        self.assertTrue(dialog.taudem_folder_button.isEnabled())
 
-    def test_unavailable_bundled_engine_preserves_override_and_displays_reason(self):
-        settings_path=str(self.folder/'isolated-settings.ini')
-        settings=QSettings(settings_path,QSettings.IniFormat)
-        external=str(self.folder/'working-external-engine')
-        settings.setValue('HidroCAUMAX/taudem_bin',external)
-        settings.sync()
+    def test_unavailable_default_engine_displays_reason_and_documentation_in_one_label(self):
         reason='El runtime incluido no está disponible en esta plataforma de prueba.'
-        with patch('caumax_consulta.basin_dialog.QSettings',return_value=settings), \
-                patch('caumax_consulta.taudem_engine.probe_taudem',
-                      return_value={'available':False,'reason':reason}) as probe:
-            self.dialog.taudem_folder_button.menu().actions()[0].trigger()
-        probe.assert_called_once_with()
-        settings.sync()
-        self.assertEqual(QSettings(settings_path,QSettings.IniFormat).value('HidroCAUMAX/taudem_bin'),external)
-        self.assertEqual(self.dialog.drainage_status.text(),reason)
+        with patch('caumax_consulta.taudem_engine.probe_taudem',
+                   return_value={'available':False,'reason':reason}) as probe:
+            self.dialog._prepare_drainage()
+        probe.assert_called_once_with(bin_dir=None)
+        self.assertEqual(self.dialog._drainage_controller.calls,[])
+        text=self.dialog.drainage_status.text()
+        self.assertIn(reason,text)
+        self.assertIn('Windows de 64 bits',text)
+        self.assertIn('Documentación',text)
+        labels=[label for label in self.dialog.drainage_group.findChildren(QLabel)
+                if 'Documentación' in label.text()]
+        self.assertEqual(labels,[self.dialog.drainage_status])
+
+    def test_legacy_taudem_snapshot_restores_and_exports_only_caumax_directions(self):
+        state=self.dialog.get_smoothing_state()
+        # The dialog fixture's held engine uses an arbitrary TauDEM raster.
+        # Real export also validates that both direction encodings correspond.
+        source=gdal.Open(str(self.directions))
+        esri=source.ReadAsArray();source=None
+        esri[esri==0]=1
+        native=np.zeros_like(esri)
+        for tau,code in enumerate((1,128,64,32,16,8,4,2),1):
+            native[esri==code]=tau
+        caumax_export=self.raster('export_esri.tif',esri,gdal.GDT_Byte,255)
+        tau_export=self.raster('export_tau.tif',native,gdal.GDT_Byte,0)
+        for name in ('drainage_state','base_drainage_state'):
+            if state.get(name):
+                state[name].update(caumax_d8_path=str(caumax_export),tau_d8_path=str(tau_export))
+        state['drainage_state']['flow_encoding']='taudem'
+        state['drainage_state']['directions_visible']=True
+        if state.get('base_drainage_state'):
+            state['base_drainage_state']['flow_encoding']='taudem'
+        source=self.folder/'legacy-taudem.caumax.json'
+        save_session(source,self.analysis,self.query,state)
+        restored=self.make_dialog(load_session(source))
+        snapshot=restored.get_smoothing_state()
+        self.assertEqual(snapshot['drainage_state']['flow_encoding'],'caumax')
+        self.assertEqual(snapshot['base_drainage_state']['flow_encoding'],'caumax')
+        self.assertEqual(Path(restored._drainage_layers.layers['directions'].source()),caumax_export)
+        destination=self.folder/'only-caumax.tif'
+        with patch('caumax_consulta.basin_dialog.QFileDialog.getSaveFileName',
+                   return_value=(str(destination),'')), \
+                patch('caumax_consulta.basin_dialog.QMessageBox.critical') as errors:
+            restored._export_hydrology('directions')
+        errors.assert_not_called()
+        self.assertTrue(destination.is_file())
+        actual=gdal.Open(str(destination));expected=gdal.Open(str(caumax_export))
+        self.assertTrue(np.array_equal(actual.ReadAsArray(),expected.ReadAsArray()))
+        actual=expected=None
+        self.assertEqual(restored._drainage_state['metadata']['exports']['directions_caumax'],str(destination))
+
+    def test_exports_share_three_centered_columns_with_complete_compact_buttons(self):
+        dialog=self.dialog
+        dialog.resize(650,1100)
+        dialog.show()
+        QTest.qWait(30)
+        group=dialog.drainage_group
+        self.assertEqual(group.title(),'Generación capas resolución mejorada')
+        layout=group.layout()
+        grid=next(layout.itemAt(i).layout() for i in range(layout.count())
+                  if isinstance(layout.itemAt(i).layout(),QGridLayout))
+        labels=['Modelo de Elevaciones','Modelo de Dirección de Flujo D8','Red de drenaje']
+        texts=['Exportar MDT (TIFF)…','Exportar dirección de drenaje (TIFF)…','Exportar Red de Drenaje (SHP)…']
+        for column,(label,text) in enumerate(zip(labels,texts)):
+            heading=grid.itemAtPosition(0,column).widget()
+            button=grid.itemAtPosition(1,column).widget()
+            self.assertEqual(heading.text(),label)
+            self.assertEqual(button.text(),text)
+            self.assertTrue(heading.alignment() & Qt.AlignHCenter)
+            self.assertTrue(grid.itemAtPosition(1,column).alignment() & Qt.AlignHCenter)
+            self.assertGreaterEqual(button.width(),QFontMetrics(button.font()).horizontalAdvance(text)+12)
+        self.assertEqual(len({grid.itemAtPosition(1,c).widget().y() for c in range(3)}),1)
+        self.assertLessEqual(dialog.body_scroll.widget().width(),dialog.body_scroll.viewport().width())
+        self.assertLessEqual(dialog.width(),650)
 
 
 if __name__=='__main__':unittest.main()

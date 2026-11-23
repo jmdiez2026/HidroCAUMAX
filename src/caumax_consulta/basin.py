@@ -108,127 +108,235 @@ def _read(band, *window):
     return array
 
 
+def _branch_ambiguity_tolerance(width, height):
+    """Internal resolution policy, not a hydrological standard."""
+    return max(1e-6, 0.05 * min(width, height))
+
+
+def _nearest_upstream_segment(directions_band, transform, original_x, original_y,
+                               anchor_row, anchor_col, radius, cancelled=lambda: False,
+                               *, counts=None, exclude_incoming=(), allow_root_upstream=False):
+    """Identify a local D8 branch geometrically before calculating its course.
+
+    The graph is restricted to real ancestors connected inside the original
+    search circle. Excluded immediate inflows remove their complete subtrees.
+    Different closures within 5% of the smaller cell side are ambiguous; neither
+    total course length nor contributing area is a branch-ranking criterion.
+    """
+    from .outlet_errors import OutletSelectionRequired
+
+    _check_cancel(cancelled)
+    rows, cols = directions_band.YSize, directions_band.XSize
+    width, height = transform[1], -transform[5]
+    radius = float(radius)
+    if not math.isfinite(radius) or radius <= 0:
+        raise ValueError('El radio de ajuste debe ser positivo y finito.')
+    point = cell_at_point(original_x, original_y, transform[0], transform[3] - rows * height,
+                         transform[0] + cols * width, transform[3], cols, rows)
+    if counts is not None and counts.shape != (rows, cols):
+        raise ValueError('La acumulación y las direcciones no comparten dimensiones.')
+    root = int(anchor_row), int(anchor_col)
+    epsilon = max(width, height) * 1e-7
+    ambiguity = _branch_ambiguity_tolerance(width, height)
+    context = dict(original_x=float(original_x), original_y=float(original_y),
+                   search_radius_m=radius, branch_ambiguity_tolerance_m=ambiguity)
+
+    def centre(cell):
+        return transform[0] + (cell[1] + .5) * width, transform[3] - (cell[0] + .5) * height
+
+    def distance(cell):
+        x, y = centre(cell)
+        return math.hypot(x - original_x, y - original_y)
+
+    if not (0 <= root[0] < rows and 0 <= root[1] < cols) or distance(root) > radius + epsilon:
+        raise OutletSelectionRequired('El centro de referencia queda fuera del radio de ajuste; elige el cierre.',
+                                      dict(context, reason_code='no_candidate'))
+    dc, dr = math.ceil(radius / width) + 1, math.ceil(radius / height) + 1
+    left, right = max(0, point.col - dc), min(cols, point.col + dc + 1)
+    top, bottom = max(0, point.row - dr), min(rows, point.row + dr + 1)
+    window = (left, top, right - left, bottom - top)
+    data = _read(directions_band, *window)
+    valid = np.isfinite(data)
+    nodata = directions_band.GetNoDataValue()
+    if nodata is not None:
+        valid &= data != nodata
+    if not directions_band.GetMaskFlags() & gdal.GMF_ALL_VALID:
+        valid &= _read(directions_band.GetMaskBand(), *window) != 0
+    if not valid[root[0] - top, root[1] - left]:
+        raise ValueError('La celda de referencia no tiene dirección D8 válida (NoData).')
+    if data[root[0] - top, root[1] - left] not in _VALID_CODES:
+        raise ValueError('La celda de referencia tiene un código D8 desconocido.')
+    if counts is not None and int(counts[root]) <= 0:
+        raise ValueError('La acumulación de la celda de referencia no es válida.')
+    has_native_incoming = any(
+        top <= root[0] + dy < bottom and left <= root[1] + dx < right
+        and valid[root[0] + dy - top, root[1] + dx - left]
+        and data[root[0] + dy - top, root[1] + dx - left] == code
+        for dx, dy, code in DIRECTIONS)
+    excluded = {tuple(cell) for cell in exclude_incoming}
+    parents, stations, pending = {root: None}, {root: 0.0}, [root]
+    while pending:
+        _check_cancel(cancelled)
+        current = pending.pop()
+        for dx, dy, code in DIRECTIONS:
+            neighbour = current[0] + dy, current[1] + dx
+            row, col = neighbour
+            if (not (top <= row < bottom and left <= col < right)
+                    or (current == root and neighbour in excluded)
+                    or not valid[row - top, col - left] or data[row - top, col - left] != code
+                    or distance(neighbour) > radius + epsilon):
+                continue
+            if neighbour in parents:
+                raise ValueError('La red D8 local contiene un ciclo; no se ajusta el cierre.')
+            if counts is not None and not 0 < int(counts[neighbour]) < int(counts[current]):
+                raise ValueError('La acumulación no es coherente con la conexión D8 local.')
+            parents[neighbour] = current
+            stations[neighbour] = stations[current] + math.hypot(dx * width, dy * height)
+            pending.append(neighbour)
+
+    def entry(cell):
+        return [cell[0], cell[1], int(data[cell[0] - top, cell[1] - left])]
+
+    candidates = {}
+    for number, (source, target) in enumerate(parents.items()):
+        if number % 1000 == 0:
+            _check_cancel(cancelled)
+        if target is None:
+            continue
+        ux, uy = centre(source)
+        dx, dy = centre(target)
+        vx, vy = ux - dx, uy - dy
+        length = math.hypot(vx, vy)
+        raw = ((original_x - dx) * vx + (original_y - dy) * vy) / (length * length)
+        if -epsilon / length <= raw <= 1 + epsilon / length:
+            fraction = min(1.0, max(0.0, raw))
+            selected = target if fraction * length <= epsilon else source
+            projection = dx + fraction * vx, dy + fraction * vy
+            click_station = stations[target] + fraction * length
+            kind = 'orthogonal'
+        elif raw < 0 and target == root and allow_root_upstream:
+            selected, projection = root, (dx, dy)
+            click_station, kind = raw * length, 'root_upstream'
+        else:
+            continue
+        sx, sy = centre(selected)
+        offset = -((sx - original_x) * vx + (sy - original_y) * vy) / length
+        if offset > epsilon:
+            continue
+        lateral = math.hypot(original_x - projection[0], original_y - projection[1])
+        candidate = dict(selected=selected, source=entry(source), target=entry(target),
+                         projection=projection, projection_kind=kind,
+                         selected_station=stations[selected], click_station=click_station,
+                         lateral_distance=lateral, offset=offset,
+                         branch_path_length_m=stations[source])
+        score = lateral, source[0], source[1]
+        if selected not in candidates or score < candidates[selected][0]:
+            candidates[selected] = score, candidate
+    if not candidates:
+        # A real headwater has no entering segment. Keep its own centre only
+        # when the local direction places it at/above the original point.
+        if len(parents) == 1 and not has_native_incoming and allow_root_upstream:
+            code = entry(root)[2]
+            offsets = {value: (-dx * width, dy * height) for dx, dy, value in DIRECTIONS}
+            vx, vy = offsets.get(code, (0.0, 0.0))
+            norm = math.hypot(vx, vy)
+            x, y = centre(root)
+            offset = ((x - original_x) * vx + (y - original_y) * vy) / norm if norm else 0.0
+            if (code or distance(root) <= epsilon) and offset <= epsilon:
+                candidate = dict(selected=root, source=entry(root), target=None,
+                    projection=(x, y), projection_kind='native_headwater',
+                    selected_station=0.0, click_station=offset, lateral_distance=distance(root),
+                    offset=offset, branch_path_length_m=0.0)
+                candidates[root] = (distance(root), root[0], root[1]), candidate
+        if not candidates:
+            raise OutletSelectionRequired('No se encuentra un segmento D8 local que permita situar el cierre '
+                'en la sección o aguas arriba dentro del radio. Elige el tramo o la celda en el mapa.',
+                dict(context, reason_code='no_candidate'))
+    ranked = sorted(candidates.values(), key=lambda item: item[0])
+    best = ranked[0][1]
+    runner = ranked[1][1]['lateral_distance'] if len(ranked) > 1 else None
+    context.update(branch_distance_m=best['lateral_distance'], branch_runner_up_distance_m=runner)
+    if runner is not None and runner - best['lateral_distance'] <= ambiguity:
+        raise OutletSelectionRequired(
+            f'Hay dos cierres D8 locales con proximidad indistinguible: {best["lateral_distance"]:.2f} y '
+            f'{runner:.2f} m al clic (margen {ambiguity:g} m). Elige el ramal en el mapa; '
+            'no se decide por longitud ni por área de cuenca.', dict(context, reason_code='ambiguous_branch'))
+    path, current = [], best['selected']
+    while current is not None:
+        path.append(entry(current))
+        current = parents[current]
+    # Do not bypass a much closer native ancestor merely because its local
+    # segment would require an invalid endpoint clamp. Such a geometry needs
+    # an explicit choice, rather than an invented vertical/diagonal connection.
+    if best['selected'] != root:
+        downstream = {tuple(step[:2]) for step in path}
+        alternatives = [cell for cell in parents if cell not in downstream]
+        if alternatives:
+            closest_cell = min(alternatives, key=distance)
+            if distance(closest_cell) + ambiguity < distance(best['selected']):
+                raise OutletSelectionRequired(
+                    'El segmento D8 más cercano y la celda aportante más próxima señalan posiciones distintas. '
+                    'La conexión local no permite decidir el cierre sin desplazarlo respecto al tramo; '
+                    'elige la celda en el mapa.', dict(context, reason_code='geometric_conflict'))
+    x, y = centre(best['selected'])
+    cell = cell_at_point(x, y, transform[0], transform[3] - rows * height,
+                         transform[0] + cols * width, transform[3], cols, rows)
+    best.update(cell=cell, path=path, best_distance_m=best['lateral_distance'],
+                runner_up_distance_m=runner, ambiguity_tolerance_m=ambiguity,
+                candidate_count=len(candidates),
+                branch_path_cells=len(path) + int(best['source'] != path[0]))
+    return best
+
+
 def _upstream_section_cell(directions_band, transform, original_x, original_y,
                            radius=None, counts=None, require_channel=False,
                            cancelled=lambda: False, *, return_visit=False):
-    """Use the first incoming segment of the displayed longest D8 course.
-
-    A click belongs to the root cell. Its projection on that incoming segment
-    determines whether its centre or the immediately upstream course centre is
-    admissible. The outgoing direction at a confluence never orients this
-    section, and a closer tributary never replaces the main course. Main-course
-    length is determined over the complete contributing network before applying
-    the local radius and channel filter. This is a raster policy, not a surveyed
-    cross-section. ``return_visit`` lets terrain reuse an unchanged delineation.
-    """
-    _check_cancel(cancelled)
+    """Choose the nearest unambiguous local D8 branch, then its upstream centre."""
     rows, cols = directions_band.YSize, directions_band.XSize
     original = cell_at_point(original_x, original_y, transform[0],
                              transform[3] + rows * transform[5],
                              transform[0] + cols * transform[1], transform[3], cols, rows)
     radius = max(500.0, math.hypot(original.width, original.height)) if radius is None else float(radius)
-    if not math.isfinite(radius) or radius <= 0:
-        raise ValueError('El radio de ajuste debe ser positivo y finito.')
-    if math.hypot(original.x - original_x, original.y - original_y) > radius:
-        raise ValueError('El radio no alcanza el centro de la celda original; no se ajusta el cierre.')
-    if counts is not None and counts.shape != (rows, cols):
-        raise ValueError('La acumulación y las direcciones no comparten dimensiones.')
-    if require_channel and counts is None:
-        raise ValueError('Se requiere acumulación para identificar el cauce local.')
-    visit = _visit_upstream(directions_band, original.row, original.col,
-                            cancelled, lambda n: None,
-                            path_cell_size=(original.width, original.height))
-    main_path, main_length = visit[4:]
-    original_code = main_path[0][2]
-    if counts is not None:
-        if int(counts[original.row, original.col]) != visit[2]:
-            raise ValueError('La acumulación no coincide con la cuenca D8 de la celda original.')
-        for downstream, upstream in zip(main_path, main_path[1:]):
-            if not 0 < int(counts[upstream[0], upstream[1]]) < int(counts[downstream[0], downstream[1]]):
-                raise ValueError('La acumulación no es coherente con la conexión D8 aguas arriba.')
-    source_cell = main_path[1] if len(main_path) > 1 else main_path[0]
-    section_code = source_cell[2]
-    direction_source = 'main_course_incoming_d8' if len(main_path) > 1 else 'cell_d8'
-    if not section_code:
-        if math.hypot(original.x - original_x, original.y - original_y) > 1e-7:
-            raise ValueError('No se puede orientar la sección: la celda terminal no tiene '
-                             'un tramo principal de entrada. Marca su centro o un tramo D8 definido.')
-        direction_source = 'exact_center'
-    offsets = {code: (-dx * original.width, dy * original.height) for dx, dy, code in DIRECTIONS}
-    vx, vy = offsets.get(section_code, (0.0, 0.0))  # downstream vector of incoming course
-    norm = math.hypot(vx, vy)
-    station = (-((original_x - original.x) * vx + (original_y - original.y) * vy) / norm
-               if norm else 0.0)
-    tolerance = max(original.width, original.height) * 1e-7
-    selected_index = 1 if station > tolerance else 0
-    if selected_index >= len(main_path):
-        raise ValueError('No se encuentra un cierre del cauce principal aguas arriba de la sección '
-                         'marcada: la celda no tiene antecesor D8. No se desplaza aguas abajo.')
-    row, col, _ = main_path[selected_index]
-    x = transform[0] + (col + 0.5) * transform[1]
-    y = transform[3] + (row + 0.5) * transform[5]
-    distance = math.hypot(x - original_x, y - original_y)
-    if distance > radius + tolerance:
-        raise ValueError(f'No se encuentra un cierre del cauce principal aguas arriba dentro de {radius:g} m. '
-                         'Su primer centro anterior queda fuera del radio; no se cambia de ramal.')
+    picked = _nearest_upstream_segment(directions_band, transform, original_x, original_y,
+        original.row, original.col, radius, cancelled, counts=counts, allow_root_upstream=True)
+    selected = picked['cell']
+    visit = _visit_upstream(directions_band, original.row, original.col, cancelled, lambda n: None)
     cell_area = original.width * original.height
-    background, minimum = None, cell_area
+    if counts is not None and int(counts[original.row, original.col]) != visit[2]:
+        raise ValueError('La acumulación no coincide con la cuenca D8 de la celda original.')
     if require_channel:
-        dc, dr = math.ceil(radius / original.width) + 1, math.ceil(radius / original.height) + 1
-        left, right = max(0, original.col - dc), min(cols, original.col + dc + 1)
-        top, bottom = max(0, original.row - dr), min(rows, original.row + dr + 1)
-        window = (left, top, right - left, bottom - top)
-        data = _read(directions_band, *window)
-        valid = np.isfinite(data)
-        nodata = directions_band.GetNoDataValue()
-        if nodata is not None:
-            valid &= data != nodata
-        if not directions_band.GetMaskFlags() & gdal.GMF_ALL_VALID:
-            valid &= _read(directions_band.GetMaskBand(), *window) != 0
-        rr, cc = np.ogrid[top:bottom, left:right]
-        xx = transform[0] + (cc + 0.5) * transform[1]
-        yy = transform[3] + (rr + 0.5) * transform[5]
-        distances = (xx - original_x) ** 2 + (yy - original_y) ** 2
-        local = counts[top:bottom, left:right]
-        population = local[(local > 0) & (distances <= radius * radius) & valid]
-        if not population.size:
-            raise ValueError('No hay acumulación D8 válida en el radio de búsqueda.')
-        background = float(np.median(population)) * cell_area
-        minimum = max(9 * cell_area, 4 * background)
-        if int(counts[row, col]) * cell_area < minimum:
-            raise ValueError('No se encuentra un cierre del cauce principal aguas arriba con aporte '
-                             'concentrado (al menos 9 celdas y 4 veces la mediana local). '
-                             'No se cambia de ramal ni se desplaza aguas abajo.')
-    selected = cell_at_point(x, y, transform[0], transform[3] + rows * transform[5],
-                             transform[0] + cols * transform[1], transform[3], cols, rows)
-    path = list(reversed(main_path[:selected_index + 1]))
-    offset = (((x - original_x) * vx + (y - original_y) * vy) / norm if norm else 0.0)
+        raise ValueError('El filtro de cauce debe verificarse antes de seleccionar el ramal local.')
+    original_code = picked['path'][-1][2]
+    source = picked['source']
+    kind = picked['projection_kind']
     metadata = dict(
-        method='upstream_section_d8', selection_mode='upstream_main_course',
+        method='upstream_section_d8', selection_mode='upstream_nearest_branch',
         original_x=float(original_x), original_y=float(original_y),
-        snapped_x=float(x), snapped_y=float(y),
-        distance_m=float(distance), search_radius_m=radius,
-        status='unchanged' if selected_index == 0 else 'snapped',
-        original_row=original.row, original_col=original.col, snapped_row=row, snapped_col=col,
-        original_direction=original_code, section_direction=section_code,
-        section_direction_source=direction_source, section_source_cell=list(source_cell),
-        section_offset_m=float(offset), main_course_click_station_m=float(station),
-        main_course_length_m=float(main_length), main_course_cells=len(main_path),
-        upstream_path=path, candidate_count=1, tie_break='main_course_d8_order',
-        upstream_path_length_m=float(norm if selected_index else 0.0),
-        minimum_upstream_area_m2=float(minimum),
-        channel_filter='local_concentration' if require_channel else 'native_cell',
+        snapped_x=float(selected.x), snapped_y=float(selected.y),
+        distance_m=float(math.hypot(selected.x - original_x, selected.y - original_y)), search_radius_m=radius,
+        status='unchanged' if (selected.row, selected.col) == (original.row, original.col) else 'snapped',
+        original_row=original.row, original_col=original.col, snapped_row=selected.row, snapped_col=selected.col,
+        original_direction=original_code, section_direction=source[2], section_source_cell=source,
+        section_direction_source=('exact_center' if not source[2] else 'cell_d8')
+            if kind == 'native_headwater' else 'local_nearest_branch_d8',
+        section_projection_x=float(picked['projection'][0]), section_projection_y=float(picked['projection'][1]),
+        projection_kind=kind, section_offset_m=float(picked['offset']),
+        upstream_path=picked['path'], upstream_path_length_m=float(picked['selected_station']),
+        branch_click_station_m=float(picked['click_station']),
+        branch_selected_station_m=float(picked['selected_station']),
+        branch_path_length_m=float(picked['branch_path_length_m']), branch_path_cells=picked['branch_path_cells'],
+        branch_distance_m=float(picked['best_distance_m']), branch_runner_up_distance_m=picked['runner_up_distance_m'],
+        branch_ambiguity_tolerance_m=float(picked['ambiguity_tolerance_m']),
+        candidate_count=picked['candidate_count'], tie_break='nearest_branch_geometry',
+        minimum_upstream_area_m2=cell_area, channel_filter='native_cell',
         original_cell_upstream_area_m2=visit[2] * cell_area,
-        policy='plugin: first centre upstream of click projection on the incoming longest D8 course; '
-               'complete course uses the same strict-length DFS tie order as the displayed line; '
-               'no alternative tributary and no downstream closure')
-    if require_channel:
-        metadata.update(local_median_upstream_area_m2=background,
-                        local_concentration_factor=4.0, local_minimum_cells=9)
+        policy='plugin: identify the nearest local D8 segment before computing the final longest course; '
+               'distinct closures within 5% of the smaller cell side require explicit review; '
+               'no global-length or contributing-area branch ranking')
     if counts is not None:
-        metadata['candidate_upstream_area_m2'] = int(counts[row, col]) * cell_area
+        metadata['candidate_upstream_area_m2'] = int(counts[selected.row, selected.col]) * cell_area
     result = selected, metadata
-    return (*result, visit[:4]) if return_visit else result
+    return (*result, visit) if return_visit else result
 
 
 def _visit_upstream(directions_band, outlet_row, outlet_col, cancelled, progress, *,

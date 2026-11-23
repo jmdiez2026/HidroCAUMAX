@@ -188,10 +188,10 @@ def build_network_layer(snapshot):
 
 def _directions_layer(path):
     if not path or not Path(path).is_file():return None
-    layer=QgsRasterLayer(str(path),'Direcciones D8 TauDEM (1–8)','gdal')
+    layer=QgsRasterLayer(str(path),'Modelo de Dirección de Flujo D8 · CAUMAX/ESRI','gdal')
     if not layer.isValid():return None
-    directions=((1,'E','#377eb8'),(2,'NE','#4daf4a'),(3,'N','#984ea3'),(4,'NW','#ff7f00'),
-                (5,'W','#a65628'),(6,'SW','#f781bf'),(7,'S','#e41a1c'),(8,'SE','#999999'))
+    directions=((1,'E','#377eb8'),(2,'SE','#999999'),(4,'S','#e41a1c'),(8,'SW','#f781bf'),
+                (16,'W','#a65628'),(32,'NW','#ff7f00'),(64,'N','#984ea3'),(128,'NE','#4daf4a'))
     classes=[QgsPalettedRasterRenderer.Class(value,QColor(color),label) for value,label,color in directions]
     layer.setRenderer(QgsPalettedRasterRenderer(layer.dataProvider(),1,classes))
     return layer
@@ -215,7 +215,7 @@ class DrainageLayers:
         if state is None:
             self.remove();return {}
         network=build_network_layer(state)
-        directions=_directions_layer(state.get('tau_d8_path',''))
+        directions=_directions_layer(state.get('caumax_d8_path',''))
         new={'network':network,'directions':directions}
         project=QgsProject.instance();group=self._ensure_group()
         group.setName(f'HidroCAUMAX · Drenaje TauDEM [{analysis.cell_width:g}×{analysis.cell_height:g} m]')
@@ -235,7 +235,7 @@ class DrainageLayers:
                     and layer.customProperty(OWNER_PROPERTY)==self.owner_key
                     and project.mapLayer(layer.id()) is layer):
                 project.removeMapLayer(layer.id())
-        self.note='' if directions is not None else 'El TIFF D8 no está disponible; la red archivada sigue recuperada.'
+        self.note='' if directions is not None else 'El TIFF D8 CAUMAX/ESRI no está disponible; la red archivada sigue recuperada.'
         from .layer_order import ensure_results_above_official
         ensure_results_above_official(project)
         return dict(self.layers)

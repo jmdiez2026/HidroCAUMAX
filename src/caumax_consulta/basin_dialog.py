@@ -9,8 +9,8 @@ from qgis.PyQt.QtCore import Qt, QTimer, QSettings, QEvent
 from qgis.PyQt.QtGui import QColor, QFont, QFontMetrics
 from qgis.PyQt.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QDialog, QDialogButtonBox,
-    QDoubleSpinBox, QSpinBox, QComboBox, QFileDialog, QGridLayout, QGroupBox, QHBoxLayout, QMessageBox,
-    QHeaderView, QLabel, QMenu, QPlainTextEdit, QProgressBar, QPushButton, QTableWidget,
+    QDoubleSpinBox, QSpinBox, QFileDialog, QGridLayout, QGroupBox, QHBoxLayout, QMessageBox,
+    QHeaderView, QLabel, QPlainTextEdit, QProgressBar, QPushButton, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QScrollArea, QSizePolicy, QWidget,
 )
 from qgis.core import (
@@ -48,6 +48,21 @@ def _compact_resolution(width, height=None):
     return f'{number(width)}mx{number(height)}m'
 
 
+class DrainageStatusLabel(QLabel):
+    """One wrapping paragraph for progress and the bundled-engine information."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWordWrap(True)
+        self.setTextFormat(Qt.RichText)
+        self.setOpenExternalLinks(True)
+
+    def setText(self, text):
+        from html import escape
+        super().setText(escape(str(text)) + ' TauDEM y sus dependencias están incluidos '
+            'para Windows de 64 bits. <a href="https://hydrology.usu.edu/taudem/taudem5/documentation.html">'
+            'Documentación</a>.')
+
+
 class NotesBox(QPlainTextEdit):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -68,14 +83,34 @@ class AnalysisTask(QgsTask):
         self.outlet = tuple(outlet) if outlet is not None else (query.x, query.y)
         self.result = None
         self.error = self.trace = ''
+        self.selection_context = None
 
     def run(self):
         try:
             from .terrain import analyze_basin
-            self.result = analyze_basin(
-                self.query.directions_path, self.query.dem_path,
-                *self.outlet, cancelled=self.isCanceled, upstream_only=True,
-            )
+            from .outlet_errors import OutletSelectionRequired
+            try:
+                self.result = analyze_basin(
+                    self.query.directions_path, self.query.dem_path,
+                    *self.outlet, cancelled=self.isCanceled, upstream_only=True,
+                )
+            except OutletSelectionRequired as error:
+                if self.isCanceled():
+                    raise InterruptedError()
+                # Preserve a real, unsnapped delineation while the user reviews
+                # the ambiguous branch. Ordinary raster errors still fail.
+                self.result = analyze_basin(
+                    self.query.directions_path, self.query.dem_path,
+                    *self.outlet, cancelled=self.isCanceled, upstream_only=False,
+                )
+                note = ('Ajuste automático pendiente de revisión: ' + str(error)
+                        + ' Se conserva la cuenca de la celda original hasta elegir el cierre.')
+                self.result = replace(self.result, notes=(*self.result.notes,note),
+                    diagnostics=dict(self.result.diagnostics,outlet_review_pending=note))
+                self.selection_context = dict(deepcopy(error.selection_context),
+                    resolution_key=f'{min(self.result.cell_width,self.result.cell_height):g}',
+                    reference_area_m2=float(self.result.area_m2),
+                    reason=note,manual_selection_scope='raster_extent')
             return not self.isCanceled()
         except InterruptedError:
             return False
@@ -91,13 +126,20 @@ class BasinDialog(QDialog):
     def __init__(self, query, iface, parent=None, saved_session=None):
         super().__init__(parent)
         self.setObjectName('CaumaxCuencaHidrograficaDialog')
-        self.setWindowTitle('HidroCAUMAX v1.2.6 · Cuenca hidrográfica')
+        self.setWindowTitle('HidroCAUMAX v1.2.7 · Cuenca hidrográfica')
         self.setStyleSheet(BLUE_BUTTON_STYLE)
         self.setAttribute(Qt.WA_DeleteOnClose)
+        self.setModal(False)
+        self.setWindowModality(Qt.NonModal)
         self.query, self.iface = query, iface
         self.analysis = None
         self._base_geometry_wkb = None
         self._outlet_selector = None
+        self._outlet_apply_pending = False
+        self._outlet_offer_pending = False
+        self._outlet_manual_token = None
+        self._outlet_dismissed_token = None
+        self._delineation_cleared = False
         self._surface_task = None
         self._surface_generation = 0
         self._surface_pending = False
@@ -296,13 +338,19 @@ class BasinDialog(QDialog):
         self.cell_grid_check.toggled.connect(self._grid_visibility_changed)
         resolution_actions = QHBoxLayout()
         resolution_actions.addWidget(self.cell_grid_check)
-        resolution_actions.addStretch()
         self.outlet_adjust_button = QPushButton('Ajustar cierre…', resolution_group)
         self.outlet_adjust_button.setStyleSheet('QPushButton { padding: 2px 9px; min-height: 0px; }')
         self.outlet_adjust_button.setToolTip('Elegir el cierre en el mapa o desplazarlo por celdas; recalcula toda la cuenca.')
         self.outlet_adjust_button.setEnabled(False)
         self.outlet_adjust_button.clicked.connect(self._open_outlet_selection)
         resolution_actions.addWidget(self.outlet_adjust_button)
+        self.clear_delineation_button = QPushButton('Borrar divisoria', resolution_group)
+        self.clear_delineation_button.setStyleSheet('QPushButton { padding: 2px 9px; min-height: 0px; }')
+        self.clear_delineation_button.setToolTip('Retirar las capas y marcas creadas por esta cuenca; conserva sus cálculos y las capas del usuario.')
+        self.clear_delineation_button.setEnabled(False)
+        self.clear_delineation_button.clicked.connect(self._clear_delineation)
+        resolution_actions.addWidget(self.clear_delineation_button)
+        resolution_actions.addStretch()
         resolution_layout.addLayout(resolution_actions)
         self.resolution_checkboxes = {}
         self._resolution_buttons = QButtonGroup(self)
@@ -320,22 +368,16 @@ class BasinDialog(QDialog):
         self.resolution_refresh_button.hide()
         layout.insertWidget(0, resolution_group)
         layout.insertWidget(1, smoothing)
-        drainage_group = QGroupBox('Capas hidrológicas para Método Racional', self)
+        drainage_group = QGroupBox('Generación capas resolución mejorada', self)
+        self.drainage_group = drainage_group
         drainage_layout = QVBoxLayout(drainage_group)
-        drainage_help = QLabel('Prepara el MDT elegido, sus direcciones D8 y la red de drenaje con TauDEM. Para el Método Racional de CAUMAX, exporta las direcciones en formato CAUMAX/ESRI.', drainage_group)
+        drainage_help = QLabel('Genera el MDT elegido, sus direcciones D8 y la red de drenaje con TauDEM. Las direcciones usan CAUMAX/ESRI · Método Racional.', drainage_group)
         drainage_help.setWordWrap(True)
         drainage_layout.addWidget(drainage_help)
         preparation = QHBoxLayout()
         self.drainage_prepare_button = QPushButton('Generar capas D8', drainage_group)
         self.drainage_prepare_button.clicked.connect(self._prepare_drainage)
         preparation.addWidget(self.drainage_prepare_button)
-        self.taudem_folder_button = QPushButton('Motor TauDEM…', drainage_group)
-        taudem_menu = QMenu(self.taudem_folder_button)
-        taudem_menu.addAction('Usar motor incluido (Windows 64 bits)', self._use_bundled_taudem)
-        taudem_menu.addAction('Seleccionar carpeta externa…', self._choose_taudem_folder)
-        self.taudem_folder_button.setMenu(taudem_menu)
-        self.taudem_folder_button.setToolTip('En Windows de 64 bits, TauDEM y sus dependencias están incluidos. La carpeta externa es opcional.')
-        preparation.addWidget(self.taudem_folder_button)
         self.drainage_cancel_button = QPushButton('Cancelar cálculo', drainage_group)
         self.drainage_cancel_button.clicked.connect(self._cancel_drainage)
         self.drainage_cancel_button.setEnabled(False)
@@ -362,37 +404,33 @@ class BasinDialog(QDialog):
         density_help.setWordWrap(True)
         drainage_layout.addWidget(density_help)
         exports = QGridLayout()
-        exports.addWidget(QLabel('Modelo de elevaciones',drainage_group),0,0)
+        exports.setHorizontalSpacing(8)
         self.dem_export_button = QPushButton('Exportar MDT (TIFF)…',drainage_group)
-        self.dem_export_button.clicked.connect(lambda:self._export_hydrology('dem'))
-        exports.addWidget(self.dem_export_button,0,2)
-        exports.addWidget(QLabel('Dirección de flujo D8',drainage_group),1,0)
-        self.direction_encoding = QComboBox(drainage_group)
-        self.direction_encoding.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
-        self.direction_encoding.setMinimumContentsLength(9)
-        self.direction_encoding.addItem('CAUMAX / ESRI · Método Racional','caumax')
-        self.direction_encoding.addItem('TauDEM · códigos 1 a 8','taudem')
-        self.direction_encoding.currentIndexChanged.connect(self._direction_encoding_changed)
-        exports.addWidget(self.direction_encoding,1,1)
-        self.directions_export_button = QPushButton('Exportar dirección (TIFF)…',drainage_group)
-        self.directions_export_button.clicked.connect(lambda:self._export_hydrology('directions'))
-        exports.addWidget(self.directions_export_button,1,2)
-        exports.addWidget(QLabel('Red de drenaje',drainage_group),2,0)
-        self.network_export_button = QPushButton('Exportar red (SHP)…',drainage_group)
-        self.network_export_button.clicked.connect(lambda:self._export_hydrology('network'))
-        exports.addWidget(self.network_export_button,2,2)
+        self.directions_export_button = QPushButton('Exportar dirección de drenaje (TIFF)…',drainage_group)
+        self.network_export_button = QPushButton('Exportar Red de Drenaje (SHP)…',drainage_group)
+        for column,(title,button,kind) in enumerate((
+                ('Modelo de Elevaciones',self.dem_export_button,'dem'),
+                ('Modelo de Dirección de Flujo D8',self.directions_export_button,'directions'),
+                ('Red de drenaje',self.network_export_button,'network'))):
+            label=QLabel(title,drainage_group)
+            label.setAlignment(Qt.AlignCenter)
+            label.setWordWrap(True)
+            exports.addWidget(label,0,column,Qt.AlignHCenter)
+            button.setStyleSheet('QPushButton { padding: 2px 6px; min-height: 0px; }')
+            button.setSizePolicy(QSizePolicy.Maximum,QSizePolicy.Fixed)
+            font=QFont(button.font())
+            font.setPointSizeF(8.5)
+            button.setFont(font)
+            button.clicked.connect(lambda checked=False,kind=kind:self._export_hydrology(kind))
+            exports.addWidget(button,1,column,Qt.AlignHCenter)
         drainage_layout.addLayout(exports)
-        self.drainage_status = QLabel('Selecciona un MDT mejorado para preparar sus capas.',drainage_group)
-        self.drainage_status.setWordWrap(True)
+        self.drainage_status = DrainageStatusLabel(drainage_group)
+        self.drainage_status.setText('TauDEM predeterminado seleccionado. Pulsa Generar capas D8.')
         drainage_layout.addWidget(self.drainage_status)
         self.drainage_progress = QProgressBar(drainage_group)
         self.drainage_progress.setRange(0,100)
         self.drainage_progress.hide()
         drainage_layout.addWidget(self.drainage_progress)
-        taudem_help = QLabel('TauDEM y dependencias incluidos para Windows de 64 bits. <a href="https://hydrology.usu.edu/taudem/taudem5/documentation.html">Documentación</a>',drainage_group)
-        taudem_help.setWordWrap(True)
-        taudem_help.setOpenExternalLinks(True)
-        drainage_layout.addWidget(taudem_help)
         layout.addWidget(drainage_group)
         for label in drainage_group.findChildren(QLabel):
             label.setWordWrap(True)
@@ -612,6 +650,7 @@ class BasinDialog(QDialog):
                 QgsMessageLog.logMessage(task.trace, 'CAUMAX · Cuenca', Qgis.Warning)
             return
         self.analysis = task.result
+        self._delineation_cleared = False
         self._base_geometry_wkb = bytes(self.analysis.geometry_wkb)
         self._display_analysis()
         from .boundary_smoothing import suggested_degree
@@ -626,7 +665,7 @@ class BasinDialog(QDialog):
         self.smoothing_degree.setValue(max(1, round(degree)))
         self.smoothing_degree.blockSignals(False)
         self._update_smoothing()
-        self._setup_resolutions()
+        self._setup_resolutions(outlet_selection_context=getattr(task,'selection_context',None))
 
     def _display_analysis(self, quantile_snapshot=None):
         key = f'{min(self.analysis.cell_width, self.analysis.cell_height):g}'
@@ -669,25 +708,26 @@ class BasinDialog(QDialog):
         self.original_check.setEnabled(True)
         self.smooth_check.setEnabled(True)
         self.smoothing_degree.setEnabled(self.smooth_check.isChecked())
-        if self._terrain_layers is None:
-            from .terrain_layers import TerrainLayers
-            self._terrain_layers = TerrainLayers(self.iface, retain_variants=True)
-        try:
-            self._terrain_layers.update(self.analysis, self.query)
-            if self._terrain_layers.note:
-                self.status.setText(self.status.text() + '\n' + self._terrain_layers.note)
-        except Exception as error:
-            self.status.setText(self.status.text() + '\nNo se ha podido representar el relieve: ' + str(error))
-        if self._course_layers is None:
-            from .course_layers import CourseLayers
-            self._course_layers = CourseLayers(self.iface)
-        self._course_layers.update(self.analysis, self.query)
-        if self._course_layers.note:
-            self.status.setText(self.status.text() + '\n' + self._course_layers.note)
+        if not self._delineation_cleared:
+            if self._terrain_layers is None:
+                from .terrain_layers import TerrainLayers
+                self._terrain_layers = TerrainLayers(self.iface, retain_variants=True)
+            try:
+                self._terrain_layers.update(self.analysis, self.query)
+                if self._terrain_layers.note:
+                    self.status.setText(self.status.text() + '\n' + self._terrain_layers.note)
+            except Exception as error:
+                self.status.setText(self.status.text() + '\nNo se ha podido representar el relieve: ' + str(error))
+            if self._course_layers is None:
+                from .course_layers import CourseLayers
+                self._course_layers = CourseLayers(self.iface)
+            self._course_layers.update(self.analysis, self.query)
+            if self._course_layers.note:
+                self.status.setText(self.status.text() + '\n' + self._course_layers.note)
         self._display_drainage_layers()
         self._refresh_basin_hydrology_controls()
 
-    def _setup_resolutions(self, resolution_state=None):
+    def _setup_resolutions(self, resolution_state=None, outlet_selection_context=None):
         self._close_outlet_selection()
         from .resolution_controller import ResolutionController
         if self._resolution_controller is not None:
@@ -703,6 +743,10 @@ class BasinDialog(QDialog):
             self._resolution_options, self._resolution_result, self._resolution_status,
             self._resolution_error, parent=self)
         self._resolution_controller = controller
+        self._outlet_manual_token = self._outlet_dismissed_token = None
+        if outlet_selection_context:
+            controller.outlet_selection_context = deepcopy(outlet_selection_context)
+            self._outlet_offer_pending = True
         self._active_resolution_key = resolution_state['active_key'] if resolution_state else controller.active_key
         self.resolution_refresh_button.setEnabled(True)
         if resolution_state:
@@ -812,7 +856,17 @@ class BasinDialog(QDialog):
             self._refresh_basin_hydrology_controls()
             self.basin_hydrology_widget.set_busy(False, 'Cálculo cancelado; se conservan los resultados anteriores.')
 
+    def _normalise_drainage_encoding(self):
+        # Portable projects may remember the old TauDEM display choice. Every
+        # current display/export uses the CAUMAX/ESRI direction model.
+        for state in (self._drainage_state,self._base_drainage_state):
+            if state is not None:
+                state['flow_encoding'] = 'caumax'
+
     def _display_drainage_layers(self):
+        self._normalise_drainage_encoding()
+        if self._delineation_cleared:
+            return
         if self._drainage_layers is None:
             from .drainage_layers import DrainageLayers
             self._drainage_layers = DrainageLayers(self.iface)
@@ -823,6 +877,7 @@ class BasinDialog(QDialog):
     def _refresh_drainage_controls(self):
         if not hasattr(self,'drainage_prepare_button'):
             return
+        self._normalise_drainage_encoding()
         analysis = self.analysis
         busy = bool(self._drainage_controller and self._drainage_controller.busy)
         improved = bool(analysis is not None and min(analysis.cell_width,analysis.cell_height)<500)
@@ -841,20 +896,15 @@ class BasinDialog(QDialog):
         if state and not busy:
             self.drainage_auto.setChecked(state['automatic'])
             self.drainage_visible.setChecked(state.get('network_visible',state.get('metadata',{}).get('visible',True)))
-            index = self.direction_encoding.findData(state['flow_encoding'])
-            self.direction_encoding.setCurrentIndex(max(0,index))
         elif not state and not busy:
             self.drainage_auto.setChecked(True)
             self.drainage_visible.setChecked(True)
-            self.direction_encoding.setCurrentIndex(0)
         self._drainage_loading = False
         self.drainage_prepare_button.setEnabled(allowed and source_available and not busy)
-        self.taudem_folder_button.setEnabled(not busy)
         self.drainage_cancel_button.setEnabled(busy)
         self.drainage_threshold.setEnabled(bool(state) and allowed and source_available and not busy)
         self.drainage_auto.setEnabled(bool(state) and allowed and source_available and not busy)
         self.drainage_visible.setEnabled(bool(state))
-        self.direction_encoding.setEnabled(bool(state) and not busy)
         for button in (self.dem_export_button,self.directions_export_button,self.network_export_button):
             button.setEnabled(bool(state) and not busy and not self._resolution_pending)
         if not improved:
@@ -864,29 +914,8 @@ class BasinDialog(QDialog):
                 f"TauDEM · umbral {state['threshold_area_m2']/1e6:g} km² · "
                 f"{len(state['features'])} tramos. Cada archivo se exporta por separado.")
         elif not busy:
-            self.drainage_status.setText('Pulsa Generar capas D8. El MDT y las direcciones conservarán la misma malla.')
+            self.drainage_status.setText('TauDEM predeterminado seleccionado. Pulsa Generar capas D8.')
         self._refresh_ai_button()
-
-    def _use_bundled_taudem(self):
-        from .taudem_engine import probe_taudem
-        info = probe_taudem()
-        if not info.get('available'):
-            self.drainage_status.setText(info.get('reason', 'El motor incluido no está disponible en esta plataforma.'))
-            return
-        QSettings().remove('HidroCAUMAX/taudem_bin')
-        self.drainage_status.setText('Motor TauDEM predeterminado seleccionado. Pulsa Generar capas D8.')
-
-    def _choose_taudem_folder(self):
-        initial = str(QSettings().value('HidroCAUMAX/taudem_bin',''))
-        folder = QFileDialog.getExistingDirectory(self,'Carpeta de ejecutables TauDEM',initial)
-        if folder:
-            from .taudem_engine import probe_taudem
-            info = probe_taudem(bin_dir=folder)
-            if not info.get('available'):
-                QMessageBox.warning(self,'TauDEM',info.get('reason','La carpeta no contiene las herramientas necesarias.'))
-                return
-            QSettings().setValue('HidroCAUMAX/taudem_bin',folder)
-            self.drainage_status.setText('TauDEM disponible. Puedes generar las capas del MDT activo.')
 
     def _prepare_drainage(self, *args):
         self._drainage_timer.stop()
@@ -896,10 +925,9 @@ class BasinDialog(QDialog):
             return
         try:
             from .taudem_engine import probe_taudem
-            bin_dir = str(QSettings().value('HidroCAUMAX/taudem_bin','')) or None
-            info = probe_taudem(bin_dir=bin_dir)
+            info = probe_taudem(bin_dir=None)
             if not info.get('available'):
-                self.drainage_status.setText(info.get('reason','No se puede preparar TauDEM. Reinstala el complemento o selecciona un motor externo.'))
+                self.drainage_status.setText(info.get('reason','No se puede preparar el motor TauDEM predeterminado. Comprueba la instalación del complemento.'))
                 return
             if self._drainage_controller is None:
                 from .drainage_controller import DrainageController
@@ -920,7 +948,7 @@ class BasinDialog(QDialog):
                 if exported and Path(exported).is_file():source_query=replace(source_query,dem_path=exported)
             self._drainage_controller.prepare(key,self.analysis,source_query,reference,cache,
                 threshold_area_m2=threshold,automatic=automatic,
-                encoding=self.direction_encoding.currentData(),bin_dir=bin_dir)
+                encoding='caumax',bin_dir=None)
             self._refresh_drainage_controls()
         except Exception as error:
             self._drainage_failed(str(error))
@@ -1018,11 +1046,6 @@ class BasinDialog(QDialog):
         self._display_drainage_layers()
         self._map_data={};self._restored=False
 
-    def _direction_encoding_changed(self,*args):
-        if self._drainage_loading or not self._drainage_state:return
-        self._drainage_state['flow_encoding']=self.direction_encoding.currentData()
-        self._cache_variant_state()
-
     def _export_hydrology(self,kind):
         if self._drainage_state is None:return
         if self._drainage_timer.isActive():
@@ -1039,16 +1062,16 @@ class BasinDialog(QDialog):
                 if not Path(paths[key]).is_file() and exported.get(export_key):paths[key]=exported[export_key]
             products=SimpleNamespace(analysis=self.analysis,metadata=state['metadata'],**paths)
         size=f'{self.analysis.cell_width:g}m'
-        names={'dem':f'MDT_{size}.tif','directions':f'Direccion_D8_{self.direction_encoding.currentData()}_{size}.tif','network':f'Red_drenaje_{size}.shp'}
+        names={'dem':f'MDT_{size}.tif','directions':f'Direccion_D8_caumax_{size}.tif','network':f'Red_drenaje_{size}.shp'}
         filters='Shapefile (*.shp)' if kind=='network' else 'GeoTIFF (*.tif *.tiff)'
         destination,_=QFileDialog.getSaveFileName(self,'Exportar capa hidrológica',str(Path.home()/names[kind]),filters)
         if not destination:return
         try:
             from .hydro_export import export_dem,export_directions,export_network
             if kind=='dem':path=export_dem(products,destination)
-            elif kind=='directions':path=export_directions(products,destination,encoding=self.direction_encoding.currentData())
+            elif kind=='directions':path=export_directions(products,destination,encoding='caumax')
             else:path=export_network(products,destination,snapshot=state)
-            export_key='directions_'+self.direction_encoding.currentData() if kind=='directions' else kind
+            export_key='directions_caumax' if kind=='directions' else kind
             state['metadata'].setdefault('exports',{})[export_key]=str(path)
             self.drainage_status.setText('Archivo guardado: '+str(path))
             self._cache_variant_state()
@@ -1135,7 +1158,11 @@ class BasinDialog(QDialog):
         self.save_project_button.setEnabled(self.analysis is not None)
         self.export_button.setEnabled(self._smoothing_ready)
         self._refresh_basin_hydrology_controls()
-        if controller is not None and getattr(controller, 'outlet_selection_context', None):
+        if self._outlet_apply_pending:
+            self._resume_outlet_selection(str(text))
+        if (controller is not None and getattr(controller, 'outlet_selection_context', None)
+                and self._outlet_dismissed_token != (controller,getattr(controller,'_generation',None))):
+            self._outlet_offer_pending = True
             QTimer.singleShot(0, self._offer_outlet_selection)
 
     def _refresh_outlet_button(self):
@@ -1144,14 +1171,25 @@ class BasinDialog(QDialog):
             and not self._resolution_pending and not self._saving_project
             and not self._basin_hydrology_busy()
             and not (self._drainage_controller and self._drainage_controller.busy)))
+        self.clear_delineation_button.setEnabled(bool(self.analysis is not None
+            and not self._disposed and not self._saving_project and not self._delineation_cleared))
+        if self._outlet_offer_pending:
+            QTimer.singleShot(0, self._offer_outlet_selection)
 
     def _offer_outlet_selection(self):
         controller = self._resolution_controller
-        if (not self._disposed and controller is not None
-                and getattr(controller, 'outlet_selection_context', None)):
+        if (self._outlet_offer_pending and not self._disposed and controller is not None
+                and getattr(controller, 'outlet_selection_context', None)
+                and not controller.busy and not self._saving_project
+                and not self._resolution_pending and not self._basin_hydrology_busy()
+                and not (self._drainage_controller and self._drainage_controller.busy)):
+            self._outlet_offer_pending = False
             self._open_outlet_selection()
 
     def _close_outlet_selection(self):
+        if self._outlet_apply_pending and self._outlet_manual_token is not None:
+            self._outlet_dismissed_token = self._outlet_manual_token
+        self._outlet_apply_pending = self._outlet_offer_pending = False
         dialog, self._outlet_selector = self._outlet_selector, None
         if dialog is not None:
             dialog.reject()
@@ -1168,13 +1206,17 @@ class BasinDialog(QDialog):
         try:
             from .outlet_selection import OutletSelectionDialog
             context = controller.selection_context()
-            dialog = OutletSelectionDialog(self.iface, context, self)
+            dialog = OutletSelectionDialog(self.iface, context, self, persistent=True)
             dialog.setAttribute(Qt.WA_DeleteOnClose)
             self._outlet_selector = dialog
-            dialog.accepted.connect(lambda: self._apply_outlet_selection(dialog, controller, context))
+            self._outlet_dismissed_token = None
+            dialog.applied.connect(lambda: self._apply_outlet_selection(dialog, controller, dialog.context))
             def finished(*args):
                 if self._outlet_selector is dialog:
+                    if self._outlet_apply_pending and self._outlet_manual_token is not None:
+                        self._outlet_dismissed_token = self._outlet_manual_token
                     self._outlet_selector = None
+                    self._outlet_apply_pending = False
             dialog.finished.connect(finished)
             dialog.show()
         except Exception as error:
@@ -1188,7 +1230,9 @@ class BasinDialog(QDialog):
         point = dialog.selection()
         if point is None:
             return
-        self._outlet_selector = None
+        self._outlet_apply_pending = True
+        self._outlet_manual_token = None
+        self._delineation_cleared = False
         self._cache_variant_state()
         self._cancel_drainage()
         self._cancel_basin_hydrology()
@@ -1200,8 +1244,38 @@ class BasinDialog(QDialog):
             if not controller.select_outlet(context, *point):
                 self._resolution_pending = False
                 self._refresh_basin_hydrology_controls()
+                self._resume_outlet_selection()
+            else:
+                self._outlet_manual_token = (controller,controller._generation)
         except Exception as error:
             self._resolution_error(str(error))
+
+    def _resume_outlet_selection(self, message=''):
+        dialog, controller = self._outlet_selector, self._resolution_controller
+        if (not self._outlet_apply_pending or dialog is None or controller is None
+                or self._disposed or controller.busy or self._resolution_pending
+                or self._basin_hydrology_busy()
+                or (self._drainage_controller and self._drainage_controller.busy)):
+            return
+        try:
+            dialog.rebind(controller.selection_context())
+            dialog.set_busy(False, message)
+        except Exception as error:
+            dialog.set_busy(True, 'No se puede reabrir el cierre aplicado: ' + str(error))
+        self._outlet_apply_pending = False
+
+    def _clear_delineation(self):
+        self._delineation_cleared = True
+        self._close_outlet_selection()
+        self._remove_preview()
+        for layers in (self._course_layers,self._boundary_layers,
+                       self._terrain_layers,self._drainage_layers):
+            if layers is not None:
+                layers.remove()
+        self._map_data = {}
+        self._restored = False
+        self.resolution_status.setText('Divisoria y capas de esta cuenca retiradas. Puedes ajustar el cierre o elegir otra resolución para dibujarla de nuevo.')
+        self._refresh_outlet_button()
 
     def _refresh_resolutions(self):
         self._close_outlet_selection()
@@ -1222,6 +1296,7 @@ class BasinDialog(QDialog):
         self._close_outlet_selection()
         if self._disposed or self._saving_project or self._resolution_controller is None:
             return
+        self._delineation_cleared = False
         self._cancel_drainage()
         self._cancel_basin_hydrology()
         self._cancel_surface()
@@ -1253,7 +1328,8 @@ class BasinDialog(QDialog):
     def _resolution_result(self, key, analysis, query):
         if self._disposed:
             return
-        self._close_outlet_selection()
+        if not self._outlet_apply_pending:
+            self._close_outlet_selection()
         previous_hydrology = self.basin_hydrology_widget.snapshot() or {}
         previous_quantiles = self.quantiles_widget.snapshot() or {}
         # A manual outlet can replace the current resolution in the controller.
@@ -1303,6 +1379,7 @@ class BasinDialog(QDialog):
         self._cache_variant_state()
         if not self._resolution_loading:
             self._queue_smoothing()
+        self._resume_outlet_selection()
 
     def _resolution_metadata(self, key=None):
         controller = self._resolution_controller
@@ -1452,8 +1529,10 @@ class BasinDialog(QDialog):
             self.basin_hydrology_widget.set_busy(False, self._smoothing_error)
             if task.trace:
                 QgsMessageLog.logMessage(task.trace, 'HidroCAUMAX', Qgis.Warning)
+            self._resume_outlet_selection(self._smoothing_error)
             return
-        self._close_outlet_selection()
+        if not self._outlet_apply_pending and not self._outlet_offer_pending:
+            self._close_outlet_selection()
         self.analysis = task.result['analysis']
         if self._base_drainage_state is None and self._drainage_state is not None:
             self._base_drainage_state = deepcopy(self._drainage_state)
@@ -1486,6 +1565,7 @@ class BasinDialog(QDialog):
             'Recálculo terminado con incidencias: ' + '; '.join(issues) + '.' if issues else
             f'MDT de {self.analysis.cell_width:g} m: todos los cálculos actualizados automáticamente.')
         self.resolution_progress.hide()
+        self._resume_outlet_selection()
 
     def _grid_visibility_changed(self, checked):
         if self._smoothing_loading or self._disposed or self.analysis is None:
@@ -1538,6 +1618,7 @@ class BasinDialog(QDialog):
         self.smoothing_status.setText('\n'.join(lines))
 
     def get_smoothing_state(self):
+        self._normalise_drainage_encoding()
         state = dict(original_checked=self.original_check.isChecked(), smooth_checked=self.smooth_check.isChecked(),
                     degree=self.smoothing_degree.value(),
                     base_geometry_wkb=bytes(self._base_geometry_wkb or self.analysis.geometry_wkb),
@@ -1576,6 +1657,8 @@ class BasinDialog(QDialog):
 
     def _sync_boundary_layers(self):
         """Keep real outlines independently of the temporary canvas overlays."""
+        if self._delineation_cleared:
+            return
         try:
             if self._boundary_layers is None:
                 from .boundary_layers import BoundaryLayers
@@ -1589,6 +1672,14 @@ class BasinDialog(QDialog):
             self.status.setText(self.status.text() + '\nNo se ha podido conservar la divisoria como capa: ' + str(error))
 
     def _preview(self, *args):
+        if self._delineation_cleared:
+            self._remove_preview()
+            # Removing the live drawing does not invalidate calculated geometry.
+            self._smoothing_ready = bool(self.preview_geometries)
+            self.export_button.setEnabled(self._smoothing_ready and self._surface_valid
+                and not self._basin_hydrology_busy() and not self._resolution_pending
+                and not self._saving_project)
+            return
         self._remove_preview()
         self._smoothing_ready = False
         self.export_button.setEnabled(False)
@@ -1876,6 +1967,9 @@ class BasinDialog(QDialog):
             item = controller.variants[key]
             analysis,query = item['analysis'],item['query']
             state = deepcopy(item.get('smoothing_state') or {})
+            for name in ('drainage_state','base_drainage_state'):
+                if state.get(name) is not None:
+                    state[name]['flow_encoding'] = 'caumax'
             if not state:
                 raise ValueError('Faltan los resultados completos del MDT de '+key+
                                  ' m. Pulsa Guardar proyecto para preparar todas las resoluciones.')
@@ -1920,6 +2014,7 @@ class BasinDialog(QDialog):
         self._parent_connections.clear()
         self._remove_preview()
         self.analysis, self.query = saved.analysis, saved.query
+        self._delineation_cleared = False
         state = saved.smoothing_state
         self._drainage_state = deepcopy(state.get('drainage_state'))
         self._base_drainage_state = deepcopy(state.get('base_drainage_state') or self._drainage_state)
@@ -1956,7 +2051,7 @@ class BasinDialog(QDialog):
             geometry = QgsGeometry()
             geometry.fromWkb(bytes(wkb))
             self.preview_geometries[kind] = geometry
-        if self._course_layers is not None:
+        if self._course_layers is not None and not self._delineation_cleared:
             self._course_layers.update(self.analysis,self.query,visibility=state.get('course_visibility'))
         self._sync_boundary_layers()
         self._preview()

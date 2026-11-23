@@ -82,12 +82,13 @@ class DrainageLayersTests(unittest.TestCase):
     def snapshot(self, path=None):
         return drainage.read_network_snapshot(SimpleNamespace(network_path=str(path or self.network())))
 
-    def directions(self):
-        path = self.folder/'taudem_d8.tif'
+    def directions(self, native=False):
+        path = self.folder/('taudem_d8.tif' if native else 'caumax_d8.tif')
         ds = gdal.GetDriverByName('GTiff').Create(str(path), 4, 2, 1, gdal.GDT_Byte)
         ds.SetGeoTransform((500000,25,0,4700050,0,-25));ds.SetProjection(self.crs.toWkt())
         ds.GetRasterBand(1).SetNoDataValue(0)
-        ds.GetRasterBand(1).WriteArray(np.arange(1,9,dtype=np.uint8).reshape(2,4));ds = None
+        values = np.arange(1,9,dtype=np.uint8) if native else np.array([1,2,4,8,16,32,64,128],dtype=np.uint8)
+        ds.GetRasterBand(1).WriteArray(values.reshape(2,4));ds = None
         return path
 
     def test_reader_is_pure_ogr_in_worker_and_preserves_fields_geometry_attributes(self):
@@ -152,21 +153,27 @@ class DrainageLayersTests(unittest.TestCase):
         self.assertEqual(bytes(records[0].geometry().asWkb()),state['features'][0]['wkb'])
         self.assertTrue(QgsWkbTypes.hasZ(layer.wkbType()))
 
-    def test_real_layers_network_visible_and_categorical_native_d8_hidden(self):
-        state = self.snapshot();state['tau_d8_path'] = str(self.directions())
+    def test_real_layers_network_visible_and_categorical_caumax_d8_hidden(self):
+        state = self.snapshot()
+        state['tau_d8_path'] = str(self.directions(native=True))
+        state['caumax_d8_path'] = str(self.directions())
+        state['flow_encoding'] = 'taudem'  # A legacy choice must not change the fixed display format.
         controller = self.controller();layers = controller.update(self.analysis, state)
         self.assertEqual(set(layers), {'network','directions'})
         self.assertEqual(controller.visibility(), {'network':True,'directions':False})
         self.assertEqual(layers['directions'].renderer().type(), 'paletted')
         classes = layers['directions'].renderer().classes()
-        self.assertEqual([c.value for c in classes], list(range(1,9)))
-        self.assertEqual([c.label for c in classes], ['E','NE','N','NW','W','SW','S','SE'])
-        self.assertEqual(Path(layers['directions'].source()), Path(state['tau_d8_path']))
+        self.assertEqual([c.value for c in classes], [1,2,4,8,16,32,64,128])
+        self.assertEqual([c.label for c in classes], ['E','SE','S','SW','W','NW','N','NE'])
+        self.assertEqual(Path(layers['directions'].source()), Path(state['caumax_d8_path']))
+        self.assertIn('CAUMAX/ESRI', layers['directions'].name())
         self.assertEqual({layer.id() for layer in layers.values()}, set(self.project.mapLayers())-self.initial_ids)
         self.assertIn('25×25 m', self.project.layerTreeRoot().findLayer(layers['network'].id()).parent().name())
 
-    def test_offline_network_survives_missing_native_raster_and_visibility_is_explicit(self):
-        state = self.snapshot();state['tau_d8_path'] = '/missing/offline.tif'
+    def test_offline_network_survives_missing_caumax_raster_without_native_fallback(self):
+        state = self.snapshot()
+        state['caumax_d8_path'] = '/missing/offline.tif'
+        state['tau_d8_path'] = str(self.directions(native=True))
         controller = self.controller();layers = controller.update(self.analysis, state, visible=False)
         self.assertIsNone(layers['directions']);self.assertEqual(layers['network'].featureCount(), 2)
         self.assertEqual(controller.visibility(), {'network':False,'directions':False})

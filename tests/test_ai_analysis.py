@@ -100,23 +100,32 @@ class ContextTests(unittest.TestCase):
         json.dumps(context,allow_nan=False)
 
     def test_new_snap_modes_share_numeric_diagnostics_without_the_location_proof(self):
-        for mode in ('upstream_main_course','upstream_lateral_main_course','user_selected_cell'):
+        for mode in ('upstream_main_course','upstream_lateral_main_course','user_selected_cell',
+                     'upstream_nearest_branch','upstream_lateral_nearest_branch'):
             analysis,query,state=sample_state()
             snap=analysis.diagnostics['outlet_snap']
             snap.update(selection_mode=mode,association_lateral_distance_m=18.,
                 channel_anchor_upstream_area_m2=25000.,section_projection_x=1234567,
                 section_projection_y=7654321,manual_requested_x=1234567,
                 manual_requested_y=7654321,downstream_connection_path=[[1234567,7654321]],
+                branch_distance_m=7.6, branch_runner_up_distance_m=95.25,
+                branch_ambiguity_tolerance_m=25., manual_selection_scope='raster_extent',
+                manual_raster_bounds=[1234567,7654321,1234568,7654322],
+                manual_raster_size=[100,100],
                 explicit_user_choice=(mode=='user_selected_cell'))
             context=ai.build_context(analysis,query,state)
             self.assertEqual(context['outlet_adjustment']['selection_mode'],mode)
             self.assertEqual(context['outlet_adjustment']['association_lateral_distance_m'],18.)
+            self.assertEqual(context['outlet_adjustment']['branch_distance_m'],7.6)
             encoded=json.dumps(context,allow_nan=False)
             for forbidden in ('1234567','7654321','section_projection','manual_requested',
-                              'downstream_connection_path','upstream_path'):
+                              'downstream_connection_path','upstream_path','manual_raster'):
                 self.assertNotIn(forbidden,encoded)
             if mode=='user_selected_cell':
                 self.assertIs(context['outlet_adjustment']['explicit_user_choice'],True)
+                self.assertEqual(context['outlet_adjustment']['manual_selection_scope'],'raster_extent')
+            else:
+                self.assertNotIn('manual_selection_scope',context['outlet_adjustment'])
 
     def test_precipitation_query_uses_shared_cell_statistics_not_interpolated_map_means(self):
         analysis,query,state=sample_state()

@@ -106,11 +106,11 @@ class DemHydrologyTests(unittest.TestCase):
         selected, snap, counts, _ = self.snap_codes(self.channel_fixture(), 6, 26)
         self.assertEqual((selected.row, selected.col), (8, 26))
         self.assertEqual((snap['channel_anchor_row'], snap['channel_anchor_col']), (8, 26))
-        self.assertEqual(snap['selection_mode'], 'upstream_lateral_main_course')
+        self.assertEqual(snap['selection_mode'], 'upstream_lateral_nearest_branch')
         self.assertEqual(snap['downstream_connection_path'], [[6, 26, 4], [7, 26, 4], [8, 26, 1]])
         self.assertEqual(snap['upstream_path'], [[8, 26, 1]])
-        self.assertEqual(snap['main_course_click_station_m'], 0.0)
-        self.assertEqual(snap['main_course_selected_station_m'], 0.0)
+        self.assertEqual(snap['branch_click_station_m'], 0.0)
+        self.assertEqual(snap['branch_selected_station_m'], 0.0)
         self.assertEqual(snap['section_projection_x'], selected.x)
         self.assertEqual(snap['section_projection_y'], selected.y)
         self.assertAlmostEqual(snap['association_lateral_distance_m'], 10.0)
@@ -124,11 +124,77 @@ class DemHydrologyTests(unittest.TestCase):
         selected, snap, counts, _ = self.snap_codes(self.channel_fixture(), 6, 26, dx=-1.5)
         self.assertEqual((selected.row, selected.col), (8, 25))
         self.assertEqual(snap['upstream_path'], [[8, 25, 1], [8, 26, 1]])
-        self.assertAlmostEqual(snap['main_course_click_station_m'], 1.5)
-        self.assertAlmostEqual(snap['main_course_selected_station_m'], 5.0)
+        self.assertAlmostEqual(snap['branch_click_station_m'], 1.5)
+        self.assertAlmostEqual(snap['branch_selected_station_m'], 5.0)
         self.assertAlmostEqual(snap['section_offset_m'], -3.5)
         self.assertLess(snap['candidate_upstream_area_m2'], snap['channel_anchor_upstream_area_m2'])
         self.assertEqual(snap['candidate_upstream_area_m2'], int(counts[8, 25]) * 25)
+
+    def branching_receiver(self, diagonal_cells=6):
+        codes = np.full((22, 22), 255, dtype=np.uint8)
+        codes[14, 5] = 1
+        codes[14, 6] = 0
+        codes[13, 4] = 2  # Bank pixel connects diagonally to the same receiver.
+        codes[11:14, 5] = 4  # Short north branch immediately beside the click.
+        for step in range(1, diagonal_cells + 1):
+            codes[14 - step, 5 + step] = 8  # Longer, larger NE branch farther from the click.
+        return codes
+
+    def test_fine_receiver_preserves_the_nearer_branch_before_comparing_global_lengths(self):
+        codes = self.branching_receiver()
+        selected, snap, counts, directions = self.snap_codes(codes, 13, 4, dx=2.4, dy=-1.5)
+        self.assertEqual((selected.row, selected.col), (13, 5))
+        self.assertEqual(snap['upstream_path'], [[13, 5, 4], [14, 5, 1]])
+        self.assertEqual(snap['section_source_cell'], [13, 5, 4])
+        self.assertLess(int(counts[13, 5]), int(counts[13, 6]))
+        self.assertAlmostEqual(snap['distance_m'], math.hypot(2.6, 1.5))
+        self.assertLessEqual(snap['section_offset_m'], 0)
+        dem = self.raster(200 - np.indices(codes.shape)[0])
+        analysis = hydro.analyze_basin(directions, dem, selected.x, selected.y)
+        course = ogr.CreateGeometryFromWkb(analysis.main_course_wkb)
+        self.assertEqual(course.GetPoint_2D(0), (selected.x, selected.y))
+        self.assertEqual(analysis.cell_count, 3)
+        self.assertEqual(analysis.area_m2, 3 * 25)
+        self.assertAlmostEqual(course.Length(), 10)
+        self.assertTrue(all(course.GetPoint_2D(i)[0] == selected.x for i in range(course.GetPointCount())))
+
+    def test_extending_the_farther_branch_does_not_change_the_fine_outlet(self):
+        choices = []
+        for diagonal_cells in (6, 12):
+            selected, snap, _, _ = self.snap_codes(self.branching_receiver(diagonal_cells),
+                                                   13, 4, dx=2.4, dy=-1.5)
+            choices.append((selected.row, selected.col, snap['section_source_cell']))
+        self.assertEqual(choices, [(13, 5, [13, 5, 4]), (13, 5, [13, 5, 4])])
+
+    def test_existing_clicked_tributary_is_not_silently_reclassified_as_lateral_drainage(self):
+        codes = self.branching_receiver()
+        codes[13, 4] = 255
+        with self.assertRaisesRegex(hydro.OutletSelectionRequired, 'rama geométricamente más próxima'):
+            self.snap_codes(codes, 13, 5, dy=-1.5)
+
+    def test_geometric_branch_ambiguity_is_not_resolved_by_different_contributions(self):
+        # North and NE segments are equidistant on their angle bisector, but
+        # their contributing areas differ. Geometry must still request review.
+        codes = self.branching_receiver()
+        codes[13, 4] = 255
+        codes[15, 5] = 64  # A separate lateral trace enters the receiver from south.
+        path = self.raster(codes, nodata=255)
+        dataset = gdal.Open(str(path))
+        transform = dataset.GetGeoTransform()
+        counts = hydro._flow_accumulation(dataset.GetRasterBand(1))
+        anchor = self.point(path, 14, 5)
+        # Exercise the branch geometry directly: the lateral trace's root is
+        # excluded by its incoming cell, not by the contributions of N and NE.
+        x, y = anchor[0] + (math.sqrt(2) - 1) * 4, anchor[1] + 4
+        try:
+            for shift in (0.0, 0.1):
+                with self.subTest(shift=shift), self.assertRaises(hydro.OutletSelectionRequired) as raised:
+                    hydro._b._nearest_upstream_segment(
+                        dataset.GetRasterBand(1), transform, x + shift, y, 14, 5, 250,
+                        counts=counts, exclude_incoming=((15, 5),))
+                self.assertEqual(raised.exception.selection_context['branch_ambiguity_tolerance_m'], .25)
+        finally:
+            dataset = None
 
     def test_large_unconnected_channel_is_not_selected_by_accumulation(self):
         selected, snap, counts, _ = self.snap_codes(self.channel_fixture(unrelated=True), 6, 26)
@@ -141,19 +207,22 @@ class DemHydrologyTests(unittest.TestCase):
             with self.subTest(col=col):
                 selected, snap, counts, _ = self.snap_codes([[1, 1, 1, 1, 1, 1, 0]], 0, col)
                 self.assertEqual((selected.row, selected.col), (0, col))
-                self.assertEqual(snap['selection_mode'], 'upstream_main_course')
+                self.assertEqual(snap['selection_mode'], 'upstream_nearest_branch')
                 self.assertEqual(snap['status'], 'unchanged')
                 self.assertEqual(snap['candidate_upstream_area_m2'], (col + 1) * 25)
                 self.assertEqual(snap['minimum_upstream_area_m2'], 25)
 
-    def test_symmetric_confluence_is_explicitly_ambiguous(self):
+    def test_shared_confluence_projection_represents_one_closure(self):
         codes = np.full((7, 11), 255, dtype=np.uint8)
         codes[5, :5] = 1
         codes[5, 6:] = 16
         codes[5, 5] = 0
         codes[4, 5] = 4
-        with self.assertRaisesRegex(ValueError, 'confluencia.*igual aporte'):
-            self.snap_codes(codes, 4, 5)
+        # Both segments project exactly onto the same confluence centre. There
+        # is only one closure, so selecting that common centre is unambiguous.
+        selected, snap, _, _ = self.snap_codes(codes, 4, 5)
+        self.assertEqual((selected.row, selected.col), (5, 5))
+        self.assertEqual(snap['candidate_count'], 1)
 
     def test_unprojectable_receiver_does_not_fall_back_to_tiny_lateral_basin(self):
         codes = np.full((7, 12), 255, dtype=np.uint8)

@@ -27,6 +27,23 @@ def _key(resolution):
     return format(number,'.12g')
 
 
+def _reference_area_m2(analysis):
+    """Keep the original 500 m reference when its outlet was chosen manually."""
+    diagnostic=analysis.diagnostics or {}
+    snap=diagnostic.get('outlet_snap') or {}
+    if (min(analysis.cell_width,analysis.cell_height)==500.0
+            and snap.get('method')=='manual_cell_d8'
+            and snap.get('selection_mode')=='user_selected_cell'
+            and snap.get('explicit_user_choice') is True):
+        area=float(snap['reference_area_m2'])
+    else:
+        area=float((diagnostic.get('analysis_surface') or {}).get(
+            'original_area_m2',analysis.area_m2))
+    if not math.isfinite(area) or area<=0:
+        raise ValueError('El área original de referencia debe ser positiva y finita.')
+    return area
+
+
 def _discover_resolutions(bounds,crs_wkt,cancelled,progress):
     from .dem_provider import discover_resolutions
     return discover_resolutions(bounds,crs_wkt,cancelled=cancelled,progress=progress)
@@ -68,6 +85,13 @@ def _buffered_bounds(analysis):
     if geometry is None or geometry.IsEmpty():
         raise ValueError('La cuenca original no tiene una geometría válida.')
     xmin,xmax,ymin,ymax=geometry.GetEnvelope()
+    original_x,original_y=float(analysis.selected_x),float(analysis.selected_y)
+    if not all(math.isfinite(value) for value in (original_x,original_y)):
+        raise ValueError('El punto original de consulta debe ser finito.')
+    # A manual outlet can be far from the original query. Finer DEMs still
+    # start from that exact query, so both must be covered by the download.
+    xmin,xmax=min(xmin,original_x),max(xmax,original_x)
+    ymin,ymax=min(ymin,original_y),max(ymax,original_y)
     padding=max(2000.0,.10*max(xmax-xmin,ymax-ymin))
     return (float(xmin-padding),float(ymin-padding),
             float(xmax+padding),float(ymax+padding))
@@ -216,6 +240,7 @@ class ResolutionController(QObject):
 
     def _set_base(self,analysis,query):
         self.base_analysis,self.base_query=analysis,query
+        self.reference_area_m2=_reference_area_m2(analysis)
         self._base_key=_key(min(analysis.cell_width,analysis.cell_height))
         self.bounds=_buffered_bounds(analysis)
         self.crs_wkt=str(analysis.crs_wkt)
@@ -271,7 +296,9 @@ class ResolutionController(QObject):
 
     def discover(self):
         if self._disposed:return False
+        selection_context=deepcopy(self.outlet_selection_context)
         self.cancel()
+        self.outlet_selection_context=selection_context
         bounds,crs=tuple(self.bounds),self.crs_wkt
         def operation(cancelled,publish):
             options=_discover_resolutions(bounds,crs,cancelled,
@@ -336,7 +363,7 @@ class ResolutionController(QObject):
     def selection_context(self):
         """Return the unresolved DEM, or the active calculation, for user review."""
         if self.outlet_selection_context:
-            return deepcopy(self.outlet_selection_context)
+            return dict(deepcopy(self.outlet_selection_context),manual_selection_scope='raster_extent')
         variant=self.variants[self.active_key]
         analysis,query=variant['analysis'],variant['query']
         x,y=_dem_point(query.dem_path,self._query_crs,self._query_x,self._query_y)
@@ -344,7 +371,8 @@ class ResolutionController(QObject):
             directions_path=str(query.directions_path),crs_wkt=analysis.crs_wkt,
             original_x=x,original_y=y,search_radius_m=self.snap_radius_m,
             initial_x=float(analysis.outlet_x),initial_y=float(analysis.outlet_y),
-            reference_area_m2=float(self.base_analysis.area_m2),
+            manual_selection_scope='raster_extent',
+            reference_area_m2=self.reference_area_m2,
             metadata=deepcopy(variant.get('metadata') or {}),
             reason='Elige el centro de cierre para esta resolución. Se recalculará toda la cuenca.')
 
@@ -373,8 +401,7 @@ class ResolutionController(QObject):
     def _start_build(self,key,kind):
         option=self._option_objects[key]
         snap_options={
-            'reference_area_m2':float((self.base_analysis.diagnostics.get('analysis_surface') or {}).get(
-                'original_area_m2', self.base_analysis.area_m2)),
+            'reference_area_m2':self.reference_area_m2,
             'reference_cell_width':float(self.base_analysis.cell_width),
             'reference_cell_height':float(self.base_analysis.cell_height),
             'snap_enabled':float(key)<float(self._base_key),

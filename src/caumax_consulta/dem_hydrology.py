@@ -28,6 +28,7 @@ from osgeo import gdal
 
 from . import basin as _b
 from .grid import cell_at_point
+from .outlet_errors import OutletSelectionRequired
 from .terrain import Analysis, analyze_basin
 
 
@@ -53,14 +54,6 @@ class DemResult:
 
     def __getattr__(self, name):
         return getattr(object.__getattribute__(self, "analysis"), name)
-
-
-class OutletSelectionRequired(ValueError):
-    """Native D8 is ready, but its automatic outlet needs an explicit choice."""
-
-    def __init__(self, message, selection_context):
-        super().__init__(message)
-        self.selection_context = dict(selection_context)
 
 
 def availability_engine():
@@ -785,66 +778,6 @@ def _channel_receivers(band, transform, original, original_x, original_y,
     return trace, receivers
 
 
-def _project_main_course(path, transform, original_x, original_y, radius, cancelled):
-    """Orthogonal section on a connected local prefix of a global main course.
-
-    A foot clamped beyond an endpoint is not evidence for a section. Distinct
-    equally near stations are ambiguous, while two segments sharing the same
-    vertex are one station. Return the first native centre at/above the foot.
-    """
-    width, height = transform[1], -transform[5]
-    tolerance = max(width, height) * 1e-7
-    local, points, stations = [], [], []
-    for index, entry in enumerate(path):
-        if index % 1000 == 0:
-            _check(cancelled)
-        row, col, _ = entry
-        point = (transform[0] + (col + 0.5) * width,
-                 transform[3] - (row + 0.5) * height)
-        if math.hypot(point[0] - original_x, point[1] - original_y) > radius + tolerance:
-            break
-        station = (stations[-1] + math.hypot(point[0] - points[-1][0], point[1] - points[-1][1])
-                   if points else 0.0)
-        local.append(entry)
-        points.append(point)
-        stations.append(station)
-    if len(local) < 2:
-        return None
-    projections = []
-    for index, (start, stop) in enumerate(zip(points, points[1:])):
-        if index % 1000 == 0:
-            _check(cancelled)
-        vx, vy = stop[0] - start[0], stop[1] - start[1]
-        length = math.hypot(vx, vy)
-        raw = ((original_x - start[0]) * vx + (original_y - start[1]) * vy) / (length * length)
-        fraction = min(1.0, max(0.0, raw))
-        px, py = start[0] + fraction * vx, start[1] + fraction * vy
-        distance = math.hypot(px - original_x, py - original_y)
-        station = stations[index] + fraction * length
-        projections.append((distance, station, index, fraction, raw, px, py, length))
-    closest = min(item[0] for item in projections)
-    nearest = [item for item in projections if abs(item[0] - closest) <= tolerance]
-    if max(item[1] for item in nearest) - min(item[1] for item in nearest) > tolerance:
-        raise ValueError('La sección original tiene varias proyecciones igualmente próximas sobre '
-                         'tramos distintos del cauce. Marca un punto inequívoco del tramo deseado.')
-    orthogonal = [item for item in nearest if -tolerance / item[7] <= item[4] <= 1 + tolerance / item[7]]
-    if not orthogonal:
-        return None
-    distance, station, index, fraction, raw, px, py, length = orthogonal[0]
-    selected_index = index if fraction * length <= tolerance else index + 1
-    source = local[index + 1]
-    selected_station = stations[selected_index]
-    sx, sy = points[selected_index]
-    down_x = (points[index][0] - points[index + 1][0]) / length
-    down_y = (points[index][1] - points[index + 1][1]) / length
-    offset = (sx - original_x) * down_x + (sy - original_y) * down_y
-    if offset > tolerance or abs(offset - (station - selected_station)) > tolerance:
-        return None
-    return dict(path=list(reversed(local[:selected_index + 1])), source=list(source),
-                selected_station=selected_station, click_station=station,
-                projection=(px, py), lateral_distance=distance, offset=offset)
-
-
 def _associated_channel(band, transform, original_x, original_y, counts, radius, cancelled):
     rows, cols = counts.shape
     original = cell_at_point(original_x, original_y, transform[0],
@@ -863,81 +796,74 @@ def _associated_channel(band, transform, original_x, original_y, counts, radius,
         if selected_receiver is not None and receiver['other'] <= selected_receiver['other']:
             continue
         anchor = trace[receiver['index']]
-        visit = _b._visit_upstream(band, anchor[0], anchor[1], cancelled, lambda n: None,
-                                  path_cell_size=(original.width, original.height))
-        main_path, main_length = visit[4:]
-        if visit[2] != int(counts[anchor[0], anchor[1]]):
-            raise ValueError('La acumulación no coincide con la cuenca D8 del receptor.')
-        del visit
-        if any(entry[:2] == [original.row, original.col] for entry in main_path):
-            continue  # The clicked branch already is this receiver's main course.
-        # Use the actual lateral junction, not a later confluence whose longest
-        # course merely follows a shared piece of the original drainage trace.
-        prefix = {tuple(entry[:2]) for entry in trace[:receiver['index']]}
-        if any(tuple(entry[:2]) in prefix for entry in main_path):
-            continue
         unresolved_receiver = True
-        projection = _project_main_course(main_path, transform, original_x, original_y,
-                                           radius, cancelled)
-        if projection is None:
-            continue  # Do not turn an endpoint clamp into a lateral association.
-        # An equal contributing branch at the same local geometric distance is
-        # ambiguous; DFS order must not silently choose a different tributary.
-        if len(receiver['other_cells']) > 1:
-            distances = []
-            ax = transform[0] + (anchor[1] + 0.5) * transform[1]
-            ay = transform[3] + (anchor[0] + 0.5) * transform[5]
-            for entry in receiver['other_cells']:
-                ux = transform[0] + (entry[1] + 0.5) * transform[1]
-                uy = transform[3] + (entry[0] + 0.5) * transform[5]
-                vx, vy = ux - ax, uy - ay
-                fraction = min(1.0, max(0.0, ((original_x - ax) * vx + (original_y - ay) * vy)
-                                        / (vx * vx + vy * vy)))
-                distances.append(math.hypot(ax + fraction * vx - original_x,
-                                           ay + fraction * vy - original_y))
-            ordered = sorted(distances)
-            if abs(ordered[0] - ordered[1]) <= max(original.width, original.height) * 1e-7:
-                raise ValueError('La conexión del punto original llega a una confluencia con dos '
-                                 'ramas de igual aporte y proximidad. Marca el cauce deseado; '
-                                 'no se publica una cuenca elegida por desempate.')
-        row, col, _ = projection['path'][0]
-        x = transform[0] + (col + 0.5) * transform[1]
-        y = transform[3] + (row + 0.5) * transform[5]
-        effective = cell_at_point(x, y, transform[0], transform[3] + rows * transform[5],
-                                  transform[0] + cols * transform[1], transform[3], cols, rows)
+        try:
+            # Identify the nearby branch from its real local segments before
+            # calculating any longest course. Excluding the original inflow
+            # prevents its lateral drainage line becoming its own receiver.
+            projection = _b._nearest_upstream_segment(
+                band, transform, original_x, original_y, anchor[0], anchor[1], radius, cancelled,
+                counts=counts, exclude_incoming=(tuple(trace[receiver['index'] - 1][:2]),))
+        except OutletSelectionRequired as error:
+            if error.selection_context.get('reason_code') == 'no_candidate':
+                continue
+            raise
+        if int(counts[original.row, original.col]) > 1:
+            # A clicked cell with an actual entering reach may already belong
+            # to the desired tributary. Its own branch must not be silently
+            # discarded as if it were just a one-cell lateral connection.
+            all_branches = _b._nearest_upstream_segment(
+                band, transform, original_x, original_y, anchor[0], anchor[1], radius, cancelled,
+                counts=counts)
+            prefix = {tuple(entry[:2]) for entry in trace[:receiver['index']]}
+            if (any(tuple(entry[:2]) in prefix for entry in all_branches['path'][:-1])
+                    and all_branches['path'][0][:2] != projection['path'][0][:2]):
+                raise OutletSelectionRequired(
+                    'El clic ya tiene un tramo D8 entrante y la rama geométricamente más próxima '
+                    'es la suya. La asociación lateral propone otro ramal; elige el cierre '
+                    'en el mapa para conservar el cauce deseado.',
+                    {'reason_code': 'original_branch_conflict'})
+        effective = projection['cell']
+        row, col, x, y = effective.row, effective.col, effective.x, effective.y
         ax = transform[0] + (anchor[1] + 0.5) * transform[1]
         ay = transform[3] + (anchor[0] + 0.5) * transform[5]
         diagnostic = dict(
-            method='upstream_section_d8', selection_mode='upstream_lateral_main_course',
+            method='upstream_section_d8', selection_mode='upstream_lateral_nearest_branch',
             original_x=float(original_x), original_y=float(original_y),
             snapped_x=float(x), snapped_y=float(y),
             original_row=original.row, original_col=original.col, original_direction=trace[0][2],
             snapped_row=row, snapped_col=col, status='snapped',
             distance_m=float(math.hypot(x - original_x, y - original_y)), search_radius_m=radius,
             section_direction=projection['source'][2], section_source_cell=projection['source'],
-            section_direction_source='associated_main_course', section_offset_m=float(projection['offset']),
+            section_direction_source='associated_nearest_branch', section_offset_m=float(projection['offset']),
+            projection_kind=projection['projection_kind'],
             section_projection_x=float(projection['projection'][0]),
             section_projection_y=float(projection['projection'][1]),
-            main_course_click_station_m=float(projection['click_station']),
-            main_course_selected_station_m=float(projection['selected_station']),
-            main_course_length_m=float(main_length), main_course_cells=len(main_path),
+            branch_click_station_m=float(projection['click_station']),
+            branch_selected_station_m=float(projection['selected_station']),
+            branch_path_length_m=float(projection['branch_path_length_m']),
+            branch_path_cells=projection['branch_path_cells'],
+            branch_distance_m=float(projection['best_distance_m']),
+            branch_runner_up_distance_m=projection['runner_up_distance_m'],
+            branch_ambiguity_tolerance_m=float(projection['ambiguity_tolerance_m']),
             upstream_path=projection['path'], upstream_path_length_m=float(projection['selected_station']),
             downstream_connection_path=trace[:receiver['index'] + 1],
             channel_anchor_row=anchor[0], channel_anchor_col=anchor[1],
             channel_anchor_x=float(ax), channel_anchor_y=float(ay),
             channel_anchor_upstream_area_m2=float(int(counts[anchor[0], anchor[1]]) * cell_area),
-            association_method='relative_inflow_join',
+            association_method='relative_inflow_join_nearest_branch',
             association_incoming_area_m2=float(receiver['incoming'] * cell_area),
             association_other_inflow_area_m2=float(receiver['other'] * cell_area),
             association_lateral_distance_m=float(projection['lateral_distance']),
             association_trace_length_m=float(receiver['trace_length']),
-            candidate_count=len(receivers), tie_break='main_course_d8_order',
+            candidate_count=projection['candidate_count'], tie_break='nearest_branch_geometry',
             minimum_upstream_area_m2=float(cell_area), channel_filter='topological_receiver',
             original_cell_upstream_area_m2=float(int(counts[original.row, original.col]) * cell_area),
             candidate_upstream_area_m2=float(int(counts[row, col]) * cell_area),
             policy='plugin: relative lateral inflows rank receivers along the original D8 trace; '
-                   'project the unchanged click onto the associated global longest D8 course; '
-                   'choose its first native centre on or upstream of that section; '
+                   'identify the nearest unambiguous connected local branch before computing its final longest course; '
+                   'choose its first native centre on or upstream of the original section; '
+                   'distinct closures within 5% of the smaller cell side require review; '
                    'no coarse-area threshold and no automatic downstream outlet')
         if selected_result is not None:
             if (effective.row, effective.col) != (selected_result[0].row, selected_result[0].col):
@@ -954,8 +880,8 @@ def _associated_channel(band, transform, original_x, original_y, counts, radius,
         raise ValueError('Se encuentra un cauce receptor conectado, pero no una proyección inequívoca '
                          'de la sección original sobre su tramo dentro del radio. Marca el tramo '
                          'deseado; no se acepta como alternativa la pequeña cuenca lateral del clic.')
-    # A click already on its main course, including a small/headwater basin,
-    # needs no minimum-area gate. Keep its original branch and exact section.
+    # An aligned click, including a small/headwater basin, needs no minimum
+    # area gate. Identify its local branch before computing the final course.
     effective, diagnostic = _b._upstream_section_cell(
         band, transform, original_x, original_y, radius,
         counts=counts, require_channel=False, cancelled=cancelled)
@@ -1041,10 +967,12 @@ def analyze_dem(dem_path, outlet_x, outlet_y, cache_dir,
 
     DEM: north-up, unrotated, metric projected grid with metre elevations.
     Without snap_enabled the containing input cell is used. With snapping, the
-    clicked cell's bounded downstream trace associates a receiving main course;
-    the exact original point is projected onto that course and its first centre
-    on or upstream of the section is selected. An already aligned click retains
-    its own main course. The search radius is max(500m, reference-cell diagonal);
+    clicked cell's bounded downstream trace associates a receiving network;
+    local segment proximity identifies the branch and the exact original point
+    defines its section. The first centre on or upstream of it is selected;
+    indistinguishable branches require a manual choice. The longest course is
+    computed only after the outlet is fixed. The search radius is
+    max(500m, reference-cell diagonal);
     the coarse basin area remains an informative comparison, never a threshold.
     Relative inflow ranking and the section projection are explicit plugin policy,
     not a physical channel classification inferred from an absolute area gate.
@@ -1196,12 +1124,13 @@ def analyze_dem(dem_path, outlet_x, outlet_y, cache_dir,
              "Las cotas, el TRI y la pendiente local se calculan sobre el MDT original, sin rellenarlo ni remuestrearlo.")
     if snap is not None:
         association = ("Se ha seguido la traza D8 fina del punto original para asociar el cauce "
-                       "receptor por sus aportes relativos. El receptor identifica la conexión; "
-                       "la sección se obtiene proyectando el punto original sobre su curso principal. "
+                       "receptor por sus aportes relativos. Después se identifica el ramal por "
+                       "la proximidad de sus segmentos reales al clic, sin decidirlo por su longitud global. "
+                       "La sección se obtiene proyectando el punto original sobre ese ramal. "
                        f"Separación lateral {snap['association_lateral_distance_m']:.2f} m. "
-                       if snap.get('selection_mode') == 'upstream_lateral_main_course' else
-                       "El punto mantiene su rama D8 original; la sección se proyecta sobre el "
-                       "primer tramo entrante de su curso principal de máxima longitud. ")
+                       if snap.get('selection_mode') == 'upstream_lateral_nearest_branch' else
+                       "El ramal D8 local se identifica por proximidad al punto original. "
+                       "La longitud del curso principal se calcula después de fijar el cierre. ")
         notes += (f"Cierre en la misma sección o aguas arriba: "
                   f"({snap['snapped_x']:.3f}, {snap['snapped_y']:.3f}), "
                   f"a {snap['distance_m']:.2f} m del punto original. "

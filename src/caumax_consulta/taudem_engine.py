@@ -100,7 +100,7 @@ def probe_taudem(bin_dir=None):
         missing.append("MPI/mpiexec")
     return {"available": not missing, "reason": "" if not missing else
             "TauDEM real no está disponible. Falta: " + ", ".join(missing) +
-            ". Seleccione su carpeta TauDEM e instale las dependencias oficiales: " + INSTALL_URL,
+            ". Revisa el motor predeterminado y sus dependencias oficiales: " + INSTALL_URL,
             "executables": executables, "mpiexec": mpi, "engine": "TauDEM",
             "installation_url": INSTALL_URL, "bin_dir": str(bin_dir) if bin_dir is not None else None,
             "runtime": {"kind": "external"}}

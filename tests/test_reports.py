@@ -195,7 +195,7 @@ class ReportTests(unittest.TestCase):
         for expected in (
             'INFORME DE CONSULTA', 'Suavizado de la divisoria',
             'Original: sin seleccionar; Suavizada: seleccionada', 'Grado de suavizado: 4,5',
-            '172,123', '66,456', '1,5522', '0,4149', '-4,376', '-25,330',
+            '172,12', '66,46', '1,55', '0,41', '-4,376', '-25,330',
             'Fuente de la comparación: geometrías de la vista previa actual',
             'los 19 parámetros de la cuenca original',
         ):
@@ -221,10 +221,10 @@ class ReportTests(unittest.TestCase):
         state['stats']['suavizada'].update(area_km2=160.987, perimeter_km=60.321)
         after = reports.build_report_html(self.analysis, self.query, state)
         self.assertIn('Grado de suavizado: <b>45</b>', after)
-        self.assertIn('160,987', after)
-        self.assertIn('60,321', after)
-        self.assertNotIn('170,123', after)
-        self.assertNotIn('65,456', after)
+        self.assertIn('160,99', after)
+        self.assertIn('60,32', after)
+        self.assertNotIn('170,12', after)
+        self.assertNotIn('65,46', after)
         marker = '<h2>Morfología de la Cuenca</h2>'
         original_table_before = before.split(marker, 1)[1].split('</table>', 1)[0]
         original_table_after = after.split(marker, 1)[1].split('</table>', 1)[0]
@@ -235,10 +235,10 @@ class ReportTests(unittest.TestCase):
         )
         text = normalized(' '.join(page.extract_text() for page in PdfReader(str(result)).pages))
         self.assertIn('Grado de suavizado: 45', text)
-        self.assertIn('160,987', text)
-        self.assertNotIn('170,123', text)
+        self.assertIn('160,99', text)
+        self.assertNotIn('170,12', text)
 
-    def test_tiny_original_and_smoothed_areas_use_the_shared_adaptive_precision(self):
+    def test_tiny_original_and_smoothed_areas_respect_two_decimal_display_limit(self):
         self.analysis.values['area_km2'] = .00125
         state = {
             'original_checked': True, 'smooth_checked': True, 'degree': 45.0,
@@ -253,7 +253,7 @@ class ReportTests(unittest.TestCase):
             open_after=False, smoothing_state=state,
         )
         text = normalized(' '.join(page.extract_text() for page in PdfReader(str(result)).pages))
-        for expected in ('0,00125', '0,000000450', '0,00533', '-99,964'):
+        for expected in ('<0,01', '0,15', '-99,964'):
             self.assertIn(expected, text)
 
     def test_save_dialog_passes_the_exact_smoothing_snapshot_to_generator(self):
@@ -296,11 +296,11 @@ class ReportTests(unittest.TestCase):
         )
         text = normalized(' '.join(page.extract_text() for page in PdfReader(str(result)).pages))
         for expected in (
-            'HidroCAUMAX v1.2.6', 'Resolución MDT seleccionada', 'MDT25 IGN',
+            'HidroCAUMAX v1.2.7', 'Resolución MDT seleccionada', 'MDT25 IGN',
             '25,00 × 25,00 m', 'IGN/CNIG', 'https://centrodedescargas.cnig.es/',
             'Mayor detalle espacial', 'Caudal CAUMAX original', '177.000000 m³/s',
             'no se recalcula al descargar o seleccionar otro MDT',
-            'corresponden exclusivamente al MDT activo', '0,450', '25mx25m',
+            'corresponden exclusivamente al MDT activo', '0,45', '25mx25m',
             'MDT activo: IGN/CNIG', 'Direcciones D8: GRASS r.watershed sobre el MDT activo',
         ):
             self.assertIn(expected, text)
@@ -370,7 +370,7 @@ class ReportTests(unittest.TestCase):
         self.assertIn('HI exacto: 0,46', text)
         self.assertNotIn('HI exacto: 0,4565', text)
         self.assertEqual(self.analysis.values['hypsometric'], .4565)
-        self.assertEqual(schema.format_value('hypsometric', .4565), '0,4565')
+        self.assertEqual(schema.format_value('hypsometric', .4565), '0,46')
 
     def test_pdf_direction_provenance_uses_recorded_engine_instead_of_resolution(self):
         self.analysis.diagnostics['dem_hydrology'] = {'engine': 'TauDEM D8FlowDir'}
@@ -471,7 +471,7 @@ class ReportTests(unittest.TestCase):
             )
         reader = PdfReader(str(result)); text = pdf_text(reader)
         for expected in (
-            'P₀ y precipitación máxima diaria de la cuenca', 'P₀ bruto', '0,000',
+            'P₀ y precipitación máxima diaria de la cuenca', 'P₀ bruto', '0,00',
             'Cobertura (%)', 'Área válida (%)', '75,00', '50,00', 'Parcial',
             'No disponible', 'Sin calcular', 'p0.tif', 't5.tif', 'Píxeles',
             'píxeles intersectados incluyen los NoData',
@@ -507,7 +507,7 @@ class ReportTests(unittest.TestCase):
                    side_effect=AssertionError('No uncomputed rainfall plots')) as renderer:
             section = reports._basin_hydrology_report_html(self.analysis, {'basin_hydrology': snapshot})
         self.assertIn('P₀ bruto', section)
-        self.assertIn('0,000', section)
+        self.assertIn('0,00', section)
         self.assertIn('Precipitación máxima diaria: no calculada', section)
         self.assertNotIn('T introducido', section)
         self.assertNotIn('<img', section)
@@ -557,8 +557,8 @@ class ReportTests(unittest.TestCase):
         for expected in (
             'Ajuste de la sección de cierre', 'Punto original: X = 338834.500; Y = 4715307.100',
             'Cierre de cálculo (centro de celda): X = 338925.000; Y = 4715400.000', 'Desplazamiento: 129,70 m',
-            'radio de búsqueda: 707,11 m', 'Área mínima: 162,000 km²',
-            'área de referencia: 180,000 km²', 'área aportante del cierre: 181,250 km²',
+            'radio de búsqueda: 707,11 m', 'Área mínima: 162,00 km²',
+            'área de referencia: 180,00 km²', 'área aportante del cierre: 181,25 km²',
             '177.000000 m³/s', 'El caudal CAUMAX original se conserva en el punto consultado',
             'una celda de cauce distinta',
         ):
@@ -583,6 +583,36 @@ class ReportTests(unittest.TestCase):
         self.assertIn('107,52', content)
         self.assertNotIn('una celda de cauce distinta', content)
 
+    def test_snap_report_distinguishes_local_branch_choice_from_legacy_longest_route(self):
+        base = dict(original_x=338834.5, original_y=4715307.1,
+                    snapped_x=338825., snapped_y=4715400., distance_m=93.39,
+                    search_radius_m=707.106781, reference_area_m2=180e6,
+                    candidate_upstream_area_m2=90e6, status='snapped')
+        for mode in ('upstream_nearest_branch', 'upstream_lateral_nearest_branch'):
+            with self.subTest(mode=mode):
+                self.analysis.diagnostics['outlet_snap'] = dict(base, selection_mode=mode)
+                content = reports._outlet_snap_report_html(self.analysis)
+                self.assertIn('ramal', content)
+                self.assertIn('próximo' if mode.startswith('upstream_lateral') else 'proximidad', content)
+                self.assertIn('selección manual', content)
+                self.assertNotIn('Área mínima:', content)
+                self.assertNotIn('consulta guardada en 1.2.6', content)
+        self.analysis.diagnostics['outlet_snap'] = dict(base, selection_mode='upstream_main_course')
+        self.assertIn('consulta guardada en 1.2.6', reports._outlet_snap_report_html(self.analysis))
+
+    def test_manual_raster_extent_report_does_not_describe_707m_as_a_manual_limit(self):
+        self.analysis.diagnostics['outlet_snap'] = dict(
+            selection_mode='user_selected_cell', explicit_user_choice=True,
+            manual_selection_scope='raster_extent', original_x=338834.5, original_y=4715307.1,
+            snapped_x=341325., snapped_y=4715400., distance_m=2492.22,
+            search_radius_m=707.106781, reference_area_m2=180e6,
+            candidate_upstream_area_m2=90e6, status='snapped')
+        content = reports._outlet_snap_report_html(self.analysis)
+        self.assertIn('no limita esta elección manual', content)
+        self.assertIn('extensión con datos válidos del MDT', content)
+        self.assertIn('2492,22', content)
+        self.assertIn('El caudal CAUMAX original se conserva', content)
+
     def test_map_snapshot_is_embedded_in_pdf_with_caption_and_results(self):
         image = QImage(1200, 600, QImage.Format_RGB32)
         image.fill(QColor('#b8dce9'))
@@ -602,7 +632,7 @@ class ReportTests(unittest.TestCase):
         text = normalized(' '.join(page.extract_text() for page in reader.pages))
         for expected in ('Mapa de la cuenca completa', 'EPSG:25830',
                          'Cartografía local de prueba.', 'Morfología de la Cuenca',
-                         '3,543', 'Tc(L10-85)'):
+                         '3,54', 'Tc(L10-85)'):
             self.assertIn(expected, text)
         for metric in schema.METRICS:
             self.assertIn(normalized(metric.label), text)

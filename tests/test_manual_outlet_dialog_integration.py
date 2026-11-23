@@ -7,20 +7,31 @@ import unittest
 from unittest.mock import patch
 
 from qgis.PyQt.QtTest import QTest
+from qgis.PyQt.QtCore import pyqtSignal
 from qgis.PyQt.QtWidgets import QDialog
+from qgis.core import QgsProject, QgsVectorLayer
 
 import test_regression_resolution_save as fixture
 from caumax_consulta.resolution_controller import ResolutionController
+from caumax_consulta.basin_dialog import AnalysisTask
+from caumax_consulta.outlet_errors import OutletSelectionRequired
+from caumax_consulta.terrain import analyze_basin
+from caumax_consulta.map_capture import capture_basin_map as real_capture_basin_map
+from caumax_consulta.session_store import load_session
 
 
 class FakeOutletSelectionDialog(QDialog):
     instances = []
+    applied = pyqtSignal()
 
-    def __init__(self, iface, context, parent=None):
+    def __init__(self, iface, context, parent=None, *, persistent=False):
         super().__init__(parent)
         self.context = deepcopy(context)
         self.point = None
         self.rejections = 0
+        self.busy = False
+        self.persistent = persistent
+        self.bindings = []
         self.instances.append(self)
 
     def selection(self):
@@ -28,7 +39,18 @@ class FakeOutletSelectionDialog(QDialog):
 
     def choose(self, x, y):
         self.point = (x, y)
-        self.accept()
+        self.busy = True
+        self.applied.emit()
+
+    def set_busy(self, busy, message=''):
+        self.busy = busy
+        self.message = message
+
+    def rebind(self, context):
+        self.context = deepcopy(context)
+        self.bindings.append(self.context)
+        self.point = None
+        self.busy = False
 
     def reject(self):
         self.point = None
@@ -101,8 +123,18 @@ class ManualOutletDialogIntegrationTests(unittest.TestCase):
         old_state = deepcopy(controller.variants['25']['smoothing_state'])
         original_x, original_y = self.helper.fixture.query.x, self.helper.fixture.query.y
         first = self.finish_manual(original_x, original_y + 25)
+        selector = dialog._outlet_selector
+        self.assertIsNotNone(selector)
+        self.assertFalse(selector.busy)
+        self.assertEqual((selector.context['initial_x'],selector.context['initial_y']),
+                         (first.outlet_x,first.outlet_y))
         self.assertNotEqual(first.geometry_wkb, old_state['base_geometry_wkb'])
         second = self.finish_manual(original_x - 25, original_y)
+        self.assertIs(dialog._outlet_selector,selector)
+        self.assertEqual(len(FakeOutletSelectionDialog.instances),1)
+        self.assertEqual(len(selector.bindings),2)
+        self.assertEqual((selector.context['initial_x'],selector.context['initial_y']),
+                         (second.outlet_x,second.outlet_y))
         self.assertNotEqual(second.geometry_wkb, first.geometry_wkb)
         current = controller.variants['25']
         self.assertEqual(current['smoothing_state']['base_geometry_wkb'], second.geometry_wkb)
@@ -187,6 +219,188 @@ class ManualOutletDialogIntegrationTests(unittest.TestCase):
         self.assertEqual((dialog._active_resolution_key, controller.active_key), ('5', '5'))
         self.assertEqual(dialog.analysis.cell_width, 5)
         dialog._cancel_surface()
+
+    def test_initial_500_ambiguity_keeps_real_basin_and_waits_for_discovery_and_surface(self):
+        coarse=self.helper.variant(500)
+        query=coarse['query']
+        context=dict(dem_path=query.dem_path,directions_path=query.directions_path,
+            crs_wkt=query.crs.toWkt(),original_x=query.x,original_y=query.y,
+            search_radius_m=707.106781)
+        task=AnalysisTask(query,self.dialog._completed)
+        def ambiguous_once(*args,**kwargs):
+            if kwargs.get('upstream_only'):
+                raise OutletSelectionRequired('Dos ramales de entrada.',context)
+            return analyze_basin(*args,**kwargs)
+        self.dialog.query=query
+        self.dialog._task=task
+        with patch('caumax_consulta.terrain.analyze_basin',side_effect=ambiguous_once) as calculate:
+            self.assertTrue(task.run(),task.error)
+        self.assertEqual(calculate.call_count,2)
+        self.assertEqual(task.result.geometry_wkb,coarse['analysis'].geometry_wkb)
+        self.assertNotIn('outlet_snap',task.result.diagnostics)
+        task.finished(True)
+        controller=self.dialog._resolution_controller
+        discovery=controller._task
+        self.assertTrue(controller.busy)
+        self.assertEqual(controller.selection_context()['resolution_key'],'500')
+        self.assertIn('pendiente de revisión',' '.join(self.dialog.analysis.notes))
+        QTest.qWait(10)
+        self.assertIsNone(self.dialog._outlet_selector)
+        self.dialog._queue_smoothing()
+        self.dialog._smoothing_timer.stop()
+        self.dialog._update_smoothing()
+        surface=self.helper.manager.tasks[-1]
+        self.assertTrue(self.dialog._surface_pending)
+        discovery.payload={'options':[],'engine':{'available':False,'reason':'Prueba sin red'}}
+        discovery.finished(True)
+        QTest.qWait(10)
+        self.assertIsNone(self.dialog._outlet_selector)
+        self.helper.publish(surface)
+        QTest.qWait(10)
+        selector=self.dialog._outlet_selector
+        self.assertIsNotNone(selector)
+        self.assertEqual(len(FakeOutletSelectionDialog.instances),1)
+        self.assertEqual(selector.context['manual_selection_scope'],'raster_extent')
+        self.assertEqual(selector.context['reference_area_m2'],coarse['analysis'].area_m2)
+        original_result=self.dialog.analysis
+        selector.reject()
+        self.dialog._refresh_outlet_button()
+        QTest.qWait(10)
+        self.assertIsNone(self.dialog._outlet_selector)
+        self.assertEqual(len(FakeOutletSelectionDialog.instances),1)
+        self.assertIs(self.dialog.analysis,original_result)
+        review=self.dialog.analysis.diagnostics['outlet_review_pending']
+        self.assertIn(review,self.dialog.analysis.notes)
+        self.assertIn('pendiente de revisión',self.dialog.status.text())
+        path=self.helper.fixture.folder/'pending_review500.caumax.json'
+        self.dialog.save_project(path)
+        saved=load_session(path)
+        self.assertEqual(saved.analysis.diagnostics['outlet_review_pending'],review)
+        self.assertIn(review,saved.analysis.notes)
+        self.dialog._restore_session(saved)
+        self.assertIn('pendiente de revisión',self.dialog.status.text())
+        selector=self.open_selector()
+        selector.choose(query.x,query.y+500)
+        manual=self.helper.manager.tasks[-1]
+        ok=manual.run()
+        self.assertTrue(ok,manual.error)
+        manual.finished(ok)
+        self.dialog._smoothing_timer.stop()
+        self.dialog._update_smoothing()
+        self.helper.publish(self.helper.manager.tasks[-1])
+        self.assertNotIn('outlet_review_pending',self.dialog.analysis.diagnostics)
+        self.assertNotIn('pendiente de revisión',' '.join(self.dialog.analysis.notes))
+        self.assertNotIn('pendiente de revisión',self.dialog.status.text())
+
+    def test_initial_raster_error_or_cancellation_never_becomes_a_fallback_basin(self):
+        for error,cancel in ((ValueError('MDT NoData'),False),
+                             (OutletSelectionRequired('Ambiguo',{}),True)):
+            with self.subTest(cancel=cancel):
+                task=AnalysisTask(self.dialog.query,lambda *_:None)
+                if cancel:task.cancel()
+                with patch('caumax_consulta.terrain.analyze_basin',side_effect=error) as calculate:
+                    self.assertFalse(task.run())
+                self.assertEqual(calculate.call_count,1)
+                self.assertIsNone(task.result)
+                self.assertIsNone(task.selection_context)
+
+    def test_clear_owned_layers_survives_background_refresh_then_manual_choice_redraws(self):
+        self.configure()
+        dialog=self.dialog
+        actions=dialog.outlet_adjust_button.parentWidget().layout()
+        row=next(actions.itemAt(i).layout() for i in range(actions.count())
+                 if actions.itemAt(i).layout() is not None
+                 and actions.itemAt(i).layout().indexOf(dialog.outlet_adjust_button)>=0)
+        self.assertEqual([row.itemAt(i).widget() for i in range(3)],
+                         [dialog.cell_grid_check,dialog.outlet_adjust_button,dialog.clear_delineation_button])
+        project=QgsProject.instance()
+        user=QgsVectorLayer('Point?crs=EPSG:25830','Capa del usuario','memory')
+        project.addMapLayer(user)
+        user_id=user.id()
+        before=set(project.mapLayers())
+        self.assertIsNotNone(dialog._marker)
+        dialog.clear_delineation_button.click()
+        remaining=set(project.mapLayers())
+        self.assertIn(user_id,remaining)
+        self.assertLess(len(remaining),len(before))
+        self.assertTrue(dialog._delineation_cleared)
+        self.assertIsNone(dialog._marker)
+        self.assertFalse(dialog.clear_delineation_button.isEnabled())
+        dialog._display_analysis()
+        dialog._sync_boundary_layers()
+        dialog._preview()
+        dialog._queue_smoothing()
+        dialog._smoothing_timer.stop()
+        dialog._update_smoothing()
+        self.helper.publish(self.helper.manager.tasks[-1])
+        self.assertEqual(set(project.mapLayers()),remaining)
+        self.assertIsNone(dialog._marker)
+        native=self.finish_manual(dialog.query.x,dialog.query.y+25)
+        self.assertFalse(dialog._delineation_cleared)
+        self.assertGreater(len(project.mapLayers()),len(remaining))
+        self.assertIn(user_id,project.mapLayers())
+        self.assertIsNotNone(dialog._marker)
+        self.assertEqual((dialog.analysis.outlet_x,dialog.analysis.outlet_y),
+                         (native.outlet_x,native.outlet_y))
+        self.assertTrue(dialog.clear_delineation_button.isEnabled())
+
+    def test_clear_during_manual_worker_keeps_complete_geometry_for_outputs_without_redrawing(self):
+        self.configure()
+        dialog=self.dialog
+        selector=self.open_selector()
+        selector.choose(dialog.query.x,dialog.query.y+25)
+        task=self.helper.manager.tasks[-1]
+        dialog._clear_delineation()
+        remaining=set(QgsProject.instance().mapLayers())
+        ok=task.run()
+        self.assertTrue(ok,task.error)
+        task.finished(ok)
+        dialog._smoothing_timer.stop()
+        dialog._update_smoothing()
+        self.helper.publish(self.helper.manager.tasks[-1])
+        self.assertTrue(dialog._delineation_cleared)
+        self.assertIsNone(dialog._marker)
+        self.assertEqual(set(QgsProject.instance().mapLayers()),remaining)
+        self.assertTrue(dialog._surface_valid)
+        self.assertTrue(dialog._smoothing_ready)
+        self.assertTrue(dialog.export_button.isEnabled())
+        with patch('caumax_consulta.map_capture.capture_basin_map',side_effect=real_capture_basin_map):
+            state=dialog._state_for_output()
+        self.assertTrue(state['map_png'].startswith(b'\x89PNG'))
+        self.assertEqual(set(QgsProject.instance().mapLayers()),remaining)
+        with patch('caumax_consulta.reports.ask_basin_pdf') as report, \
+                patch('caumax_consulta.smooth_export.choose_export_destination') as export:
+            dialog._report()
+            dialog._export()
+            report.assert_called_once()
+            export.assert_called_once()
+        self.assertIsNone(dialog._outlet_selector)
+        self.assertEqual(set(QgsProject.instance().mapLayers()),remaining)
+
+    def test_closed_manual_selector_is_not_reoffered_by_its_late_error_and_can_be_reopened(self):
+        self.configure()
+        dialog,controller=self.dialog,self.controller
+        original=dialog.analysis
+        selector=self.open_selector()
+        selector.choose(dialog.query.x,dialog.query.y+25)
+        task=self.helper.manager.tasks[-1]
+        context=deepcopy(selector.context)
+        selector.reject()
+        task.error='No se pudo leer la celda del cierre elegido.'
+        task.selection_context=context
+        task.finished(False)
+        QTest.qWait(20)
+        self.assertIsNone(dialog._outlet_selector)
+        self.assertEqual(len(FakeOutletSelectionDialog.instances),1)
+        self.assertIn('No se pudo leer',dialog.resolution_status.text())
+        self.assertIs(dialog.analysis,original)
+        self.assertTrue(dialog.outlet_adjust_button.isEnabled())
+        native=self.finish_manual(dialog.query.x-25,dialog.query.y)
+        self.assertEqual(len(FakeOutletSelectionDialog.instances),2)
+        self.assertIsNotNone(dialog._outlet_selector)
+        self.assertFalse(dialog._outlet_selector.busy)
+        self.assertEqual((dialog.analysis.outlet_x,dialog.analysis.outlet_y),
+                         (native.outlet_x,native.outlet_y))
 
 
 if __name__ == '__main__':

@@ -13,25 +13,25 @@ class Metric:
 
 
 METRICS = (
-    Metric('area_km2', 'Área de la cuenca', 'km²', 3, 'Número de celdas vertientes por la superficie de cada celda, sin suavizado.'),
-    Metric('perimeter_km', 'Perímetro', 'km', 3, 'Longitud de todos los contornos de la divisoria original de celdas, incluidos sus huecos.'),
+    Metric('area_km2', 'Área de la cuenca', 'km²', 2, 'Número de celdas vertientes por la superficie de cada celda, sin suavizado.'),
+    Metric('perimeter_km', 'Perímetro', 'km', 2, 'Longitud de todos los contornos de la divisoria original de celdas, incluidos sus huecos.'),
     Metric('cell_count', 'Número de celdas', '', 0, 'Celdas incluidas en el análisis del MDT activo. Con divisoria suavizada se cuentan las celdas intersectadas y las estadísticas se ponderan por su superficie dentro del contorno.'),
     Metric('cell_resolution', 'Resolución celda', '', 0, 'Anchura × altura de la celda de drenaje en metros; resolución original utilizada en la delimitación y el análisis.'),
-    Metric('elongation_ratio', 'Relación de elongación', '', 4, 'Re = 2·√(A/π)/Lb; Lb es la mayor distancia recta del centro de cierre a un vértice exterior de la divisoria.'),
-    Metric('kc', 'Compacidad de Gravelius · Kc', '', 4, 'Kc = P/(2·√(π·A)), con A en m² y P en m. Normalización exacta del círculo.'),
-    Metric('ic', 'Índice de circularidad · Ic', '', 4, 'Ic = 4·π·A/P² = 1/Kc², con área y perímetro en unidades coherentes. Adimensional.'),
-    Metric('melton', 'Índice de rugosidad de Melton', '', 4, 'Melton = (z máxima − z mínima)/√A, con desnivel en m y área en m².'),
-    Metric('slope_d8_pct', 'Pendiente media de la cuenca (D8)', '%', 3, 'Media de las pendientes locales D8 según la definición de TauDEM: máximo descenso de cota dividido por la distancia horizontal a uno de ocho vecinos, incluida la distancia diagonal. Esta estadística utiliza las cotas originales del MDT; se excluyen NoData, bordes sin vecindario completo y mínimos de depresiones sin salida. La procedencia identifica el motor que generó las direcciones de drenaje.'),
-    Metric('hypsometric', 'Índice hipsométrico', '', 4, 'HI = (z media − z mínima)/(z máxima − z mínima). La media se pondera por superficie cuando hay fracciones de celda. Indefinido cuando el relieve es cero.'),
-    Metric('tri_m', 'Índice de Irregularidad del Terreno TRI (Riley)', 'm', 3, 'Media de √Σ(z centro − z vecino)² sobre los ocho vecinos de cada celda válida. Sin interpolar NoData.'),
+    Metric('elongation_ratio', 'Relación de elongación', '', 2, 'Re = 2·√(A/π)/Lb; Lb es la mayor distancia recta del centro de cierre a un vértice exterior de la divisoria.'),
+    Metric('kc', 'Compacidad de Gravelius · Kc', '', 2, 'Kc = P/(2·√(π·A)), con A en m² y P en m. Normalización exacta del círculo.'),
+    Metric('ic', 'Índice de circularidad · Ic', '', 2, 'Ic = 4·π·A/P² = 1/Kc², con área y perímetro en unidades coherentes. Adimensional.'),
+    Metric('melton', 'Índice de rugosidad de Melton', '', 2, 'Melton = (z máxima − z mínima)/√A, con desnivel en m y área en m².'),
+    Metric('slope_d8_pct', 'Pendiente media de la cuenca (D8)', '%', 2, 'Media de las pendientes locales D8 según la definición de TauDEM: máximo descenso de cota dividido por la distancia horizontal a uno de ocho vecinos, incluida la distancia diagonal. Esta estadística utiliza las cotas originales del MDT; se excluyen NoData, bordes sin vecindario completo y mínimos de depresiones sin salida. La procedencia identifica el motor que generó las direcciones de drenaje.'),
+    Metric('hypsometric', 'Índice hipsométrico', '', 2, 'HI = (z media − z mínima)/(z máxima − z mínima). La media se pondera por superficie cuando hay fracciones de celda. Indefinido cuando el relieve es cero.'),
+    Metric('tri_m', 'Índice de Irregularidad del Terreno TRI (Riley)', 'm', 2, 'Media de √Σ(z centro − z vecino)² sobre los ocho vecinos de cada celda válida. Sin interpolar NoData.'),
     Metric('relief_m', 'Desnivel máximo (Hmáx - Hmín)', 'm', 2, 'Diferencia entre las cotas máxima y mínima válidas del MDT dentro de la cuenca.'),
     Metric('zmax_m', 'Altitud máxima (Hmáx)', 'm', 2, 'Máxima cota válida del MDT dentro de las celdas de la cuenca.'),
     Metric('zmin_m', 'Altitud mínima (Hmín)', 'm', 2, 'Mínima cota válida del MDT dentro de las celdas de la cuenca.'),
     Metric('zmedian_m', 'Altitud mediana (Hmed · P50)', 'm', 2, 'Percentil 50 de las cotas válidas de la cuenca; ponderado por superficie en la divisoria suavizada. La media de cotas se conserva para el índice hipsométrico.'),
-    Metric('main_length_km', 'Longitud del curso principal total (L)', 'km', 3, 'Trayectoria D8 de mayor longitud desde el centro de cierre hasta una celda de cabecera. Longitud horizontal, incluidos los pasos diagonales.'),
-    Metric('main_length_10_85_km', 'Longitud del curso principal entre el 10% y el 85% (L10-85)', 'km', 3, 'Tramo entre 0,10·L y 0,85·L, medido sobre el curso principal desde el cierre hacia la cabecera. Longitud igual a 0,75·L; no usa el suavizado cartográfico de la divisoria.'),
-    Metric('tc_h', 'Tiempo de concentración (L)', 'h', 3, 'Fórmula del apartado 2.2.2.5 de 5.2-IC: Tc = 0,3·L^0,76·J^−0,19, con L en km, cotas en m y J = (Hcabecera − Hcierre)/(1000·L) en m/m. Se aplica al mismo curso principal de máxima longitud, no al máximo entre otras ramas. Tc ≤ 0,25 h requiere cálculo por tramos y se muestra como no disponible.'),
-    Metric('tc_10_85_h', 'Tiempo de concentración (L10-85)', 'h', 3, 'Comparación de la misma fórmula sobre el tramo central: Tc10-85 = 0,3·L10-85^0,76·J10-85^−0,19; J10-85 = (H85 − H10)/L10-85, con longitud en km en la fórmula y en m al calcular J. No sustituye el Tc de la cuenca completa. Se aplica el mismo control de disponibilidad de 0,25 h.'),
+    Metric('main_length_km', 'Longitud del curso principal total (L)', 'km', 2, 'Trayectoria D8 de mayor longitud desde el centro de cierre hasta una celda de cabecera. Longitud horizontal, incluidos los pasos diagonales.'),
+    Metric('main_length_10_85_km', 'Longitud del curso principal entre el 10% y el 85% (L10-85)', 'km', 2, 'Tramo entre 0,10·L y 0,85·L, medido sobre el curso principal desde el cierre hacia la cabecera. Longitud igual a 0,75·L; no usa el suavizado cartográfico de la divisoria.'),
+    Metric('tc_h', 'Tiempo de concentración (L)', 'h', 2, 'Fórmula del apartado 2.2.2.5 de 5.2-IC: Tc = 0,3·L^0,76·J^−0,19, con L en km, cotas en m y J = (Hcabecera − Hcierre)/(1000·L) en m/m. Se aplica al mismo curso principal de máxima longitud, no al máximo entre otras ramas. Tc ≤ 0,25 h requiere cálculo por tramos y se muestra como no disponible.'),
+    Metric('tc_10_85_h', 'Tiempo de concentración (L10-85)', 'h', 2, 'Comparación de la misma fórmula sobre el tramo central: Tc10-85 = 0,3·L10-85^0,76·J10-85^−0,19; J10-85 = (H85 − H10)/L10-85, con longitud en km en la fórmula y en m al calcular J. No sustituye el Tc de la cuenca completa. Se aplica el mismo control de disponibilidad de 0,25 h.'),
 )
 
 BY_KEY = {metric.key: metric for metric in METRICS}
@@ -46,7 +46,7 @@ def format_value(key, value):
             return 'No disponible'
         if not all(math.isfinite(v) and v > 0 for v in (width, height)):
             return 'No disponible'
-        return f'{_short(width, 3)}mx{_short(height, 3)}m'
+        return f'{_short(width, 2)}mx{_short(height, 2)}m'
     if value is None:
         return 'No disponible'
     try:
@@ -56,13 +56,10 @@ def format_value(key, value):
     if not math.isfinite(number):
         return 'No disponible'
     metric = BY_KEY[key]
-    if key in ('area_km2', 'perimeter_km') and 0 < number < 0.01:
-        # Small high-resolution basins and rounded outlines need enough digits
-        # to distinguish a positive measurement from zero in both GUI and PDF.
-        precision = max(metric.precision, 2 - math.floor(math.log10(number)))
-        if precision > 12:
-            return f'{number:.3g}'.replace('.', ',')
-        return f'{number:.{precision}f}'.replace('.', ',')
+    if metric.precision > 0 and 0 < number < 0.01:
+        # A positive value below the display precision must not look like zero.
+        # This is presentation only; the underlying measurements are unchanged.
+        return '<0,01'
     return f'{number:.{metric.precision}f}'.replace('.', ',')
 
 

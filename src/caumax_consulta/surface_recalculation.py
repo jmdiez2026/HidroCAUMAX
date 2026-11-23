@@ -52,8 +52,10 @@ class SurfaceTask(QgsTask):
                     original_area_m2=previous.get('original_area_m2', self.base.area_m2),
                     original_perimeter_m=previous.get('original_perimeter_m', self.base.perimeter_m),
                     original_cell_count=previous.get('original_cell_count', self.base.cell_count))
+            review = diagnostics.get('outlet_review_pending')
+            notes = tuple(dict.fromkeys((*analysis.notes,review))) if review else analysis.notes
             analysis = replace(analysis, selected_x=self.base.selected_x, selected_y=self.base.selected_y,
-                               diagnostics=diagnostics)
+                               diagnostics=diagnostics, notes=notes)
             p0 = basin_raster_mean(analysis, self.sources.get('p0', ''), statistics=True,
                 cancelled=self.isCanceled, progress=lambda p: self.publish('Recalculando P₀…', 30+p*.1))
             rainfall = {}

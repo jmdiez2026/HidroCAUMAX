@@ -164,8 +164,64 @@ class ResolutionControllerTests(unittest.TestCase):
         self.assertEqual(offered['resolution_key'],'25')
         self.assertEqual(offered['original_x'],self.query.x)
         self.assertEqual(offered['directions_path'],'/fine/d8.tif')
+        self.assertEqual(offered['manual_selection_scope'],'raster_extent')
         offered['original_x']=-123
         self.assertEqual(c.selection_context()['original_x'],self.query.x)
+
+    def test_discovery_preserves_deferred_initial_outlet_review_but_cancel_discards_it(self):
+        c=self.controller()
+        context=dict(resolution_key='500',dem_path='/original/mdt.tif',
+            directions_path='/original/dir.tif',original_x=self.query.x,original_y=self.query.y,
+            search_radius_m=707.106781,reference_area_m2=self.base.area_m2,
+            reason='Dos ramales de entrada; elige el cierre.')
+        c.outlet_selection_context=context
+        self.discover(c)
+        self.assertEqual(c.outlet_selection_context,context)
+        self.assertIsNot(c.outlet_selection_context,context)
+        self.assertEqual(c.selection_context()['manual_selection_scope'],'raster_extent')
+        self.assertEqual(c.active_key,'500')
+        self.assertEqual(self.results,[])
+        c.cancel()
+        self.assertIsNone(c.outlet_selection_context)
+
+    def test_restored_manual_500_keeps_original_reference_in_context_and_finer_builds(self):
+        reference=2250000.0
+        self.base=replace(self.base,diagnostics={
+            'outlet_snap':dict(method='manual_cell_d8',selection_mode='user_selected_cell',
+                               explicit_user_choice=True,reference_area_m2=reference),
+            'analysis_surface':dict(original_area_m2=200000.0)})
+        c=self.controller()
+        self.assertEqual(c.reference_area_m2,reference)
+        self.discover(c)
+        snapshot=dict(active_key='500',options=[c.options[0]],variants=dict(c.variants))
+        self.assertTrue(c.restore(snapshot))
+        with patch.object(rc,'_dem_point',return_value=(self.query.x,self.query.y)):
+            self.assertEqual(c.selection_context()['reference_area_m2'],reference)
+        self.discover(c)
+        self.assertTrue(c.select('25'))
+        self.wait(lambda:not c.busy)
+        self.assertEqual(self.snap_options[-1]['reference_area_m2'],reference)
+        automatic=replace(self.base,diagnostics={
+            'outlet_snap':dict(selection_mode='upstream_nearest_branch',reference_area_m2=reference),
+            'analysis_surface':dict(original_area_m2=200000.0)})
+        self.assertEqual(rc._reference_area_m2(automatic),200000.0)
+
+    def test_restored_distant_manual_500_download_bounds_also_cover_original_query(self):
+        c=self.controller()
+        polygon=QgsGeometry.fromWkt('MULTIPOLYGON (((10000 10000,10500 10000,10500 10500,10000 10500,10000 10000)))')
+        manual=replace(self.base,basin=replace(self.base.basin,
+            geometry_wkb=bytes(polygon.asWkb()),outlet_x=10250,outlet_y=10250),
+            diagnostics={'outlet_snap':dict(method='manual_cell_d8',
+                selection_mode='user_selected_cell',explicit_user_choice=True,
+                reference_area_m2=self.base.area_m2)})
+        snapshot=dict(active_key='500',options=[c.options[0]],variants={
+            '500':dict(analysis=manual,query=self.query,smoothing_state=None)})
+        self.assertTrue(c.restore(snapshot))
+        self.assertEqual(c.bounds,(self.base.selected_x-2000,self.base.selected_y-2000,12500.,12500.))
+        self.assertLess(c.bounds[0],self.base.selected_x)
+        self.assertLess(c.bounds[1],self.base.selected_y)
+        self.assertGreater(c.bounds[2],manual.outlet_x)
+        self.assertGreater(c.bounds[3],manual.outlet_y)
 
     def test_manual_choice_applies_complete_variant_without_requerying_caumax_or_downloading(self):
         c=self.controller()

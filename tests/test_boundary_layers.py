@@ -153,6 +153,45 @@ class BoundaryLayersTests(unittest.TestCase):
             self.update()
         self.assertAlmostEqual(next(layers['original'].getFeatures()).geometry().area(), 9900.)
 
+    def test_explicit_remove_clears_all_visited_results_but_preserves_other_layers_and_files(self):
+        first = self.update()
+        ids = {layer.id() for layer in first.values()}
+        paths = {Path(layer.source().split('|')[0]) for layer in first.values()}
+        self.analysis.outlet_x += 25
+        self.query.dem_path = str(self.folder/'dem5.tif')
+        self.analysis.cell_width = self.analysis.cell_height = 5.
+        second = self.update()
+        ids.update(layer.id() for layer in second.values())
+        paths.update(Path(layer.source().split('|')[0]) for layer in second.values())
+        other_query = copy(self.query)
+        other_query.x += 1000
+        other = BoundaryLayers(self.folder/'other')
+        other_ids = {layer.id() for layer in other.update(
+            self.analysis, other_query, self.original).values()}
+        root = self.project.layerTreeRoot()
+        group = root.findLayer(second['original'].id()).parent()
+        user_layer = QgsVectorLayer('LineString?crs=EPSG:25830', 'Divisoria original', 'memory')
+        self.project.addMapLayer(user_layer, False)
+        group.addLayer(user_layer)
+        user_id = user_layer.id()
+        self.assertEqual(self.controller.remove(), len(ids))
+        self.assertTrue(all(self.project.mapLayer(layer_id) is None for layer_id in ids))
+        self.assertTrue(all(self.project.mapLayer(layer_id) is not None for layer_id in other_ids))
+        self.assertIs(self.project.mapLayer(user_id), user_layer)
+        self.assertEqual([node.layerId() for node in group.findLayers()], [user_id])
+        self.assertTrue(all(path.is_file() for path in paths))
+        self.assertFalse(self.controller.layers)
+        self.assertIsNone(self.controller.key)
+        self.assertEqual(self.controller.remove(), 0)
+
+    def test_update_after_explicit_remove_restores_real_layers_without_stale_references(self):
+        old_ids = {layer.id() for layer in self.update().values()}
+        self.controller.remove()
+        new = self.update()
+        self.assertFalse(old_ids & {layer.id() for layer in new.values()})
+        self.assertTrue(next(new['original'].getFeatures()).geometry().isGeosEqual(self.original))
+        self.assertTrue(self.project.layerTreeRoot().findLayer(new['original'].id()).isVisible())
+
 
 class BoundaryDialogTests(unittest.TestCase):
     @classmethod

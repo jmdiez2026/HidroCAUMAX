@@ -12,11 +12,11 @@ from osgeo import gdal
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 from qgis.PyQt import sip
-from qgis.PyQt.QtCore import QCoreApplication, QEvent, Qt
+from qgis.PyQt.QtCore import QCoreApplication, QEvent, QPoint, Qt
 from qgis.PyQt.QtTest import QTest
 from qgis.PyQt.QtWidgets import QDialog, QWidget
 from qgis.core import (QgsApplication, QgsCoordinateReferenceSystem, QgsCoordinateTransform,
-                       QgsPointXY, QgsProject)
+                       QgsPointXY, QgsProject, QgsRectangle)
 from qgis.gui import QgsMapCanvas, QgsMapToolPan
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
@@ -84,9 +84,9 @@ class OutletSelectionTests(unittest.TestCase):
     def point(self, row, col):
         return tuple(gdal.ApplyGeoTransform(self.transform, col + .5, row + .5))
 
-    def make_dialog(self, **changes):
+    def make_dialog(self, persistent=False, **changes):
         context = dict(self.context, **changes)
-        dialog = OutletSelectionDialog(self.iface, context, self.parent)
+        dialog = OutletSelectionDialog(self.iface, context, self.parent, persistent=persistent)
         dialog.setAttribute(Qt.WA_DontShowOnScreen)
         self.dialogs.append(dialog)
         dialog.show()
@@ -263,6 +263,76 @@ class OutletSelectionTests(unittest.TestCase):
         wrong = dict(self.context, crs_wkt=QgsCoordinateReferenceSystem('EPSG:4326').toWkt())
         with self.assertRaisesRegex(ValueError, 'CRS.*no coincide'):
             OutletSelectionDialog(self.iface, wrong, self.parent)
+
+    def test_manual_extent_allows_valid_cell_beyond_automatic_radius(self):
+        dialog = self.make_dialog(manual_selection_scope='raster_extent')
+        self.click_cell(dialog,4,8)
+        self.assert_preview(dialog,4,8)
+        self.assertIn('20.00 m',dialog.distance_label.text())
+        self.assertIn('extensión válida',dialog.distance_label.text())
+        self.assertNotIn('límite',dialog.distance_label.text())
+        dialog.east_button.click()
+        self.assertFalse(dialog.apply_button.isEnabled())
+        self.assertIn('extensión',dialog.status_label.text())
+
+    def test_persistent_apply_rebinds_new_outlet_and_original_reference_for_next_apply(self):
+        dialog = self.make_dialog(persistent=True,manual_selection_scope='raster_extent')
+        applied = []
+        dialog.applied.connect(lambda:applied.append(dialog.selection()))
+        self.click_cell(dialog,4,8)
+        old_tool = dialog._map_tool
+        dialog.apply_button.click()
+        self.assertEqual(applied,[self.point(4,8)])
+        self.assertTrue(dialog.isVisible())
+        self.assertFalse(dialog.isModal())
+        self.assertTrue(dialog._busy)
+        self.assertIs(self.canvas.mapTool(),self.previous_tool)
+        self.assertFalse(dialog.pick_button.isEnabled())
+        self.assertFalse(dialog.north_button.isEnabled())
+        if not sip.isdeleted(old_tool):
+            old_tool.canvasClicked.emit(QgsPointXY(*self.point(1,1)),Qt.LeftButton)
+        self.assertEqual(dialog.selection(),self.point(4,8))
+        dialog.rebind(dict(dialog.context,initial_x=self.point(4,8)[0],initial_y=self.point(4,8)[1]))
+        self.assert_preview(dialog,4,8)
+        self.assertFalse(dialog._busy)
+        self.assertEqual((dialog.original_x,dialog.original_y),self.original)
+        dialog.west_button.click()
+        dialog.apply_button.click()
+        self.assertEqual(applied,[self.point(4,8),self.point(4,7)])
+        self.assertTrue(dialog.isVisible())
+        dialog.reject()
+        self.assertIsNone(dialog._directions)
+
+    def test_persistent_selector_survives_user_pan_and_can_pick_again(self):
+        dialog = self.make_dialog(persistent=True)
+        dialog.start_picking()
+        old_tool=dialog._map_tool
+        replacement=QgsMapToolPan(self.canvas)
+        self.canvas.setMapTool(replacement)
+        self.assertTrue(dialog.isVisible())
+        self.assertIs(self.canvas.mapTool(),replacement)
+        self.assertIsNone(dialog._map_tool)
+        if not sip.isdeleted(old_tool):
+            old_tool.canvasClicked.emit(QgsPointXY(*self.point(1,1)),Qt.LeftButton)
+        self.assert_preview(dialog,4,4)
+        self.click_cell(dialog,3,4)
+        self.assert_preview(dialog,3,4)
+        dialog.reject()
+        self.assertIs(self.canvas.mapTool(),replacement)
+
+    def test_real_mouse_click_reaches_map_tool_while_selector_is_open(self):
+        self.canvas.setExtent(QgsRectangle(499995,4699950,500050,4700005))
+        self.canvas.show()
+        self.app.processEvents()
+        dialog=self.make_dialog(persistent=True,manual_selection_scope='raster_extent')
+        dialog.start_picking()
+        target=QgsPointXY(*self.point(2,6))
+        pixel=self.canvas.mapSettings().mapToPixel().transform(target)
+        QTest.mouseClick(self.canvas.viewport(),Qt.LeftButton,Qt.NoModifier,
+                         QPoint(round(pixel.x()),round(pixel.y())))
+        self.app.processEvents()
+        self.assertTrue(dialog.isVisible())
+        self.assert_preview(dialog,2,6)
 
 
 if __name__ == '__main__':
