@@ -1,10 +1,10 @@
-# HidroCAUMAX v1.2.4
+# HidroCAUMAX v1.2.5
 
-Complemento auxiliar para **CAUMAX 3.0 y QGIS 3 con Qt 5**. La versión del paquete y del diálogo es **1.2.4**. Conserva procesamiento con TauDEM, exportación de MDT, direcciones y red, curva hipsométrica, los seis cuantiles originales y **P₀ y precipitación máxima diaria de la cuenca**. Incluye los ajustes completos del diálogo, estadísticos y recálculo automático por suavizado o resolución. La entrega se ha comprobado en Windows con QGIS 3.44.15. Las pruebas reproducibles se encuentran en la carpeta `tests` del repositorio; los registros locales de sesiones no se publican.
+Complemento auxiliar para **CAUMAX 3.0 y QGIS 3 con Qt 5**. La versión del paquete y del diálogo es **1.2.5**. Conserva procesamiento con TauDEM, exportación de MDT, direcciones y red, curva hipsométrica, los seis cuantiles originales y **P₀ y precipitación máxima diaria de la cuenca**. Añade selección del cierre en la sección o aguas arriba, interfaz compacta y **Análisis IA gratuito sin credenciales**. Esta revisión se verifica en Linux con QGIS 3.40.6 y GDAL 3.10.3; las pruebas históricas en Windows/QGIS 3.44.15 corresponden a la entrega anterior. Las pruebas reproducibles se encuentran en la carpeta `tests` del repositorio; los registros locales de sesiones no se publican.
 
 ## Instalación y uso
 
-1. Instala **HidroCAUMAX_v1_2_4.zip**, sin descomprimir, desde **Complementos → Administrar e instalar complementos → Instalar a partir de ZIP**. Acepta sustituir la instalación auxiliar anterior. El nombre visible es **HidroCAUMAX v1.2.4**; la carpeta interna sigue siendo **caumax_consulta** para conservar la continuidad de la actualización.
+1. Instala **HidroCAUMAX_v1_2_5.zip**, sin descomprimir, desde **Complementos → Administrar e instalar complementos → Instalar a partir de ZIP**. Acepta sustituir la instalación auxiliar anterior. El nombre visible es **HidroCAUMAX v1.2.5**; la carpeta interna sigue siendo **caumax_consulta** para conservar la continuidad de la actualización.
 2. Activa CAUMAX, carga sus capas y abre **Mapa de caudales máximos → Consulta de capas de caudales máximos**. Selecciona periodo y punto; pulsa **Consultar**.
 3. Una consulta válida habilita **Cuenca hidrográfica**, a la izquierda del informe nativo. Su texto y su altura son el **110 %** de los botones de la derecha, con redondeo al píxel más cercano para la altura. La anchura reserva espacio para el texto completo y el logotipo **GEA-UVa**.
 4. Pulsa el botón para calcular la cuenca. El diálogo se alinea con el borde derecho de QGIS, usa toda su altura y aproximadamente el **36 %** de su anchura. Sigue los cambios de posición y tamaño de QGIS. **Morfología de la Cuenca** presenta la tabla blanca de 19 parámetros: **Parámetro, Valor, Unidad e Interpretación**, con anchuras relativas **46/13/9/32 %**. Valor y Unidad se centran; la interpretación ocupa como máximo tres líneas y conserva el texto completo en su ayuda. Las observaciones del cálculo quedan inmediatamente debajo de esta tabla.
@@ -14,13 +14,15 @@ Complemento auxiliar para **CAUMAX 3.0 y QGIS 3 con Qt 5**. La versión del paqu
 
 En la sección de drenaje puedes pulsar **Generar capas D8** para procesar el MDT activo con TauDEM y preparar sus tres productos exportables. En Windows de 64 bits, los ejecutables y todas sus dependencias están incluidos en el ZIP y se preparan automáticamente al primer cálculo. **Motor TauDEM…** permite usar el motor incluido o seleccionar opcionalmente una carpeta externa.
 
-El menú **Complementos → HidroCAUMAX** permite activar las herramientas y **Abrir proyecto de cuenca…** sin realizar otra consulta nativa. Los botones nuevos tienen fondo azul claro. El botón general **Identificar objetos espaciales** conserva su funcionamiento habitual.
+El menú **Complementos → HidroCAUMAX** permite activar las herramientas y **Abrir proyecto de cuenca…** sin realizar otra consulta nativa. Los botones de cálculo tienen fondo azul claro; Análisis IA utiliza azul oscuro. El botón general **Identificar objetos espaciales** conserva su funcionamiento habitual.
 
 ## Punto de cierre y elección de MDT
 
-Se conserva el **punto exacto de la última consulta válida de CAUMAX**, junto con su caudal Q y periodo T. En la opción original de 500 m, el cierre D8 sigue siendo el centro de la celda que contiene ese punto.
+Se conserva el **punto exacto de la última consulta válida de CAUMAX**, junto con su caudal Q y periodo T. El cierre de una nueva consulta se sitúa en un centro de celda **en la sección del punto o lo más cerca posible aguas arriba**. Si el centro de la celda que contiene el clic queda aguas abajo, se busca un antecesor conectado por las direcciones D8 y se recalcula desde él. Se aplica también al MDT original de 500 m; cambiar solo la línea del cauce o el marcador no corregiría la superficie aportante.
 
-Al usar un **MDT mejorado de 25 o 5 m**, se transforma siempre el **punto ORIGINAL de consulta** al CRS del MDT y se ajusta automáticamente al centro de la celda de cauce principal más cercana. Se identifican como candidatos las celdas con área acumulada D8 de al menos el **90 % del área de la cuenca original de 500 m**, dentro de un radio igual al mayor entre **500 m y la diagonal de la celda original**. Se elige la menor distancia al punto original; un empate se resuelve por fila y columna. Estos umbrales son criterios propios de HidroCAUMAX, no parámetros prescritos por HEC-HMS. Si no hay un candidato válido, se informa del problema y se conserva el resultado anterior.
+Al usar un **MDT mejorado de 25 o 5 m**, la búsqueda parte siempre del **punto ORIGINAL** transformado al CRS de ese MDT. La dirección D8 local define la orientación de la sección, puesto que la consulta proporciona un punto y no una línea transversal dibujada por el usuario. Los candidatos deben estar conectados aguas arriba y dentro del radio admitido; se comprueba además que su acumulación represente un cauce local. El área de la cuenca de 500 m es únicamente informativa: **ya no se exige alcanzar el 90 % de esa área ni se baja aguas abajo para alcanzarla**. Si no existe un candidato fiable, el programa lo comunica y conserva el resultado anterior.
+
+La política de selección es propia del complemento, no una prescripción de 5.2-IC ni de HEC-HMS. Se eligen centros de celdas: en una malla de 500 m no puede reproducirse una sección puntual con precisión submétrica. El contorno conserva celdas completas y debe verificarse con un MDT más fino cuando la ubicación exacta de una obra lo requiera. Una línea azul de la cartografía puede no coincidir con el drenaje que resuelve el MDT.
 
 El punto original y el cierre efectivo ajustado se identifican por separado en pantalla, informe y proyecto guardado, con la distancia de ajuste. Al cambiar otra vez de resolución, la búsqueda parte del punto ORIGINAL; no encadena desplazamientos desde el cierre de otra malla. Conviene revisar visualmente la sección elegida y la cuenca resultante. El ajuste no obliga a que el área del MDT detallado sea idéntica a la original.
 
@@ -40,6 +42,8 @@ La resolución activa condiciona área, perímetro, relieve, pendientes y recorr
 ## Morfología de la Cuenca: 19 parámetros
 
 El diálogo y el PDF comparten **19 filas** y una tabla de **fondo blanco** con las columnas **Parámetro, Valor, Unidad e Interpretación**. Cada interpretación ofrece una lectura breve del valor; las definiciones completas figuran en los textos de ayuda y en el informe.
+
+El botón azul oscuro **Análisis IA**, a la derecha del título, interpreta todos esos parámetros y los datos hidrológicos disponibles. Su uso se describe en la sección de IA de esta guía.
 
 Los parámetros de la tabla corresponden a la **superficie activa de la resolución seleccionada**: la divisoria original o la suavizada, según los controles del diálogo. Al cambiar el grado de suavizado se recalculan los resultados sobre esa superficie. En las fórmulas, A está en m², P y las cotas H en m; Lb es la máxima distancia recta del centro de cierre a un vértice exterior de la divisoria.
 
@@ -92,6 +96,8 @@ El panel de cuantiles consulta **T = 2, 5, 10, 25, 100 y 500 años** en la **cel
 
 ## P₀ y precipitación máxima diaria de la cuenca
 
+La interfaz presenta dos recuadros separados: **Umbral de Escorrentía (P₀)** y **Precipitación máxima diaria de la cuenca**.
+
 Los botones permiten calcular estos datos para la **superficie activa de la cuenca**. Además, cambiar la resolución o el grado de suavizado desencadena el recálculo automático. Se usa toda la superficie seleccionada, incluida la divisoria suavizada cuando está activa; no solo la celda de cierre. Consulta las capas P₀ y de precipitación para **T = 2, 5, 10, 25, 100 y 500 años** configuradas en CAUMAX y conserva sus rutas y resultados. Cambiar de MDT no modifica los valores de esas cartografías: cambia el polígono sobre el que se obtiene la media.
 
 La media en mm pondera cada valor por el **área de intersección entre su píxel y la cuenca**: `Σ(valor × área válida intersectada) / Σ(área válida intersectada)`. Las áreas se miden en el CRS métrico de la cuenca; se conservan partes y huecos, y las transformaciones de CRS se indican en las notas. Las capas P₀ y de precipitación conservan su **resolución nativa**; el MDT activo determina la divisoria sobre la que se promedian. Mejorar el MDT no aumenta la resolución de esas capas.
@@ -111,11 +117,23 @@ La consulta **Pd(T)** muestra media, mediana, máximo, mínimo y desviación tí
 
 Se guardan perfiles comprimidos de hasta **200000 píxeles válidos por mapa** para recuperar los estadísticos de Pd(T) sin las fuentes. Por encima de ese límite se conservan los estadísticos de cada mapa, sin un perfil por celda. Una consulta antigua sin estadísticos o perfiles debe recalcularse con los botones correspondientes; no se inventan los datos que faltan. Los grupos y capas de resultados de HidroCAUMAX se insertan **antes y encima del grupo CAUMAX_CAPAS**, conservando su orden interno y su visibilidad.
 
+Solo se resaltan en negrita la **media obtenida en Pd(T)** y el **periodo obtenido en T(Pd)**. La línea **Desviación típica espacial** expresa la dispersión entre zonas de la cuenca. No representa variabilidad entre años ni el error de la media; se elimina el paréntesis que podía confundir estas magnitudes.
+
 Los resultados quedan vinculados a la geometría original y su CRS mediante una huella **SHA-256**, además del área total. Se guardan por resolución con las entradas y casillas. Al abrir una consulta o generar su PDF **no se vuelven a leer los rásteres fuente ni se recalculan las medias**. Los resultados de otra divisoria no se muestran como si correspondieran a la activa. Las consultas anteriores sin este estado siguen abriéndose; no reciben medias inventadas. Si no se ha solicitado ningún cálculo, el informe lo indica brevemente; con solo P₀ calculado no añade gráficos vacíos de precipitación.
 
 ## Formato de la curva hipsométrica
 
-El eje horizontal dimensional muestra enteros con pasos regulares y aproximadamente diez divisiones. Para 54,25 km² se extiende de 0 a 55, cada 5 km²; la curva termina en el área real. Para áreas menores de 1 km² se indican m². El eje vertical tiene ocho intervalos y las etiquetas y el HI mostrado usan un máximo de dos decimales. El título horizontal se sitúa junto al eje. El modo adimensional conserva sus fracciones entre 0 y 1. Las cifras guardadas y los cálculos conservan toda su precisión; el PDF utiliza el mismo formato y unidades.
+El título único es **Índice hipsométrico (HI) = …**. La casilla **Adimensional** queda dentro del recuadro blanco, arriba a la derecha; se suprimen la etiqueta gris exterior y la nota de puntos/cotas. El eje horizontal dimensional muestra enteros con pasos regulares y aproximadamente diez divisiones. Para áreas menores de 1 km² se indican m². Las marcas de altitud son enteras. En modo adimensional, ambos ejes van de 0 a 1 cada 0,10 y el horizontal se titula **Área relativa (a/A)**. La representación dimensional conserva sus unidades de superficie. Las cifras guardadas y los cálculos mantienen toda su precisión; el PDF utiliza el mismo formato y unidades.
+
+Los gráficos Q y Pd aumentan un 10 % el tamaño de títulos, nombres de ejes y marcas. Se elimina la leyenda inferior de colores. En Q(T)/T(Q), la casilla de extrapolación está junto a las entradas y la explicación de interpolación pasa a la ayuda del control.
+
+## Análisis IA gratuito y sin credenciales
+
+**Análisis IA** conecta directamente por HTTPS con **Pollinations Classic**, mediante `https://text.pollinations.ai/openai`, modelo anónimo `openai-fast`. No utiliza la API de pago de Pollinations ni requiere una clave de OpenAI. La conexión se comprobó con una solicitud real sin cabecera de autenticación y datos sintéticos. La continuidad, capacidad y límites del servicio son externos al complemento.
+
+El mensaje incluye los 19 parámetros y sus definiciones, resolución, tipo de contorno, diagnóstico numérico del ajuste, P₀ inicial, Pd, cobertura y consultas Q(T)/T(Q) y Pd(T)/T(Pd) disponibles. Se excluyen coordenadas, geometrías, rutas, archivos y credenciales. El cuadro informa de este envío y permite copiar la interpretación. La consulta es asíncrona; cerrar cancela la petición. Los resultados idénticos se reutilizan en memoria durante la sesión, y los límites del servicio se muestran con espera antes de reintentar. Si falla la conexión, se informa del error; no se presenta un texto prefijado como si fuera una respuesta de IA.
+
+El contexto del modelo remite al [texto consolidado oficial de 5.2-IC](https://cdn.transportes.gob.es/portal-web-transportes/carreteras/normativa_tecnica/07_drenaje/52ic_fom2982016_err_fom1852017_res180326_consolidado.pdf). Pide distinguir el uso del método según el área, Tc del cauce completo frente a Tc10–85, selección del recorrido más desfavorable, P₀ sin β, factores de precipitación pendientes, dispersión espacial y cuantiles originales de CAUMAX. La respuesta debe ligar cada parámetro a comprobaciones aplicadas, señalar los datos ausentes y evitar atribuir categorías de riesgo o una conformidad normativa a los índices morfométricos. El técnico debe contrastar la interpretación antes de incorporarla a un proyecto.
 
 ## TauDEM real y tres productos exportables
 
@@ -244,11 +262,12 @@ El ZIP conserva además el script original íntegro del usuario en **extras/CAUM
 
 - [IGN/CNIG · API-Coverages IDEE: catálogo oficial](https://api-coverages.idee.es/collections?f=json).
 - [GRASS GIS 8.5: r.watershed](https://grass.osgeo.org/grass85/manuals/r.watershed.html), cálculo de direcciones de drenaje.
-- [HEC-HMS: identificación de cauces mediante un umbral de área acumulada](https://www.hec.usace.army.mil/confluence/hmsdocs/hmsguides/gis-tools-and-terrain-data/creating-a-georeferenced-model-using-hec-hms-gis-tools/preprocessing-terrain-data-to-delineate-subbasin-and-reach-elements) y [ajuste de puntos al cauce identificado más cercano](https://www.hec.usace.army.mil/confluence/hmsdocs/hmsguides/hms-modeling-applications/hec-hms-example-applications/generating-a-flow-forecast-for-international-locations). Son referencias del procedimiento general; el 90 % y el radio de búsqueda indicados arriba son decisiones del complemento.
+- [HEC-HMS: identificación de cauces mediante un umbral de área acumulada](https://www.hec.usace.army.mil/confluence/hmsdocs/hmsguides/gis-tools-and-terrain-data/creating-a-georeferenced-model-using-hec-hms-gis-tools/preprocessing-terrain-data-to-delineate-subbasin-and-reach-elements). La acumulación es una referencia general; la restricción de no bajar de la sección y los criterios locales de selección son decisiones explícitas de HidroCAUMAX.
 - [TauDEM: D8 Flow Directions](https://hydrology.usu.edu/taudem/taudem5/help53/D8FlowDirections.html), definición local de pendiente, bordes, NoData y depresiones.
 - [TauDEM: código y herramientas oficiales](https://github.com/dtarb/TauDEM) y [descargas y dependencias](https://hydrology.usu.edu/taudem/taudem5/downloads.html), para el procesamiento real y sus productos.
 - [Norma 5.2-IC, texto consolidado del Ministerio](https://cdn.mitma.gob.es/portal-web-drupal/carreteras/52ic_fom2982016_err_fom1852017_res180326_consolidado.pdf), apartado 2.2.2.5; [Orden FOM/298/2016 en BOE](https://www.boe.es/buscar/doc.php?id=BOE-A-2016-2405).
 - [GDAL: TRI Riley y Wilson](https://gdal.org/en/stable/programs/gdal_raster_tri.html) y [Riley, DeGloria y Elliot (1999)](https://arc.lib.montana.edu/ojs/index.php/IJS/article/view/2914).
 
-El repositorio incluye pruebas reproducibles de cálculo, interfaz, recuperación de resultados y exportación. Los registros históricos locales se mantienen fuera de esta publicación porque contienen rutas y referencias a sesiones de trabajo. HidroCAUMAX v1.2.4 se distribuye en el canal **estable**; la comprobación de un proyecto concreto debe realizarse en su instalación de QGIS y con sus fuentes de datos.
+- [Pollinations Classic: documentación](https://github.com/pollinations/hive/blob/main/POLLINATIONS_APIDOCS.md) y [catálogo público de modelos anónimos](https://text.pollinations.ai/models). La integración usa el servicio Classic comprobado, no la API de pago gen.pollinations.ai.
+El repositorio incluye pruebas reproducibles de cálculo, interfaz, recuperación de resultados y exportación. Los registros históricos locales se mantienen fuera de esta publicación porque contienen rutas y referencias a sesiones de trabajo. HidroCAUMAX v1.2.5 se distribuye en el canal **estable**; la comprobación de un proyecto concreto debe realizarse en su instalación de QGIS y con sus fuentes de datos.
 

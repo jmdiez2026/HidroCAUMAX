@@ -296,11 +296,11 @@ class ReportTests(unittest.TestCase):
         )
         text = normalized(' '.join(page.extract_text() for page in PdfReader(str(result)).pages))
         for expected in (
-            'HidroCAUMAX v1.2.4', 'Resolución MDT seleccionada', 'MDT25 IGN',
+            'HidroCAUMAX v1.2.5', 'Resolución MDT seleccionada', 'MDT25 IGN',
             '25,00 × 25,00 m', 'IGN/CNIG', 'https://centrodedescargas.cnig.es/',
             'Mayor detalle espacial', 'Caudal CAUMAX original', '177.000000 m³/s',
             'no se recalcula al descargar o seleccionar otro MDT',
-            'corresponden exclusivamente al MDT activo', '0,450', '25 m × 25 m',
+            'corresponden exclusivamente al MDT activo', '0,450', '25mx25m',
             'MDT activo: IGN/CNIG', 'Direcciones D8: GRASS r.watershed sobre el MDT activo',
         ):
             self.assertIn(expected, text)

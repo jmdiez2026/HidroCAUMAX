@@ -6,12 +6,12 @@ from copy import deepcopy
 from types import SimpleNamespace
 
 from qgis.PyQt.QtCore import Qt, QTimer, QSettings, QEvent
-from qgis.PyQt.QtGui import QColor
+from qgis.PyQt.QtGui import QColor, QFont, QFontMetrics
 from qgis.PyQt.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QDialog, QDialogButtonBox,
     QDoubleSpinBox, QSpinBox, QComboBox, QFileDialog, QGridLayout, QGroupBox, QHBoxLayout, QMessageBox,
     QHeaderView, QLabel, QMenu, QPlainTextEdit, QProgressBar, QPushButton, QTableWidget,
-    QTableWidgetItem, QVBoxLayout, QScrollArea, QWidget,
+    QTableWidgetItem, QVBoxLayout, QScrollArea, QSizePolicy, QWidget,
 )
 from qgis.core import (
     Qgis, QgsApplication, QgsCoordinateReferenceSystem, QgsCoordinateTransform,
@@ -31,6 +31,21 @@ QPushButton:hover { background-color: #C7E8FF; }
 QPushButton:pressed { background-color: #B1DDF6; }
 QPushButton:disabled { background-color: #EEF6FB; color: #8A9EA8; border-color: #C6DAE5; }
 '''
+
+
+AI_BUTTON_STYLE = """
+QPushButton { background-color: #174D78; color: white; border: 1px solid #103B5C;
+              border-radius: 4px; padding: 3px 10px; min-height: 0px; }
+QPushButton:hover { background-color: #216493; }
+QPushButton:pressed { background-color: #103B5C; }
+QPushButton:disabled { background-color: #91A5B5; color: #F4F7FA; border-color: #8298A9; }
+"""
+
+
+def _compact_resolution(width, height=None):
+    height = width if height is None else height
+    number = lambda value: format(float(value), 'g').replace('.', ',')
+    return f'{number(width)}mx{number(height)}m'
 
 
 class NotesBox(QPlainTextEdit):
@@ -59,7 +74,7 @@ class AnalysisTask(QgsTask):
             from .terrain import analyze_basin
             self.result = analyze_basin(
                 self.query.directions_path, self.query.dem_path,
-                *self.outlet, cancelled=self.isCanceled,
+                *self.outlet, cancelled=self.isCanceled, upstream_only=True,
             )
             return not self.isCanceled()
         except InterruptedError:
@@ -76,7 +91,7 @@ class BasinDialog(QDialog):
     def __init__(self, query, iface, parent=None, saved_session=None):
         super().__init__(parent)
         self.setObjectName('CaumaxCuencaHidrograficaDialog')
-        self.setWindowTitle('HidroCAUMAX v1.2.4 · Cuenca hidrográfica')
+        self.setWindowTitle('HidroCAUMAX v1.2.5 · Cuenca hidrográfica')
         self.setStyleSheet(BLUE_BUTTON_STYLE)
         self.setAttribute(Qt.WA_DeleteOnClose)
         self.query, self.iface = query, iface
@@ -89,6 +104,12 @@ class BasinDialog(QDialog):
         self._surface_valid = True
         self._surface_preferences = {}
         self._surface_flow_preferences = {}
+        self._save_surface_task = None
+        self._save_surface_generation = 0
+        self._save_surface_queue = []
+        self._save_surface_results = {}
+        self._save_surface_callback = None
+        self._save_surface_controller = None
         self._grid_visibility_by_resolution = {}
         self._disposed = False
         self._task = None
@@ -134,17 +155,36 @@ class BasinDialog(QDialog):
         layout = QVBoxLayout(body)
         self.body_scroll.setWidget(body)
         outer.addWidget(self.body_scroll, 1)
+        self.context_header = QWidget(body)
+        context_header_layout = QHBoxLayout(self.context_header)
+        context_header_layout.setContentsMargins(0, 0, 0, 0)
+        context_header_layout.setSpacing(12)
+        self.context_mdt = QLabel('MDT activo: calculando…', self.context_header)
+        self.context_point = QLabel(self.context_header)
+        for label in (self.context_mdt, self.context_point):
+            label.setTextFormat(Qt.PlainText)
+            label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+            label.setMinimumWidth(0)
+            label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.context_mdt.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        context_header_layout.addWidget(self.context_mdt)
+        context_header_layout.addWidget(self.context_point, 1)
+        self.context_header.installEventFilter(self)
+        layout.addWidget(self.context_header)
         self.context = QLabel(self)
         self.context.setTextFormat(Qt.PlainText)
         self.context.setWordWrap(True)
-        self.context.setText(
-            f'Punto seleccionado: X={query.x:.3f}; Y={query.y:.3f} · '
-            f'{query.crs.authid() or query.crs.description()}\n'
-            f'Caudal CAUMAX original: {query.flow:g} m³/s · T={query.period} años'
-        )
+        self._update_context()
         layout.addWidget(self.context)
         group = QGroupBox('Morfología de la Cuenca', self)
         self.morphology_group = group
+        self.analysis_ai_button = QPushButton('Análisis IA', group)
+        self.analysis_ai_button.setObjectName('HidroCAUMAXAnalysisAI')
+        self.analysis_ai_button.setStyleSheet(AI_BUTTON_STYLE)
+        self.analysis_ai_button.setToolTip('Analizar los resultados completos de la cuenca activa.')
+        self.analysis_ai_button.setEnabled(False)
+        self.analysis_ai_button.clicked.connect(self._show_ai_analysis)
+        group.installEventFilter(self)
         box = QVBoxLayout(group)
         self.table = QTableWidget(len(METRICS), 4, group)
         self.table.setHorizontalHeaderLabels(['Parámetro', 'Valor', 'Unidad', 'Interpretación'])
@@ -186,9 +226,7 @@ class BasinDialog(QDialog):
         self.quantiles_widget.changed.connect(self._quantiles_changed)
         layout.addWidget(self.quantiles_widget)
         from .basin_hydrology_widget import BasinHydrologyWidget
-        basin_hydrology_group = QGroupBox('P₀ y precipitación máxima diaria de la cuenca', self)
-        basin_hydrology_layout = QVBoxLayout(basin_hydrology_group)
-        self.basin_hydrology_widget = BasinHydrologyWidget(basin_hydrology_group)
+        self.basin_hydrology_widget = BasinHydrologyWidget(body)
         self.basin_hydrology_widget.p0_button.setToolTip(
             'Media por área de la capa P₀ configurada en CAUMAX sobre la divisoria activa, original o suavizada. '
             'La capa P₀ conserva su resolución nativa; no se aplica β.')
@@ -199,8 +237,7 @@ class BasinDialog(QDialog):
         self.basin_hydrology_widget.calculate_rainfall.connect(lambda: self._calculate_basin_hydrology('rainfall'))
         self.basin_hydrology_widget.changed.connect(self._basin_hydrology_changed)
         self.basin_hydrology_widget.cancel_requested.connect(self._cancel_basin_hydrology)
-        basin_hydrology_layout.addWidget(self.basin_hydrology_widget)
-        layout.addWidget(basin_hydrology_group)
+        layout.addWidget(self.basin_hydrology_widget)
         self.progress = QProgressBar(self)
         self.progress.setRange(0, 0)
         self.progress.setTextVisible(False)
@@ -242,12 +279,17 @@ class BasinDialog(QDialog):
         resolution_group = QGroupBox('Resolución MDT', self)
         self.resolution_group = resolution_group
         resolution_layout = QVBoxLayout(resolution_group)
-        resolution_help = QLabel('La aplicación CAUMAX original utiliza MDT de tamaño de celda 500 m x 500 m. Aquí puede seleccionar una resolución mejorada con MDT oficiales (www.cnig.es). Todos los cálculos se actualizarán automáticamente', resolution_group)
+        resolution_help = QLabel('La aplicación CAUMAX original utiliza MDT de tamaño de celda 500mx500m. Aquí puede seleccionar una resolución mejorada con MDT oficiales (www.cnig.es). Todos los cálculos se actualizarán automáticamente', resolution_group)
         self.resolution_help = resolution_help
         resolution_help.setWordWrap(True)
         resolution_layout.addWidget(resolution_help)
-        self._resolution_checks_layout = QGridLayout()
-        resolution_layout.addLayout(self._resolution_checks_layout)
+        self._resolution_checks_widget = QWidget(resolution_group)
+        self._resolution_checks_layout = QGridLayout(self._resolution_checks_widget)
+        self._resolution_checks_layout.setContentsMargins(0, 0, 0, 0)
+        self._resolution_checks_layout.setHorizontalSpacing(10)
+        self._resolution_layout_columns = None
+        self._resolution_checks_widget.installEventFilter(self)
+        resolution_layout.addWidget(self._resolution_checks_widget)
         self.cell_grid_check = QCheckBox('Malla de celdas', resolution_group)
         self.cell_grid_check.setChecked(True)
         self.cell_grid_check.toggled.connect(self._grid_visibility_changed)
@@ -404,9 +446,14 @@ class BasinDialog(QDialog):
                 and watched is getattr(self, '_qgis_window', None)
                 and event.type() in (QEvent.Move, QEvent.Resize, QEvent.WindowStateChange)):
             self._placement_timer.start(0)
-        if (hasattr(self, '_row_timer') and watched is self.table.viewport()
+        if (hasattr(self, '_row_timer')
+                and watched in (self.table.viewport(), getattr(self, '_resolution_checks_widget', None),
+                                getattr(self, 'context_header', None))
                 and event.type() == QEvent.Resize):
             self._row_timer.start(0)
+        if (watched is getattr(self, 'morphology_group', None)
+                and event.type() in (QEvent.Resize, QEvent.Show, QEvent.FontChange)):
+            self._place_ai_button()
         return super().eventFilter(watched, event)
 
     def _place_beside_map(self):
@@ -424,6 +471,9 @@ class BasinDialog(QDialog):
     def _fit_rows(self):
         if self._disposed:
             return
+        self._layout_resolution_options()
+        self._fit_context_header()
+        self._place_ai_button()
         width = self.table.viewport().width()
         header = self.table.horizontalHeader()
         blocked = header.blockSignals(True)
@@ -435,6 +485,84 @@ class BasinDialog(QDialog):
         finally:
             header.blockSignals(blocked)
         self.table.resizeRowsToContents()
+
+    def _update_context(self):
+        query,analysis = self.query,self.analysis
+        coordinates = lambda value: f'{value:.3f}'.rstrip('0').rstrip('.')
+        self.context_point.setText(
+            f'Punto original de consulta: X={coordinates(query.x)}; Y={coordinates(query.y)} · '
+            f'{query.crs.authid() or query.crs.description()}')
+        if analysis is not None:
+            self.context_mdt.setText('MDT activo: '+_compact_resolution(analysis.cell_width,analysis.cell_height))
+        context = f'Caudal CAUMAX original: {query.flow:g} m³/s · T={query.period} años'
+        snap = analysis.diagnostics.get('outlet_snap') if analysis is not None else None
+        if snap:
+            crs = QgsCoordinateReferenceSystem.fromWkt(analysis.crs_wkt)
+            context += (
+                f'\nCierre ajustado al cauce (snap): X={analysis.outlet_x:.3f}; '
+                f'Y={analysis.outlet_y:.3f} · {crs.authid() or crs.description()}\n'
+                f"Desplazamiento desde el punto original: {snap['distance_m']:.2f} m. "
+                'Mapa: original naranja; cierre ajustado azul.')
+            if snap.get('selection_mode') == 'upstream_only':
+                context += ('\nSección conservada: cierre en la misma sección o aguas arriba. '
+                            'El área del MDT de 500 m se usa solo como referencia.')
+        elif analysis is not None and analysis.diagnostics.get('dem_hydrology'):
+            context += '\nResultado guardado sin ajuste al cauce. Una nueva consulta aplica el snap automático.'
+        self.context.setText(context)
+        self._fit_context_header()
+
+    def _fit_context_header(self):
+        """Keep both complete identifiers on one line whenever space permits."""
+        available = self.context_header.contentsRect().width()-12
+        font = QFont(self.font())
+        points = font.pointSizeF()
+        if points <= 0:
+            points = 10.
+            font.setPointSizeF(points)
+        minimum = min(points, max(8., points*.70))
+        labels = (self.context_mdt,self.context_point)
+        def required():
+            metrics = QFontMetrics(font)
+            return sum(metrics.horizontalAdvance(label.text()) for label in labels)+4
+        while required() > available and points > minimum:
+            points = max(minimum, points-.25)
+            font.setPointSizeF(points)
+        for label in labels:
+            if label.font() != font:
+                label.setFont(font)
+            label.setToolTip(label.text())
+        self.context_mdt.setMinimumWidth(QFontMetrics(font).horizontalAdvance(self.context_mdt.text())+2)
+        # Very narrow windows retain every coordinate by wrapping the right
+        # label; ordinary widths display both labels in the same first line.
+        self.context_point.setWordWrap(required() > available)
+
+    def _place_ai_button(self):
+        if not hasattr(self, 'analysis_ai_button'):
+            return
+        button,group = self.analysis_ai_button,self.morphology_group
+        button.setFixedSize(button.sizeHint())
+        button.move(max(0,group.width()-button.width()-12),0)
+        button.raise_()
+
+    def _ai_available(self):
+        drainage_busy = bool(self._drainage_timer.isActive()
+            or (self._drainage_controller and self._drainage_controller.busy))
+        return bool(not self._disposed and self.analysis is not None and self._surface_valid
+            and not self._resolution_pending and not self._saving_project
+            and not self._basin_hydrology_busy() and not drainage_busy and self._task is None)
+
+    def _refresh_ai_button(self):
+        self.analysis_ai_button.setEnabled(self._ai_available())
+
+    def _show_ai_analysis(self):
+        if not self._ai_available():
+            self._refresh_ai_button()
+            return
+        try:
+            from .ai_analysis import show_analysis
+            return show_analysis(self,self.analysis,self.query,self.get_smoothing_state())
+        except Exception as error:
+            QMessageBox.critical(self,'Análisis IA',str(error))
 
     def _connect_parent(self, signal, slot):
         signal.connect(slot)
@@ -506,22 +634,7 @@ class BasinDialog(QDialog):
         self._quantiles_loading=True
         self.quantiles_widget.set_query(self.query, snapshot=quantile_snapshot)
         self._quantiles_loading=False
-        context = (
-            f'Punto original de consulta: X={self.query.x:.3f}; Y={self.query.y:.3f} · '
-            f'{self.query.crs.authid() or self.query.crs.description()}\n'
-            f'Caudal CAUMAX original: {self.query.flow:g} m³/s · T={self.query.period} años\n'
-            f'MDT activo: {self.analysis.cell_width:g} m × {self.analysis.cell_height:g} m')
-        snap = self.analysis.diagnostics.get('outlet_snap')
-        if snap:
-            crs = QgsCoordinateReferenceSystem.fromWkt(self.analysis.crs_wkt)
-            context += (
-                f'\nCierre ajustado al cauce (snap): X={self.analysis.outlet_x:.3f}; '
-                f'Y={self.analysis.outlet_y:.3f} · {crs.authid() or crs.description()}\n'
-                f"Desplazamiento desde el punto original: {snap['distance_m']:.2f} m. "
-                'Mapa: original naranja; cierre ajustado azul.')
-        elif self.analysis.diagnostics.get('dem_hydrology'):
-            context += '\nResultado guardado sin ajuste al cauce. Una nueva consulta aplica el snap automático.'
-        self.context.setText(context)
+        self._update_context()
         self.progress.hide()
         for row, metric in enumerate(METRICS):
             self.table.item(row, 1).setText(format_value(metric.key, self.analysis.values.get(metric.key)))
@@ -741,6 +854,7 @@ class BasinDialog(QDialog):
                 f"{len(state['features'])} tramos. Cada archivo se exporta por separado.")
         elif not busy:
             self.drainage_status.setText('Pulsa Generar capas D8. El MDT y las direcciones conservarán la misma malla.')
+        self._refresh_ai_button()
 
     def _use_bundled_taudem(self):
         from .taudem_engine import probe_taudem
@@ -868,7 +982,7 @@ class BasinDialog(QDialog):
         self._drainage_timer.start()
 
     def _mark_drainage_pending(self):
-        for name in ('report_button','save_project_button','export_button','network_export_button'):
+        for name in ('report_button','save_project_button','export_button','network_export_button','analysis_ai_button'):
             button=getattr(self,name,None)
             if button is not None:button.setEnabled(False)
 
@@ -941,19 +1055,46 @@ class BasinDialog(QDialog):
                 self._resolution_buttons.removeButton(widget)
                 widget.deleteLater()
         self.resolution_checkboxes = {}
+        self._resolution_layout_columns = None
         for index, option in enumerate(options):
             key = option['key']
-            text = f"{option['resolution']:g} m × {option['resolution']:g} m"
-            if option.get('provider') == 'CAUMAX':
-                text += ' · CAUMAX original'
-            box = QCheckBox(text, self)
+            text = _compact_resolution(option['resolution'])
+            box = QCheckBox(text, self._resolution_checks_widget)
+            box.setMinimumWidth(box.sizeHint().width())
             box.setToolTip(option.get('label','') + '\n' + option.get('status',''))
             box.setEnabled(bool(option.get('available')) and not self._saving_project)
             self._resolution_buttons.addButton(box)
             box.setChecked(key == self._active_resolution_key)
             box.clicked.connect(lambda checked=False, key=key: self._select_resolution(key))
-            self._resolution_checks_layout.addWidget(box, index // 3, index % 3)
             self.resolution_checkboxes[key] = box
+        self._layout_resolution_options()
+
+    def _layout_resolution_options(self):
+        """Use one row when possible and wrap whole labels without clipping."""
+        boxes = list(self.resolution_checkboxes.values())
+        if not boxes:
+            return
+        available = max(1,self._resolution_checks_widget.contentsRect().width())
+        spacing = self._resolution_checks_layout.horizontalSpacing()
+        widths = [box.minimumSizeHint().width() for box in boxes]
+        columns = len(boxes)
+        while columns > 1:
+            required = sum(max(widths[column::columns]) for column in range(columns))
+            if required+spacing*(columns-1) <= available:
+                break
+            columns -= 1
+        if columns == self._resolution_layout_columns:
+            return
+        while self._resolution_checks_layout.count():
+            self._resolution_checks_layout.takeAt(0)
+        for column in range(max(len(boxes),self._resolution_checks_layout.columnCount())):
+            self._resolution_checks_layout.setColumnStretch(column,0)
+            self._resolution_checks_layout.setColumnMinimumWidth(column,0)
+        for index,box in enumerate(boxes):
+            self._resolution_checks_layout.addWidget(box,index//columns,index%columns,Qt.AlignLeft)
+        for column in range(columns):
+            self._resolution_checks_layout.setColumnStretch(column,1)
+        self._resolution_layout_columns = columns
 
     def _resolution_status(self, text):
         if self._disposed:
@@ -1018,6 +1159,7 @@ class BasinDialog(QDialog):
         if self._resolution_pending and self._resolution_controller.requested_key == key:
             return
         self._resolution_pending = True
+        self._refresh_ai_button()
         self.basin_hydrology_widget.setEnabled(False)
         self.report_button.setEnabled(False)
         self.save_project_button.setEnabled(False)
@@ -1087,7 +1229,7 @@ class BasinDialog(QDialog):
                     source=option.get('metadata_url') or option.get('url',''))
 
     def _queue_smoothing(self, *args):
-        if self._smoothing_loading or self._disposed:
+        if self._smoothing_loading or self._disposed or self._saving_project:
             return
         if self.analysis is None:
             return
@@ -1500,46 +1642,161 @@ class BasinDialog(QDialog):
         resolution_state = self._resolution_bundle()
         return save_session(destination, self.analysis, self.query, state, resolution_state=resolution_state)
 
+    def _new_resolution_state(self, key, analysis):
+        """Presentation settings for an unvisited variant, before its calculation."""
+        from .boundary_smoothing import smooth_boundary, suggested_degree
+        original = QgsGeometry()
+        original.fromWkb(bytes(analysis.geometry_wkb))
+        degree = max(1, round(suggested_degree(original,analysis.cell_width,analysis.cell_height,
+                                  QgsPointXY(analysis.outlet_x,analysis.outlet_y))))
+        geometries = {}
+        if self.original_check.isChecked():
+            geometries['original'] = original
+        if self.smooth_check.isChecked():
+            geometries['suavizada'] = smooth_boundary(original,degree,analysis.cell_width,
+                analysis.cell_height,QgsPointXY(analysis.outlet_x,analysis.outlet_y))
+        stats = {}
+        for kind,geometry in geometries.items():
+            indices = shape_metrics(geometry.area(),geometry.length())
+            stats[kind] = dict(area_km2=geometry.area()/1e6,perimeter_km=geometry.length()/1000,
+                kc=indices.compactness,ic=indices.circularity,
+                delta_area_pct=100*(geometry.area()/analysis.area_m2-1),
+                delta_perimeter_pct=100*(geometry.length()/analysis.perimeter_m-1))
+        return dict(original_checked=self.original_check.isChecked(),smooth_checked=self.smooth_check.isChecked(),
+            degree=degree,base_geometry_wkb=bytes(analysis.geometry_wkb),
+            geometry_wkb={kind:bytes(geometry.asWkb()) for kind,geometry in geometries.items()},stats=stats,
+            course_visibility={'main':True,'central':False},cell_grid_visible=key in ('500','25'),
+            hypsometric_dimensionless=self.hypsometry_widget.is_dimensionless(),
+            resolution_metadata=self._resolution_metadata(key))
+
+    def _cancel_save_surfaces(self):
+        self._save_surface_generation += 1
+        task,self._save_surface_task = self._save_surface_task,None
+        if task is not None:
+            task.cancel()
+        self._save_surface_queue = []
+        self._save_surface_results = {}
+        self._save_surface_callback = None
+        self._save_surface_controller = None
+
+    def _prepare_resolution_states(self, callback):
+        """Complete unvisited variants in workers; publish only a complete batch."""
+        self._cancel_save_surfaces()
+        controller = self._resolution_controller
+        self._save_surface_controller = controller
+        self._save_surface_callback = callback
+        try:
+            from .basin_hydrology import source_paths
+            from .flow_quantiles import _source_paths
+            flow_preferences = {key:value for key,value in self.quantiles_widget.snapshot().items()
+                                if key in ('input_period','input_flow','extrapolate')}
+            hydrology = self.basin_hydrology_widget.snapshot() or {}
+            hydro_preferences = dict(input_period=hydrology.get('input_period',100.),
+                input_precipitation=hydrology.get('input_precipitation',0.),
+                extrapolate=hydrology.get('extrapolate',True))
+            for option in controller.options:
+                if not option.get('available'):
+                    continue
+                key = option['key']
+                variant = controller.variants[key]
+                if variant.get('smoothing_state'):
+                    continue
+                analysis,query = variant['analysis'],variant['query']
+                state = self._new_resolution_state(key,analysis)
+                self._save_surface_queue.append(dict(key=key,analysis=analysis,query=query,state=state,
+                    sources=source_paths(query),flow_sources=_source_paths(query),
+                    flow_preferences=dict(flow_preferences),hydro_preferences=dict(hydro_preferences)))
+            self._next_save_surface()
+        except Exception as error:
+            self._finish_save_surfaces(str(error))
+
+    def _next_save_surface(self):
+        if self._disposed:
+            return
+        if not self._save_surface_queue:
+            self._finish_save_surfaces()
+            return
+        from .surface_recalculation import SurfaceTask
+        item = self._save_surface_queue.pop(0)
+        query,state = item['query'],item['state']
+        flow_query = SimpleNamespace(x=query.x,y=query.y,period=query.period,
+            flow=query.flow,crs_wkt=query.crs.toWkt())
+        surface = state['geometry_wkb'].get('suavizada') if state['smooth_checked'] else None
+        task = SurfaceTask(self._save_surface_generation,item['analysis'],query,surface,state['degree'],
+            item['sources'],flow_query,item['flow_sources'],self._save_surface_finished)
+        task.save_item = item
+        task.update.connect(self._save_surface_status)
+        self._save_surface_task = task
+        self.resolution_status.setText('Preparando resultados completos del MDT de '+item['key']+' m…')
+        self.resolution_progress.setValue(0)
+        self.resolution_progress.show()
+        QgsApplication.taskManager().addTask(task)
+
+    def _save_surface_status(self, generation, text, percent):
+        if self._disposed or generation != self._save_surface_generation or self._save_surface_task is None:
+            return
+        key = self._save_surface_task.save_item['key']
+        self.resolution_status.setText(f'MDT de {key} m: {text} {percent:.0f} %')
+        self.resolution_progress.setValue(round(percent))
+
+    def _save_surface_finished(self, task, success):
+        if (self._disposed or task is not self._save_surface_task
+                or task.generation != self._save_surface_generation):
+            return
+        self._save_surface_task = None
+        if not success:
+            self._finish_save_surfaces(task.error or 'Preparación del proyecto cancelada; no se ha guardado.')
+            return
+        try:
+            from .basin_hydrology import basin_fingerprint
+            from .basin_hydrology_widget import METHOD, _normalise
+            item,result = task.save_item,task.result
+            analysis,state = result['analysis'],item['state']
+            state['flow_quantiles'] = dict(result['quantiles'],**item['flow_preferences'])
+            state['basin_hydrology'] = _normalise(dict(version=1,
+                basin_fingerprint=basin_fingerprint(analysis),basin_area_m2=analysis.area_m2,
+                p0_result=result['p0'],rainfall_results=result['rainfall'],method=METHOD,
+                **item['hydro_preferences']))
+            self._save_surface_results[item['key']] = dict(analysis=analysis,
+                query=item['query'],smoothing_state=state)
+            self._next_save_surface()
+        except Exception as error:
+            self._finish_save_surfaces(str(error))
+
+    def _finish_save_surfaces(self, error=None):
+        controller = self._save_surface_controller
+        prepared,callback = self._save_surface_results,self._save_surface_callback
+        self._cancel_save_surfaces()
+        if self._disposed:
+            return
+        if controller is not self._resolution_controller:
+            error = error or 'El proyecto ha cambiado durante su preparación; no se ha guardado.'
+        if not error:
+            for key,variant in prepared.items():
+                controller.variants[key].update(variant)
+        if callback is not None:
+            callback(error)
+
     def _resolution_bundle(self):
         controller = self._resolution_controller
-        from .boundary_smoothing import smooth_boundary, suggested_degree
         from .map_capture import capture_basin_map
-        import copy
         variants = {}
         for option in controller.options:
             if not option.get('available'):
                 continue
             key = option['key']
             item = controller.variants[key]
-            analysis, query = item['analysis'], item['query']
-            state = copy.deepcopy(item.get('smoothing_state') or {})
+            analysis,query = item['analysis'],item['query']
+            state = deepcopy(item.get('smoothing_state') or {})
             if not state:
-                original = QgsGeometry()
-                original.fromWkb(bytes(analysis.geometry_wkb))
-                degree = max(1, round(suggested_degree(original,analysis.cell_width,analysis.cell_height,
-                                          QgsPointXY(analysis.outlet_x,analysis.outlet_y))))
-                geometries = {}
-                if self.original_check.isChecked():
-                    geometries['original'] = original
-                if self.smooth_check.isChecked():
-                    geometries['suavizada'] = smooth_boundary(original,degree,analysis.cell_width,
-                        analysis.cell_height,QgsPointXY(analysis.outlet_x,analysis.outlet_y))
-                stats = {}
-                for kind,g in geometries.items():
-                    indices=shape_metrics(g.area(),g.length())
-                    stats[kind]=dict(area_km2=g.area()/1e6,perimeter_km=g.length()/1000,kc=indices.compactness,ic=indices.circularity,
-                        delta_area_pct=100*(g.area()/analysis.area_m2-1),delta_perimeter_pct=100*(g.length()/analysis.perimeter_m-1))
-                state=dict(original_checked=self.original_check.isChecked(),smooth_checked=self.smooth_check.isChecked(),
-                    degree=degree,geometry_wkb={k:bytes(g.asWkb()) for k,g in geometries.items()},stats=stats,
-                    course_visibility={'main':True,'central':False},cell_grid_visible=key in ('500','25'))
-                state['hypsometric_dimensionless'] = self.hypsometry_widget.is_dimensionless()
-                state['flow_quantiles'] = deepcopy(self.quantiles_widget.snapshot())
+                raise ValueError('Faltan los resultados completos del MDT de '+key+
+                                 ' m. Pulsa Guardar proyecto para preparar todas las resoluciones.')
             state['resolution_metadata'] = self._resolution_metadata(key)
             if (not state.get('map_png')
                     or (key != self._active_resolution_key and Path(query.dem_path).is_file())):
                 state.update(capture_basin_map(self.iface,analysis,query,state))
             item['smoothing_state'] = state
-            variants[key]=dict(analysis=analysis,query=query,smoothing_state=state)
+            variants[key] = dict(analysis=analysis,query=query,smoothing_state=state)
         return dict(active_key=self._active_resolution_key,options=controller.options,variants=variants)
 
     def load_project(self, source):
@@ -1549,6 +1806,8 @@ class BasinDialog(QDialog):
         return saved
 
     def _restore_session(self, saved):
+        self._cancel_save_surfaces()
+        self._saving_project = False
         self._cancel_drainage()
         self._cancel_basin_hydrology()
         self._cancel_surface()
@@ -1643,18 +1902,22 @@ class BasinDialog(QDialog):
                 if controller is not None:
                     self._cache_variant_state()
                     self._saving_project = True
+                    self.original_check.setEnabled(False)
+                    self.smooth_check.setEnabled(False)
+                    self.smoothing_degree.setEnabled(False)
+                    self.export_button.setEnabled(False)
                     self.basin_hydrology_widget.setEnabled(False)
                     self._refresh_drainage_controls()
                     self.save_project_button.setEnabled(False)
                     self.report_button.setEnabled(False)
                     self.resolution_refresh_button.setEnabled(False)
                     self._resolution_options(controller.options)
-                    def ready(variants):
+                    def complete(error=None):
                         if self._disposed:
                             return
                         try:
-                            if controller.last_errors:
-                                raise ValueError('No se ha guardado un conjunto incompleto. ' + '; '.join(controller.last_errors.values()))
+                            if error:
+                                raise ValueError(error)
                             self.save_project(effective)
                             self.resolution_status.setText('Proyecto guardado con todas las resoluciones disponibles.')
                         except Exception as error:
@@ -1663,6 +1926,9 @@ class BasinDialog(QDialog):
                         finally:
                             if not self._disposed:
                                 self._saving_project=False
+                                self.original_check.setEnabled(True)
+                                self.smooth_check.setEnabled(True)
+                                self.smoothing_degree.setEnabled(self.smooth_check.isChecked())
                                 self.basin_hydrology_widget.setEnabled(True)
                                 self._refresh_drainage_controls()
                                 self.save_project_button.setEnabled(True)
@@ -1670,6 +1936,15 @@ class BasinDialog(QDialog):
                                 self.resolution_refresh_button.setEnabled(True)
                                 self._resolution_options(controller.options)
                                 self.resolution_progress.hide()
+                                self._refresh_basin_hydrology_controls()
+                    def ready(variants):
+                        if self._disposed:
+                            return
+                        if controller.last_errors:
+                            complete('No se ha guardado un conjunto incompleto. '+
+                                     '; '.join(controller.last_errors.values()))
+                        else:
+                            self._prepare_resolution_states(complete)
                     controller.ensure_all(ready)
                 else:
                     self.save_project(effective)
@@ -1691,6 +1966,7 @@ class BasinDialog(QDialog):
         if self._disposed:
             return
         self._disposed = True
+        self._cancel_save_surfaces()
         self._placement_timer.stop()
         self._row_timer.stop()
         if self._qgis_window is not None:

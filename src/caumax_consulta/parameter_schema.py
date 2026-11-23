@@ -46,7 +46,7 @@ def format_value(key, value):
             return 'No disponible'
         if not all(math.isfinite(v) and v > 0 for v in (width, height)):
             return 'No disponible'
-        return f'{_short(width, 3)} m × {_short(height, 3)} m'
+        return f'{_short(width, 3)}mx{_short(height, 3)}m'
     if value is None:
         return 'No disponible'
     try:

@@ -7,6 +7,7 @@ import math
 from pathlib import Path
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -18,7 +19,12 @@ from qgis.PyQt.QtGui import QColor, QPainter
 from qgis.core import (Qgis, QgsApplication, QgsBilinearRasterResampler,
                        QgsColorRampShader, QgsCptCityColorRamp,
                        QgsHillshadeRenderer, QgsMapRendererParallelJob,
-                       QgsMapSettings, QgsProject, QgsSingleBandPseudoColorRenderer)
+                       QgsMapSettings, QgsProject, QgsRasterDataProvider, QgsSingleBandPseudoColorRenderer)
+
+RASTER_RESAMPLING = getattr(Qgis, 'RasterResamplingMethod', None)
+if RASTER_RESAMPLING is None:
+    RASTER_RESAMPLING = QgsRasterDataProvider.ResamplingMethod
+
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -138,8 +144,30 @@ class DemDisplayTests(unittest.TestCase):
             self.assertIn("25×25 m", layer.name())
             self.assertEqual(layer.customProperty(display.STYLE_PROPERTY), display.STYLE_REVISION)
             self.assertEqual(layer.resamplingStage(), Qgis.RasterResamplingStage.Provider)
-            self.assertEqual(layer.dataProvider().zoomedInResamplingMethod(), Qgis.RasterResamplingMethod.CubicSpline)
-            self.assertEqual(layer.dataProvider().zoomedOutResamplingMethod(), Qgis.RasterResamplingMethod.CubicSpline)
+            self.assertEqual(layer.dataProvider().zoomedInResamplingMethod(), RASTER_RESAMPLING.CubicSpline)
+            self.assertEqual(layer.dataProvider().zoomedOutResamplingMethod(), RASTER_RESAMPLING.CubicSpline)
+
+    def test_provider_resampling_works_with_both_official_enum_locations(self):
+        path = self.raster([[900, 950, 1000], [930, 970, 1050]])
+        before = path.read_bytes()
+        shade, _ = self.build(path)
+        stage = Qgis.RasterResamplingStage
+        old_api = SimpleNamespace(RasterResamplingStage=stage)
+        new_api = SimpleNamespace(RasterResamplingStage=stage,RasterResamplingMethod=RASTER_RESAMPLING)
+        old_provider = SimpleNamespace(ResamplingMethod=RASTER_RESAMPLING)
+        for api,provider_api in ((old_api,old_provider),(new_api,SimpleNamespace())):
+            with self.subTest(new_location=hasattr(api,'RasterResamplingMethod')):
+                provider = shade.dataProvider()
+                provider.setZoomedInResamplingMethod(RASTER_RESAMPLING.Nearest)
+                provider.setZoomedOutResamplingMethod(RASTER_RESAMPLING.Nearest)
+                with patch.object(display,'Qgis',api), patch.object(display,'QgsRasterDataProvider',provider_api):
+                    self.assertTrue(display.smooth_terrain_display(shade))
+                    self.assertFalse(display.smooth_terrain_display(shade))
+                self.assertEqual(provider.zoomedInResamplingMethod(),RASTER_RESAMPLING.CubicSpline)
+                self.assertEqual(provider.zoomedOutResamplingMethod(),RASTER_RESAMPLING.CubicSpline)
+                self.assertEqual(shade.resamplingStage(),stage.Provider)
+                self.assertEqual((shade.width(),shade.height()),(3,2))
+        self.assertEqual(path.read_bytes(),before)
 
     def test_ramp_limits_exclude_nodata_and_use_finite_natural_endpoints(self):
         path = self.raster([[-9999, 875], [1000, 1971]])
@@ -264,7 +292,7 @@ class DemDisplayTests(unittest.TestCase):
             shade.setBlendMode(QPainter.CompositionMode_Screen)
             shade.brightnessFilter().setBrightness(-6)
             shade.brightnessFilter().setContrast(4)
-            shade.dataProvider().setZoomedInResamplingMethod(Qgis.RasterResamplingMethod.Nearest)
+            shade.dataProvider().setZoomedInResamplingMethod(RASTER_RESAMPLING.Nearest)
             colours.setOpacity(.63)
             self.assertFalse(display.apply_terrain_style(shade))
             self.assertFalse(display.apply_terrain_style(colours))
@@ -284,7 +312,7 @@ class DemDisplayTests(unittest.TestCase):
             self.assertEqual(shade.blendMode(), QPainter.CompositionMode_Screen)
             self.assertEqual(shade.brightnessFilter().brightness(), -6)
             self.assertEqual(shade.brightnessFilter().contrast(), 4)
-            self.assertEqual(shade.dataProvider().zoomedInResamplingMethod(), Qgis.RasterResamplingMethod.Nearest)
+            self.assertEqual(shade.dataProvider().zoomedInResamplingMethod(), RASTER_RESAMPLING.Nearest)
             self.assertFalse(final.layerTreeRoot().findLayer(shade.id()).itemVisibilityChecked())
             self.assertTrue(final.layerTreeRoot().findLayer(colours.id()).itemVisibilityChecked())
         finally:

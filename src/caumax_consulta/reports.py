@@ -167,6 +167,15 @@ def _outlet_snap_report_html(analysis):
         'snapped': 'El cálculo utiliza una celda de cauce distinta de la celda del punto original.',
         'unchanged': 'Se mantiene la misma celda de cierre; las coordenadas indican el centro de esa celda.',
     }.get(snap.get('status'), '')
+    upstream = snap.get('selection_mode') == 'upstream_only'
+    criterion = (
+        'Criterio: misma sección o aguas arriba del punto original; solo celdas conectadas '
+        'como antecesores D8 y situadas en el semiplano aguas arriba. Se selecciona la más cercana. '
+        'La sección local es perpendicular a la dirección D8 y no sustituye una sección topográfica medida. '
+        'El área de referencia es informativa y nunca permite desplazar el cierre aguas abajo.'
+        if upstream else
+        'Criterio de la consulta guardada: celda D8 más próxima dentro del radio cuya área aportante cumple el umbral mínimo.'
+    )
     return (
         '<h2>Ajuste de la sección de cierre</h2><p class="small">'
         '<b>Punto original:</b> X = ' + _text(_number(snap.get('original_x')))
@@ -177,8 +186,7 @@ def _outlet_snap_report_html(analysis):
         '<b>Desplazamiento:</b> ' + _text(_number(snap.get('distance_m'), 2).replace('.', ','))
         + ' m; <b>radio de búsqueda:</b> ' + _text(_number(snap.get('search_radius_m'), 2).replace('.', ','))
         + ' m. ' + _text(status)
-        + '<br>Criterio: celda D8 más próxima dentro del radio cuya área aportante cumple '
-          'el umbral mínimo. <b>Área mínima:</b> ' + area('minimum_upstream_area_m2')
+        + '<br>' + _text(criterion) + (' <b>Área mínima local:</b> ' if upstream else ' <b>Área mínima:</b> ') + area('minimum_upstream_area_m2')
         + '; <b>área de referencia:</b> ' + area('reference_area_m2')
         + '; <b>área aportante del cierre:</b> ' + area('candidate_upstream_area_m2')
         + '.<br>El caudal CAUMAX original se conserva en el punto consultado; '
@@ -513,7 +521,7 @@ td {vertical-align: top;}
 .method {font-size: 8pt;}
 </style></head><body>
 <h1>''' + title + '''</h1>
-<p><b>HidroCAUMAX v1.2.4 - Parámetros morfológicos e hidrológicos</b></p>
+<p><b>HidroCAUMAX v1.2.5 - Parámetros morfológicos e hidrológicos</b></p>
 <table width="100%" cellspacing="0" cellpadding="3">''' + metadata_rows + '''</table>
 ''' + resolution_html + '''
 ''' + outlet_snap_html + '''
@@ -603,8 +611,8 @@ def _write_document(path, content):
     printer = QPrinter(QPrinter.HighResolution)
     printer.setOutputFormat(QPrinter.PdfFormat)
     printer.setOutputFileName(str(path))
-    printer.setDocName('HidroCAUMAX v1.2.4 - Cuenca hidrográfica')
-    printer.setCreator('HidroCAUMAX v1.2.4')
+    printer.setDocName('HidroCAUMAX v1.2.5 - Cuenca hidrográfica')
+    printer.setCreator('HidroCAUMAX v1.2.5')
     printer.setFontEmbeddingEnabled(True)
     printer.setPaperSize(QPrinter.A4)
     printer.setOrientation(QPrinter.Landscape)

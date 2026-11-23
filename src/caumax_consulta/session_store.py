@@ -136,9 +136,17 @@ def _outlet_snap(diagnostics, basin, selected_x, selected_y, boundary):
                 'candidate_upstream_area_m2', 'method', 'status'}
     optional = {'minimum_fraction', 'original_row', 'original_col', 'snapped_row',
                 'snapped_col', 'candidate_count', 'original_cell_upstream_area_m2',
-                'candidate_touches_boundary', 'tie_break', 'reference', 'policy'}
+                'candidate_touches_boundary', 'tie_break', 'reference', 'policy',
+                'selection_mode', 'original_direction', 'section_direction',
+                'section_direction_source', 'section_source_cell', 'section_offset_m',
+                'upstream_path', 'upstream_path_length_m', 'channel_filter',
+                'local_median_upstream_area_m2', 'local_concentration_factor',
+                'local_minimum_cells', 'reference_minimum_upstream_area_m2',
+                'reference_threshold_met', 'area_change_vs_reference_pct',
+                'area_change_vs_original_cell_m2'}
     _keys(snap, required, 'ajuste del cierre', optional)
-    if snap['method'] != 'nearest_main_channel_d8' or snap['status'] not in ('snapped', 'unchanged'):
+    upstream = snap['method'] == 'upstream_section_d8'
+    if snap['method'] not in ('nearest_main_channel_d8', 'upstream_section_d8') or snap['status'] not in ('snapped', 'unchanged'):
         _fail('ajuste del cierre', 'método o estado desconocido')
     for key in required - {'method', 'status'}:
         _float(snap[key], 'ajuste ' + key)
@@ -158,13 +166,19 @@ def _outlet_snap(diagnostics, basin, selected_x, selected_y, boundary):
     minimum = _float(snap['minimum_upstream_area_m2'], 'área mínima de cauce', positive=True)
     candidate = _float(snap['candidate_upstream_area_m2'], 'área acumulada del cierre', positive=True)
     _close(candidate, basin.area_m2, 'área acumulada de la cuenca ajustada')
-    if minimum > reference or candidate + max(1e-5, candidate * 1e-7) < minimum:
+    if (not upstream and minimum > reference) or candidate + max(1e-5, candidate * 1e-7) < minimum:
         _fail('ajuste del cierre', 'áreas de selección incompatibles')
     if 'minimum_fraction' in snap:
         fraction = _float(snap['minimum_fraction'], 'fracción mínima de cauce', positive=True)
         if fraction > 1:
             _fail('ajuste del cierre', 'fracción mínima superior a uno')
-        _close(minimum, reference * fraction, 'umbral de cauce')
+        if upstream:
+            _close(snap.get('reference_minimum_upstream_area_m2'), reference * fraction,
+                   'umbral informativo de referencia')
+            if _bool(snap.get('reference_threshold_met'), 'comparación del área de referencia') != (candidate >= reference * fraction):
+                _fail('ajuste del cierre', 'comparación con el área de referencia incompatible')
+        else:
+            _close(minimum, reference * fraction, 'umbral de cauce')
     indices = {'original_row', 'original_col', 'snapped_row', 'snapped_col'}
     if indices & set(snap):
         if not indices.issubset(snap):
@@ -194,7 +208,101 @@ def _outlet_snap(diagnostics, basin, selected_x, selected_y, boundary):
     for key in ('reference', 'policy'):
         if key in snap:
             _text(snap[key], 'ajuste ' + key, 4096)
+    if upstream:
+        _upstream_section_record(snap, basin, selected_x, selected_y)
     return True
+
+
+def _upstream_section_record(snap, basin, selected_x, selected_y):
+    """Validate the recorded D8 path and upstream section without source rasters."""
+    from .basin import DIRECTIONS
+
+    required = {'selection_mode', 'original_direction', 'section_direction',
+                'section_direction_source', 'section_source_cell', 'section_offset_m',
+                'upstream_path', 'upstream_path_length_m', 'channel_filter',
+                'original_row', 'original_col', 'snapped_row', 'snapped_col',
+                'original_cell_upstream_area_m2', 'candidate_count',
+                'area_change_vs_reference_pct', 'area_change_vs_original_cell_m2'}
+    if not required.issubset(snap) or snap['selection_mode'] != 'upstream_only':
+        _fail('sección aguas arriba', 'registro de la selección incompleto')
+    offsets = {code: (-dy, -dx) for dx, dy, code in DIRECTIONS}
+    allowed = set(offsets) | {0}
+    for key in ('original_direction', 'section_direction'):
+        if type(snap[key]) is not int or snap[key] not in allowed:
+            _fail('sección aguas arriba', 'dirección D8 desconocida')
+    path = snap['upstream_path']
+    if not isinstance(path, list) or not 1 <= len(path) <= MAX_METADATA_ITEMS:
+        _fail('sección aguas arriba', 'trayectoria ausente o excesiva')
+    seen, previous, length = set(), None, 0.0
+    for step in path:
+        if not isinstance(step, list) or len(step) != 3:
+            _fail('sección aguas arriba', 'registro de trayectoria no válido')
+        row, col = (_int(step[i], 'índice de trayectoria') for i in (0, 1))
+        if type(step[2]) is not int or step[2] not in allowed or (row, col) in seen:
+            _fail('sección aguas arriba', 'ciclo o dirección desconocida')
+        seen.add((row, col))
+        if previous is not None:
+            dr, dc = offsets.get(previous[2], (0, 0))
+            if previous[2] == 0 or (row, col) != (previous[0] + dr, previous[1] + dc):
+                _fail('sección aguas arriba', 'las celdas no están conectadas por D8')
+            length += math.hypot(dc * basin.cell_width, dr * basin.cell_height)
+        x = basin.outlet_x + (col - snap['snapped_col']) * basin.cell_width
+        y = basin.outlet_y - (row - snap['snapped_row']) * basin.cell_height
+        if math.hypot(x - selected_x, y - selected_y) > snap['search_radius_m'] + 1e-5:
+            _fail('sección aguas arriba', 'la trayectoria supera el radio de búsqueda')
+        previous = step
+    if (path[0][:2] != [snap['snapped_row'], snap['snapped_col']]
+            or path[-1] != [snap['original_row'], snap['original_col'], snap['original_direction']]):
+        _fail('sección aguas arriba', 'la trayectoria no enlaza cierre y celda original')
+    _close(snap['upstream_path_length_m'], length, 'longitud de trayectoria aguas arriba')
+    source = snap['section_source_cell']
+    if not isinstance(source, list) or len(source) != 3:
+        _fail('sección aguas arriba', 'falta la celda que orienta la sección')
+    _int(source[0], 'fila de orientación')
+    _int(source[1], 'columna de orientación')
+    if type(source[2]) is not int or source[2] != snap['section_direction']:
+        _fail('sección aguas arriba', 'dirección de orientación incompatible')
+    kind, code = snap['section_direction_source'], snap['section_direction']
+    if kind == 'cell_d8':
+        if not code or code != snap['original_direction'] or source != path[-1]:
+            _fail('sección aguas arriba', 'la sección no corresponde a la D8 original')
+    elif kind == 'single_incoming_d8':
+        dr, dc = offsets.get(code, (0, 0))
+        if (snap['original_direction'] != 0 or not code
+                or [source[0] + dr, source[1] + dc] != path[-1][:2]):
+            _fail('sección aguas arriba', 'rama de entrada incompatible con la celda original')
+    elif kind == 'exact_center':
+        if code or snap['original_direction'] or len(path) != 1:
+            _fail('sección aguas arriba', 'cierre exacto incompatible')
+        _point_close(selected_x, basin.outlet_x, 'cierre exacto X')
+        _point_close(selected_y, basin.outlet_y, 'cierre exacto Y')
+    else:
+        _fail('sección aguas arriba', 'origen de orientación desconocido')
+    dr, dc = offsets.get(code, (0, 0))
+    vx, vy = dc * basin.cell_width, -dr * basin.cell_height
+    norm = math.hypot(vx, vy)
+    offset = (((basin.outlet_x - selected_x) * vx + (basin.outlet_y - selected_y) * vy) / norm
+              if norm else 0.0)
+    _close(snap['section_offset_m'], offset, 'posición respecto a la sección')
+    if offset > max(basin.cell_width, basin.cell_height) * 1e-7:
+        _fail('sección aguas arriba', 'el cierre queda aguas abajo de la sección marcada')
+    area = _float(snap['original_cell_upstream_area_m2'], 'área de celda original', positive=True)
+    candidate = snap['candidate_upstream_area_m2']
+    if candidate > area + max(1e-5, area * 1e-7):
+        _fail('sección aguas arriba', 'el cierre aguas arriba aumenta el área de su celda original')
+    _close(snap['area_change_vs_original_cell_m2'], candidate - area, 'variación de área de celda original')
+    _close(snap['area_change_vs_reference_pct'], 100 * (candidate / snap['reference_area_m2'] - 1),
+           'variación de área de referencia')
+    cell_area = basin.cell_width * basin.cell_height
+    if snap['channel_filter'] == 'native_cell':
+        _close(snap['minimum_upstream_area_m2'], cell_area, 'umbral de celda nativa')
+    elif snap['channel_filter'] == 'local_concentration':
+        background = _float(snap.get('local_median_upstream_area_m2'), 'mediana de aporte local', positive=True)
+        if snap.get('local_concentration_factor') != 4.0 or type(snap.get('local_minimum_cells')) is not int or snap['local_minimum_cells'] != 9:
+            _fail('sección aguas arriba', 'filtro de cauce local desconocido')
+        _close(snap['minimum_upstream_area_m2'], max(9 * cell_area, 4 * background), 'umbral de cauce local')
+    else:
+        _fail('sección aguas arriba', 'filtro de cauce desconocido')
 
 
 def _query_point_in_basin_crs(query_crs, basin_crs, x, y):
@@ -478,8 +586,13 @@ def _decode_single(document):
     _close(polygon.Boundary().Length(), bdata['perimeter_m'], 'perímetro poligonal')
     outlet = ogr.Geometry(ogr.wkbPoint)
     outlet.AddPoint_2D(bdata['outlet_x'], bdata['outlet_y'])
-    if not polygon.Contains(outlet):
+    if not native_polygon.Contains(outlet):
         _fail('cierre', 'el centro de cierre debe estar dentro de la cuenca original')
+    # The smoothed contour may be anchored exactly at the fixed outlet.
+    # Preserve strict interior membership for the original cell basin, while
+    # also accepting the boundary of its explicitly recorded active surface.
+    if surface is not None and not polygon.Intersects(outlet):
+        _fail('cierre', 'la divisoria activa debe conservar el centro de cierre')
     zmin, zmax, zmean = (bdata[key] for key in ('z_min', 'z_max', 'z_mean'))
     if ((zmin is None) != (zmax is None) or (zmean is None) != (zmin is None)
             or (zmin is not None and not zmin <= zmean <= zmax)):

@@ -3,7 +3,7 @@ import math
 
 from qgis.PyQt.QtCore import QBuffer, QIODevice, QPointF, QRectF, Qt
 from qgis.PyQt.QtGui import QColor, QFont, QImage, QPainter, QPainterPath, QPen
-from qgis.PyQt.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from qgis.PyQt.QtWidgets import QCheckBox, QLabel, QVBoxLayout, QWidget
 
 def _finite(value):
     try:
@@ -25,6 +25,20 @@ def _area_axis(area_km2):
     return scale, maximum, tuple(range(0, maximum + 1, step)), unit
 
 
+def _altitude_axis(minimum, maximum):
+    """Integer metre marks; display bounds never alter the sampled elevations."""
+    if minimum == maximum:
+        padding = max(1.0, abs(minimum) * .005)
+        minimum, maximum = minimum - padding, maximum + padding
+    target = max(1.0, (maximum - minimum) / 8)
+    magnitude = 10 ** math.floor(math.log10(target))
+    step = min((int(factor * magnitude) for factor in (1, 2, 5, 10)),
+               key=lambda candidate: abs(math.log(candidate / target)))
+    first = math.floor(minimum / step) * step
+    last = max(first + step, math.ceil(maximum / step) * step)
+    return (first, last), tuple(range(first, last + 1, step))
+
+
 def curve_plot_data(analysis, dimensionless=False):
     """Map the saved quantiles to axes; HI always comes from the full analysis."""
     values = getattr(analysis, 'values', {}) or {}
@@ -32,7 +46,7 @@ def curve_plot_data(analysis, dimensionless=False):
     result = {
         'available': False, 'hi': hi, 'x': [], 'y': [],
         'dimensionless': bool(dimensionless),
-        'x_label': 'Área relativa a/A' if dimensionless else 'Área acumulada por encima de la cota (km²)',
+        'x_label': 'Área relativa (a/A)' if dimensionless else 'Área acumulada por encima de la cota (km²)',
         'y_label': 'Altitud relativa (h−Hmín)/ΔH' if dimensionless else 'Altitud (m)',
         'reason': 'Curva no disponible: esta consulta no contiene la distribución de cotas. Recalcula la cuenca para obtenerla.',
     }
@@ -63,9 +77,11 @@ def curve_plot_data(analysis, dimensionless=False):
         return result
     if dimensionless:
         scale, axis_maximum, ticks = 1.0, 1.0, tuple(i / 10 for i in range(11))
+        y_display_limits, y_ticks = (0.0, 1.0), ticks
     else:
         scale, axis_maximum, ticks, unit = _area_axis(area)
         result['x_label'] = f'Área acumulada por encima de la cota ({unit})'
+        y_display_limits, y_ticks = _altitude_axis(minimum, maximum)
     result.update(
         available=True, reason='',
         x=fraction if dimensionless else [f * area for f in fraction],
@@ -73,6 +89,7 @@ def curve_plot_data(analysis, dimensionless=False):
         x_limits=(0.0, 1.0 if dimensionless else area),
         x_display_limits=(0.0, axis_maximum), x_scale=scale, x_ticks=ticks,
         y_limits=(0.0, 1.0) if dimensionless else (minimum, maximum),
+        y_display_limits=y_display_limits, y_ticks=y_ticks,
     )
     return result
 
@@ -86,7 +103,12 @@ def _tick(value):
     return ('0' if text == '-0' else text).replace('.', ',')
 
 
-def paint_hypsometric_curve(painter, bounds, data, font_family=None):
+def _title(hi):
+    value = 'No disponible' if hi is None else f'{hi:.2f}'.replace('.', ',')
+    return 'Índice hipsométrico (HI) = ' + value
+
+
+def paint_hypsometric_curve(painter, bounds, data, font_family=None, control_width=0):
     """Paint the same scientific axes for the on-screen widget and PNG export."""
     bounds = QRectF(bounds)
     painter.save()
@@ -98,10 +120,9 @@ def paint_hypsometric_curve(painter, bounds, data, font_family=None):
     font.setPixelSize(pixels)
     painter.setFont(font)
     painter.setPen(QColor('#203449'))
-    title = 'Curva hipsométrica · ' + ('adimensional' if data['dimensionless'] else 'dimensional')
-    title += ' · HI exacto: ' + _tick(data['hi'])
-    painter.drawText(QRectF(bounds.left() + 12, bounds.top() + 8, bounds.width() - 24, pixels * 2),
-                     Qt.AlignCenter, title)
+    painter.drawText(QRectF(bounds.left() + 12, bounds.top() + 8,
+                           bounds.width() - 24 - control_width, pixels * 2),
+                     Qt.AlignCenter, _title(data['hi']))
     if not data['available']:
         painter.drawText(bounds.adjusted(30, pixels * 3, -30, -20),
                          Qt.AlignCenter | Qt.TextWordWrap, data['reason'])
@@ -112,17 +133,15 @@ def paint_hypsometric_curve(painter, bounds, data, font_family=None):
         painter.restore()
         return
     xmin, xmax = data['x_display_limits']
-    ymin, ymax = data['y_limits']
-    if ymax == ymin:
-        padding = max(1.0, abs(ymin) * .005)
-        ymin, ymax = ymin - padding, ymax + padding
+    ymin, ymax = data['y_display_limits']
 
     def point(x, y):
         return QPointF(chart.left() + (x - xmin) / (xmax - xmin) * chart.width(),
                        chart.bottom() - (y - ymin) / (ymax - ymin) * chart.height())
 
     ticks = data['x_ticks']
-    labels = [_tick(value) for value in ticks]
+    tick_label = (lambda value: f'{value:.2f}'.replace('.', ',')) if data['dimensionless'] else _tick
+    labels = [tick_label(value) for value in ticks]
     spacing = chart.width() / max(1, len(ticks)-1)
     text_width = max(painter.fontMetrics().horizontalAdvance(text) for text in labels)
     label_stride = max(1, math.ceil((text_width + 8) / spacing))
@@ -140,14 +159,13 @@ def paint_hypsometric_curve(painter, bounds, data, font_family=None):
             painter.drawText(QRectF(position-label_width/2, chart.bottom()+4,
                                    label_width, pixels*1.5),
                              Qt.AlignHCenter | Qt.AlignTop, labels[index])
-    for index in range(9):
-        value = ymin + index / 8 * (ymax - ymin)
+    for value in data['y_ticks']:
         position = point(xmin, value).y()
         painter.setPen(QPen(QColor('#dce4ec'), 1, Qt.DashLine))
         painter.drawLine(QPointF(chart.left(), position), QPointF(chart.right(), position))
         painter.setPen(QColor('#203449'))
         painter.drawText(QRectF(chart.left() - pixels * 5.5, position - pixels, pixels * 5, pixels * 2),
-                         Qt.AlignRight | Qt.AlignVCenter, _tick(value))
+                         Qt.AlignRight | Qt.AlignVCenter, tick_label(value))
     painter.setPen(QPen(QColor('#334155'), 1.2))
     painter.drawRect(chart)
     painter.save()
@@ -195,7 +213,21 @@ class _CurveCanvas(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        paint_hypsometric_curve(painter, self.rect(), self.owner.plot_data())
+        paint_hypsometric_curve(painter, self.rect(), self.owner.plot_data(),
+                                control_width=self.owner.dimensionless_check.width() + 12)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if not hasattr(self.owner, 'dimensionless_check'):
+            return
+        check = self.owner.dimensionless_check
+        pixels = max(11, min(18, round(self.width() / 70)))
+        font = QFont(self.font())
+        font.setPixelSize(pixels)
+        check.setFont(font)
+        check.adjustSize()
+        check.move(max(12, self.width() - check.width() - 12),
+                   8 + max(0, (2 * pixels - check.height()) // 2))
 
 
 class HypsometricWidget(QWidget):
@@ -203,20 +235,18 @@ class HypsometricWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.analysis = None
-        self.dimensionless_check = QCheckBox('Adimensional', self)
+        self.canvas = _CurveCanvas(self)
+        self.dimensionless_check = QCheckBox('Adimensional', self.canvas)
         self.dimensionless_check.setChecked(False)
+        self.dimensionless_check.setStyleSheet('QCheckBox { background-color: white; }')
+        # Retain these informational attributes for callers, without extra rows.
         self.hi_label = QLabel(self)
         self.status_label = QLabel(self)
-        self.status_label.setWordWrap(True)
-        self.canvas = _CurveCanvas(self)
-        header = QHBoxLayout()
-        header.addWidget(self.hi_label)
-        header.addStretch()
-        header.addWidget(self.dimensionless_check)
+        self.hi_label.hide()
+        self.status_label.hide()
         layout = QVBoxLayout(self)
-        layout.addLayout(header)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.canvas)
-        layout.addWidget(self.status_label)
         self.dimensionless_check.toggled.connect(self._refresh)
         self._refresh()
 
@@ -235,12 +265,6 @@ class HypsometricWidget(QWidget):
 
     def _refresh(self, *unused):
         data = self.plot_data()
-        self.hi_label.setText('Índice hipsométrico (HI) exacto: ' + _tick(data['hi']))
-        self.status_label.setText(
-            (str(data['sample_count']) + ' puntos · ' + str(data['valid_count'])
-             + (' cotas válidas. HI usa la media de cotas ponderada por superficie; la integral de la curva es aproximada.'
-                if (getattr(self.analysis, 'diagnostics', {}) or {}).get('analysis_surface') else
-                ' cotas válidas. HI usa la media aritmética de las cotas; la integral de la curva es aproximada.'))
-            if data['available'] else data['reason']
-        )
+        self.hi_label.setText(_title(data['hi']))
+        self.status_label.setText('' if data['available'] else data['reason'])
         self.canvas.update()

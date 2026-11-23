@@ -697,64 +697,38 @@ def _snap_parameters(reference_area_m2, reference_cell_width, reference_cell_hei
 
 def _nearest_main_channel(counts, transform, original_x, original_y,
                           reference_area_m2, minimum_fraction, radius,
-                          cancelled=lambda: False):
-    """Nearest qualified native centre, equal-distance ties by row/column.
+                          cancelled=lambda: False, *, directions_path=None):
+    """Nearest connected D8 ancestor on or upstream of the exact section.
 
-    Plugin policy is area>=90% of original area and max(500m, original-cell
-    diagonal) unless overridden. These are not HEC-HMS default values. Inclusive
-    counts make the candidate area identical to its subsequent delineation.
+    The coarse area is a recorded comparison, never a qualification that may
+    push the outlet downstream. Native directions are mandatory: proximity or
+    accumulation alone cannot establish the permitted upstream relationship.
     """
     _check(cancelled)
-    rows, cols = counts.shape
-    selected = cell_at_point(original_x, original_y, transform[0],
-                             transform[3] + rows * transform[5],
-                             transform[0] + cols * transform[1], transform[3], cols, rows)
-    if int(counts[selected.row, selected.col]) <= 0:
-        raise ValueError("La celda original no tiene dirección D8 válida; no se ajusta el cierre.")
-    dc = int(math.ceil(radius / selected.width)) + 1
-    dr = int(math.ceil(radius / selected.height)) + 1
-    left, right = max(0, selected.col - dc), min(cols, selected.col + dc + 1)
-    top, bottom = max(0, selected.row - dr), min(rows, selected.row + dr + 1)
-    rr, cc = np.ogrid[top:bottom, left:right]
-    xx = transform[0] + (cc + 0.5) * transform[1]
-    yy = transform[3] + (rr + 0.5) * transform[5]
-    distance_squared = (xx - float(original_x)) ** 2 + (yy - float(original_y)) ** 2
-    cell_area = abs(transform[1] * transform[5])
-    minimum_area = reference_area_m2 * minimum_fraction
-    local = counts[top:bottom, left:right]
-    candidates = (local != 0) & (local.astype(np.float64) * cell_area >= minimum_area)
-    candidates &= distance_squared <= radius * radius
-    candidate_rows, candidate_cols = np.nonzero(candidates)
-    if not len(candidate_rows):
-        raise ValueError(f"No se encuentra un cauce principal dentro de {radius:g} m del punto original "
-                         f"con aporte ≥{minimum_area / 1e6:g} km² "
-                         f"({minimum_fraction * 100:g} % del área original). No se ha desplazado el cierre.")
-    # nonzero returns row-major order; argmin keeps that order for equal
-    # distances. Accumulation is not part of the candidate ordering.
-    choice = int(np.argmin(distance_squared[candidate_rows, candidate_cols]))
-    row = top + int(candidate_rows[choice])
-    col = left + int(candidate_cols[choice])
-    x = transform[0] + (col + 0.5) * transform[1]
-    y = transform[3] + (row + 0.5) * transform[5]
-    effective = cell_at_point(x, y, transform[0], transform[3] + rows * transform[5],
-                              transform[0] + cols * transform[1], transform[3], cols, rows)
-    diagnostic = {
-        "original_x": float(original_x), "original_y": float(original_y),
-        "snapped_x": float(x), "snapped_y": float(y),
-        "distance_m": float(math.hypot(x - original_x, y - original_y)),
-        "search_radius_m": float(radius), "minimum_upstream_area_m2": float(minimum_area),
-        "reference_area_m2": float(reference_area_m2),
-        "candidate_upstream_area_m2": int(counts[row, col]) * cell_area,
-        "method": _SNAP_METHOD,
-        "status": "unchanged" if (row, col) == (selected.row, selected.col) else "snapped",
-        "minimum_fraction": float(minimum_fraction),
-        "original_row": selected.row, "original_col": selected.col,
-        "snapped_row": row, "snapped_col": col,
-        "candidate_count": int(len(candidate_rows)),
-        "original_cell_upstream_area_m2": int(counts[selected.row, selected.col]) * cell_area,
-        "tie_break": "row_col", "reference": _SNAP_REFERENCE,
-        "policy": "plugin: area threshold and bounded search; not HEC-HMS default values",
-    }
+    if directions_path is None:
+        raise ValueError("Se requieren las direcciones D8 para garantizar un cierre en la misma sección o aguas arriba.")
+    dataset = _b._open_raster(directions_path, "direcciones para ajustar la sección")
+    try:
+        actual_transform = _b._geotransform(dataset, "direcciones para ajustar la sección")
+        _b._spatial_reference(dataset, "direcciones para ajustar la sección")
+        if ((dataset.RasterYSize, dataset.RasterXSize) != counts.shape
+                or not all(math.isclose(a, b, rel_tol=0, abs_tol=1e-9)
+                           for a, b in zip(actual_transform, transform))):
+            raise ValueError("Las direcciones y la acumulación no comparten la misma malla.")
+        effective, diagnostic = _b._upstream_section_cell(
+            dataset.GetRasterBand(1), transform, original_x, original_y, radius,
+            counts=counts, require_channel=True, cancelled=cancelled)
+    finally:
+        dataset = None
+    candidate = diagnostic['candidate_upstream_area_m2']
+    original = diagnostic['original_cell_upstream_area_m2']
+    diagnostic.update(
+        reference_area_m2=float(reference_area_m2), minimum_fraction=float(minimum_fraction),
+        reference_minimum_upstream_area_m2=float(reference_area_m2 * minimum_fraction),
+        reference_threshold_met=bool(candidate >= reference_area_m2 * minimum_fraction),
+        area_change_vs_reference_pct=float(100 * (candidate / reference_area_m2 - 1)),
+        area_change_vs_original_cell_m2=float(candidate - original),
+        reference=_SNAP_REFERENCE)
     _check(cancelled)
     return effective, diagnostic
 
@@ -787,9 +761,10 @@ def analyze_dem(dem_path, outlet_x, outlet_y, cache_dir,
 
     DEM: north-up, unrotated, metric projected grid with metre elevations.
     Without snap_enabled the containing input cell is used. With snapping,
-    candidates form a D8 network with inclusive area>=90% of reference_area_m2;
-    the nearest centre within max(500m, reference-cell diagonal) is chosen.
-    Threshold/radius are plugin policy, not universal HEC-HMS defaults.
+    only connected D8 ancestors on or upstream of the original section qualify.
+    The nearest qualified centre is selected inside max(500m, reference-cell
+    diagonal); the coarse basin area remains an informative comparison.
+    The local channel filter and radius are explicit plugin policy.
     No candidate raises ValueError; Analysis.selected_x/y retain input coordinates
     and basin.outlet is effective. Source heights are never modified.
     ``progress`` receives percentages 0..100. Cancellation raises InterruptedError;
@@ -871,7 +846,8 @@ def analyze_dem(dem_path, outlet_x, outlet_y, cache_dir,
             counts, accumulation_path, accumulation_reused = _accumulation(
                 directions, cancelled, lambda fraction: progress(65 + min(8, int(fraction * 8))))
             effective, snap = _nearest_main_channel(
-                counts, transform, outlet_x, outlet_y, *snap_parameters, cancelled=cancelled)
+                counts, transform, outlet_x, outlet_y, *snap_parameters, cancelled=cancelled,
+                directions_path=directions)
             del counts
             progress(74)
         count, window_cells, boundary, feasibility = _preflight_analysis(directions, effective, cancelled)
@@ -911,14 +887,17 @@ def analyze_dem(dem_path, outlet_x, outlet_y, cache_dir,
              "a su resolución original, resolviendo depresiones y planicies por búsqueda de coste. "
              "Las cotas, el TRI y la pendiente local se calculan sobre el MDT original, sin rellenarlo ni remuestrearlo.")
     if snap is not None:
-        notes += (f"Cierre ajustado al centro del cauce principal D8 más cercano: "
+        notes += (f"Cierre en la misma sección o aguas arriba: "
                   f"({snap['snapped_x']:.3f}, {snap['snapped_y']:.3f}), "
                   f"a {snap['distance_m']:.2f} m del punto original. "
-                  f"Red con aporte ≥{snap['minimum_upstream_area_m2'] / 1e6:g} km² "
-                  f"({snap['minimum_fraction'] * 100:g} % del área original), "
-                  f"radio {snap['search_radius_m']:.2f} m; selección por distancia mínima, "
-                  "con empates por fila y columna. Radio y fracción son criterios del plugin, "
-                  "no valores universales de HEC-HMS.",)
+                  "Solo se admiten antecesores D8 conectados en el semiplano aguas arriba "
+                  "de la sección local, perpendicular a la D8 del punto original. "
+                  f"Radio {snap['search_radius_m']:.2f} m; se elige el centro válido más próximo. "
+                  f"Área fina {snap['candidate_upstream_area_m2'] / 1e6:g} km²; "
+                  f"referencia original {snap['reference_area_m2'] / 1e6:g} km². "
+                  "La referencia no obliga a aumentar el área ni permite desplazar el cierre aguas abajo. "
+                  "El filtro de cauce (9 celdas y 4 veces la mediana local) es un criterio del plugin; "
+                  "la sección raster no sustituye un levantamiento topográfico.",)
     analysis = replace(analysis, diagnostics=diagnostic, notes=notes,
                        selected_x=float(outlet_x), selected_y=float(outlet_y))
     _check(cancelled)

@@ -206,15 +206,16 @@ class PrivateRuntimeTests(RuntimeFixture):
     def test_private_environment_removes_qgis_dll_and_gdal_settings_without_global_changes(self):
         self.write_bundle()
         state = runtime.ensure_runtime(self.discover())
+        windows = self.folder/'Windows'
         inherited = {'PATH': 'QGIS/bin;untrusted', 'GDAL_DATA': 'QGIS/share/gdal', 'PROJ_LIB': 'QGIS/proj',
                      'GDAL_SKIP': 'GTiff', 'CPL_PLUGIN_PATH': 'foreign', 'QGIS_PREFIX_PATH': 'QGIS',
-                     'QT_PLUGIN_PATH': 'QGIS/plugins', 'PYTHONPATH': 'QGIS/python', 'SystemRoot': 'C:/Windows',
+                     'QT_PLUGIN_PATH': 'QGIS/plugins', 'PYTHONPATH': 'QGIS/python', 'SystemRoot': str(windows),
                      'USERNAME': 'sample', 'TEMP': 'old'}
         before = dict(os.environ)
         original = dict(inherited)
         result = runtime.subprocess_environment(state, self.folder, inherited)
         root = Path(state['private_runtime']['root'])
-        self.assertEqual(result['PATH'].split(os.pathsep), [str(root/'bin'), str(Path('C:/Windows/System32')), str(Path('C:/Windows'))])
+        self.assertEqual(result['PATH'].split(os.pathsep), [str(root/'bin'), str(windows/'System32'), str(windows)])
         self.assertEqual(result['PROJ_DATA'], str(root/'share/proj'))
         self.assertEqual(result['GDAL_DATA'], str(root/'share/gdal'))
         self.assertEqual(result['PROJ_NETWORK'], 'OFF')

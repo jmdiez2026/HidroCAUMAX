@@ -448,15 +448,23 @@ class SessionStoreTests(unittest.TestCase):
         self.assertEqual(restored.smoothing_state, self.state)
 
     def test_full_engine_adjustment_diagnostic_roundtrips_and_bounds_its_text(self):
-        from caumax_consulta.dem_hydrology import _flow_accumulation, _nearest_main_channel
-        analysis, query = self.snapped_fixture()
+        from caumax_consulta.basin import _upstream_section_cell
+        # The native terminal has one incoming west-flowing branch. A click
+        # just west of its centre permits that centre without moving downstream.
+        query = replace(self.query, x=self.analysis.outlet_x - 1,
+                        y=self.analysis.outlet_y)
+        analysis = replace(self.analysis, selected_x=query.x, selected_y=query.y)
         dataset = gdal.Open(str(self.directions_path))
-        counts = _flow_accumulation(dataset.GetRasterBand(1))
-        _, diagnostic = _nearest_main_channel(
-            counts, dataset.GetGeoTransform(), query.x, query.y,
-            analysis.area_m2, 0.9, math.hypot(500, 500))
+        _, diagnostic = _upstream_section_cell(
+            dataset.GetRasterBand(1), dataset.GetGeoTransform(), query.x, query.y)
         dataset = None
-        diagnostic['candidate_touches_boundary'] = analysis.touches_boundary
+        diagnostic.update(reference_area_m2=analysis.area_m2,
+                          candidate_upstream_area_m2=analysis.area_m2,
+                          original_cell_upstream_area_m2=analysis.area_m2,
+                          area_change_vs_reference_pct=0.0,
+                          area_change_vs_original_cell_m2=0.0,
+                          candidate_touches_boundary=analysis.touches_boundary,
+                          reference='https://grass.osgeo.org/grass-stable/manuals/r.watershed.html')
         self.assertIn('reference', diagnostic)
         self.assertIn('policy', diagnostic)
         analysis = replace(analysis, diagnostics={**analysis.diagnostics, 'outlet_snap': diagnostic})

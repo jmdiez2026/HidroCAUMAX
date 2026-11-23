@@ -33,7 +33,7 @@ def native_class():
     return namespace['BasinCalculator']
 
 
-NATIVE=native_class()
+NATIVE = native_class() if (ROOT.parent/'inputs/caumax/caumax/basincalculator.py').is_file() else None
 
 
 def calculator(dem,dirs,resolution=25):
@@ -55,6 +55,7 @@ def point(calc,row,col):
     return QgsPointXY(*gdal.ApplyGeoTransform(calc.geoTransform,col+.5,row+.5))
 
 
+@unittest.skipUnless(NATIVE is not None, 'Fuente nativa CAUMAX basincalculator.py no disponible')
 class IterativeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

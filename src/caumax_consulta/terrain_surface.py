@@ -15,7 +15,10 @@ def surface_window(dataset, geometry_wkb, outlet, cancelled, progress):
         raise ValueError('La divisoria activa no es un polígono válido.')
     point = ogr.Geometry(ogr.wkbPoint)
     point.AddPoint_2D(*outlet)
-    if not geometry.Contains(point):
+    # Gaussian smoothing can anchor the contour exactly at the fixed outlet.
+    # A boundary point belongs to that active surface even though Contains
+    # excludes it; an exterior outlet must still be rejected.
+    if not geometry.Intersects(point):
         raise ValueError('La divisoria activa debe conservar el centro de cierre.')
     transform = dataset.GetGeoTransform()
     inverse = gdal.InvGeoTransform(transform)

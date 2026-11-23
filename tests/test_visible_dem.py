@@ -15,8 +15,13 @@ from qgis.PyQt.QtGui import QColor
 from qgis.PyQt import sip
 from qgis.PyQt.QtTest import QTest
 from qgis.core import (Qgis, QgsColorRampShader, QgsCoordinateReferenceSystem, QgsCoordinateTransform,
-                       QgsProject, QgsRectangle)
+                       QgsProject, QgsRasterDataProvider, QgsRectangle)
 from qgis.gui import QgsMapCanvas
+
+RASTER_RESAMPLING = getattr(Qgis, 'RasterResamplingMethod', None)
+if RASTER_RESAMPLING is None:
+    RASTER_RESAMPLING = QgsRasterDataProvider.ResamplingMethod
+
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT/'src'))
@@ -118,7 +123,7 @@ class VisibleDemTests(unittest.TestCase):
         self.assertEqual(shade.renderer().zFactor(), display.HILLSHADE_Z_FACTOR)
         for layer in (shade, colours):
             self.assertEqual(layer.resamplingStage(), Qgis.RasterResamplingStage.Provider)
-            self.assertEqual(layer.dataProvider().zoomedInResamplingMethod(), Qgis.RasterResamplingMethod.CubicSpline)
+            self.assertEqual(layer.dataProvider().zoomedInResamplingMethod(), RASTER_RESAMPLING.CubicSpline)
 
     def test_canvas_crs_changes_are_transformed_to_the_raster(self):
         _, _, colours = self.layers()
@@ -260,7 +265,7 @@ class VisibleDemTests(unittest.TestCase):
         shade.renderer().setAltitude(50.)
         shade.brightnessFilter().setBrightness(-4)
         shade.brightnessFilter().setContrast(7)
-        shade.dataProvider().setZoomedInResamplingMethod(Qgis.RasterResamplingMethod.Nearest)
+        shade.dataProvider().setZoomedInResamplingMethod(RASTER_RESAMPLING.Nearest)
         colours.setOpacity(.6)
         self.controller.refresh()
         self.show_range(colours, self.right, (1000., 1015.))
@@ -269,7 +274,7 @@ class VisibleDemTests(unittest.TestCase):
         self.assertEqual(shade.renderer().altitude(), 50.)
         self.assertEqual(shade.brightnessFilter().brightness(), -4)
         self.assertEqual(shade.brightnessFilter().contrast(), 7)
-        self.assertEqual(shade.dataProvider().zoomedInResamplingMethod(), Qgis.RasterResamplingMethod.Nearest)
+        self.assertEqual(shade.dataProvider().zoomedInResamplingMethod(), RASTER_RESAMPLING.Nearest)
         self.assertAlmostEqual(colours.opacity(), .6)
         self.assertEqual(path.read_bytes(), source_before)
 

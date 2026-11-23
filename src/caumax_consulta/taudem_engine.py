@@ -292,7 +292,8 @@ def prepare_taudem(dem_path, outlet_x, outlet_y, cache_dir, *, reference_area_m2
             counts, inclusive_path, reused = _h._accumulation(coded, cancelled,
                 lambda fraction: progress("Calculando aporte y ajustando cierre", 35 + 15 * fraction))
             effective, snap = _h._nearest_main_channel(counts, transform, outlet_x, outlet_y,
-                                                       *parameters, cancelled=cancelled)
+                                                       *parameters, cancelled=cancelled,
+                                                       directions_path=coded)
             del counts
             count, _, boundary, _ = _h._preflight_analysis(coded, effective, cancelled)
             cell_area = abs(transform[1] * transform[5])

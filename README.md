@@ -1,32 +1,44 @@
 # HidroCAUMAX
 
-Complemento para **QGIS 3** que amplía **CAUMAX 3.0** con delimitación y análisis de cuencas, selección de MDT, morfología, curva hipsométrica, umbral de escorrentía P₀, precipitación diaria máxima Pd y consultas de cuantiles. Versión actual: **1.2.4**. Repositorio previsto: **jmdiez2026/HidroCAUMAX**.
+Complemento para **QGIS 3** que amplía **CAUMAX 3.0** con delimitación y análisis de cuencas, selección de MDT, morfología, curva hipsométrica, umbral de escorrentía P₀, precipitación diaria máxima Pd y consultas de cuantiles. Versión actual: **1.2.5**. Repositorio: **jmdiez2026/HidroCAUMAX**.
 
 El diálogo integra los estadísticos de cuenca y recalcula los resultados al cambiar la resolución del MDT o el grado de suavizado. Conserva el punto original consultado y los caudales oficiales de CAUMAX: cambiar el MDT modifica la delimitación y los parámetros de la cuenca, sin inventar nuevos caudales de avenida.
 
 ## Requisitos
 
-- **QGIS 3.34 a 3.x**, con Python, Qt 5, GDAL y NumPy de su distribución. La entrega se ha probado en **Windows con QGIS 3.44.15**; esta declaración no certifica todas las versiones ni todos los sistemas.
+- **QGIS 3.34 a 3.x**, con Python, Qt 5, GDAL y NumPy de su distribución. Esta revisión se verifica con **QGIS 3.40.6 y GDAL 3.10.3 en Linux**. Las comprobaciones históricas de Windows/QGIS 3.44.15 corresponden a la entrega anterior; no equivalen a una nueva prueba de esta revisión en Windows.
 - **CAUMAX 3.0 instalado y activo**, con sus capas configuradas. Los datos oficiales de CAUMAX no se distribuyen en este repositorio.
 - **GRASS GIS** disponible en QGIS para procesar las direcciones de drenaje de MDT descargados.
 - Conexión a los servicios oficiales IGN/CNIG para descargar MDT mejorados. Las fuentes conservan sus condiciones de disponibilidad y uso.
+- Conexión a **Pollinations Classic** para el botón **Análisis IA**, gratuito y sin credenciales. No se requiere una cuenta, una clave ni una biblioteca adicional. La disponibilidad y los límites temporales dependen de ese servicio externo.
 - En **Windows de 64 bits**, TauDEM 5.5.0, MPI y las bibliotecas de GDAL/PROJ están incluidos en el ZIP. No requieren una instalación separada. En Linux/macOS se utiliza una instalación externa de TauDEM y MPI.
 
-La versión 1.2.4 se distribuye en el canal **estable** (`experimental=False`). El código contiene controles de cobertura, NoData y errores; sus resultados deben revisarse con las fuentes y la resolución de cada proyecto.
+La versión 1.2.5 se distribuye en el canal **estable** (`experimental=False`). El código contiene controles de cobertura, NoData y errores; sus resultados deben revisarse con las fuentes y la resolución de cada proyecto.
 
 ## Instalación
 
-1. Descarga el archivo **HidroCAUMAX_v1_2_4.zip** de la versión publicada en GitHub Releases. El ZIP de código fuente que ofrece GitHub no es el instalable de QGIS.
+1. Descarga el archivo **HidroCAUMAX_v1_2_5.zip** de la versión publicada en GitHub Releases. El ZIP de código fuente que ofrece GitHub no es el instalable de QGIS.
 2. En QGIS abre **Complementos → Administrar e instalar complementos → Instalar a partir de ZIP** y selecciona el instalable, sin descomprimirlo.
 3. Si ya utilizas HidroCAUMAX, acepta sustituir el complemento anterior y vuelve a abrir su diálogo. La carpeta interna permanece como **caumax_consulta** para conservar la identidad de instalación.
 4. Activa CAUMAX 3.0, carga sus capas y realiza una consulta válida. Pulsa **Cuenca hidrográfica** para abrir las herramientas ampliadas.
 
 La [guía detallada del complemento](src/caumax_consulta/README.md) describe las funciones, los cálculos y las limitaciones de cada sección.
 
-## Cambios incluidos en 1.2.4
+## Cambios incluidos en 1.2.5
+
+- **Sección de cierre respetada:** las nuevas consultas seleccionan un centro D8 en la sección indicada o aguas arriba, conectado con la celda del punto original. El área de la malla de 500 m es una referencia y deja de forzar el umbral del 90 % que podía impedir el cálculo o desplazar el cierre aguas abajo. Se recalculan la cuenca, su curso y sus parámetros desde el cierre elegido. La precisión sigue limitada por la resolución del MDT.
+- **Interfaz compacta:** resoluciones `500mx500m`, `25mx25m`, `5mx5m`, `2mx2m` y `0,5mx0,5m`, en una fila cuando caben; MDT activo y punto original en la misma línea. Los paneles P₀ y precipitación diaria quedan separados.
+- **Análisis IA:** botón azul oscuro junto a Morfología de la Cuenca. Interpreta los 19 parámetros, P₀, Pd y los cuantiles disponibles, con un enfoque aplicado a la Norma 5.2-IC. Envía únicamente los valores necesarios, sin coordenadas, archivos ni rutas. Se ejecuta sin bloquear QGIS y permite cancelar, reintentar y copiar la respuesta.
+- **Gráficos:** HI con título único, casilla adimensional dentro del recuadro blanco, altitudes enteras y ejes adimensionales de 0 a 1 cada 0,10. Títulos, ejes y marcas de los cuantiles aumentan un 10 %. Se retiran textos redundantes y se compacta la consulta Q(T)/T(Q).
+- **Precipitación:** media Pd(T) y periodo obtenido T(Pd) destacados en negrita; aclaración «Desviación típica espacial», sin confundirla con variación entre años o error de la media.
+- **Correcciones de cálculo y guardado:** lectura de escala y desplazamiento GDAL en caudales, aceptación del cierre sobre el borde de una divisoria suavizada y preparación completa de las resoluciones antes de guardar el proyecto.
+
+El [registro de la revisión](src/caumax_consulta/CHANGELOG.md) explica los cambios y sus límites. Se conservan las funciones de la 1.2.4 descritas a continuación.
+
+### Funciones conservadas de la 1.2.4
 
 - **Generar capas D8** utiliza el TauDEM real incluido en Windows de 64 bits. Los componentes se preparan automáticamente en una carpeta privada del usuario, sin descargas adicionales ni cambios en las bibliotecas de QGIS. La extracción y el cálculo se ejecutan en segundo plano y admiten cancelación. **Motor TauDEM…** permite volver al motor incluido o elegir una instalación externa.
-- Curva hipsométrica: eje horizontal dimensional con marcas enteras y aproximadamente diez divisiones, ocho intervalos verticales, título horizontal más próximo al eje y un máximo de dos decimales en las etiquetas y el HI mostrado. Para cuencas menores de 1 km², el eje muestra m². El modo adimensional conserva la escala 0–1. Los valores internos mantienen su precisión.
+- Curva hipsométrica: eje horizontal dimensional con marcas enteras y aproximadamente diez divisiones. Para cuencas menores de 1 km², el eje muestra m². Los valores internos mantienen su precisión.
 
 Esta versión ajusta la representación del MDT con una paleta natural de verdes salvia luminosos, ocres suaves y tonos de roca, y un sombreado más marcado para apreciar el relieve. El cambio es visual; conserva la ventana de referencia cercana al tamaño de la cuenca.
 
@@ -54,12 +66,14 @@ No se incluyen capas de proyectos, sesiones guardadas, cachés, credenciales ni 
 El empaquetado utiliza **Python 3.10 o posterior** y su biblioteca estándar; no necesita iniciar QGIS:
 
 ```text
-python scripts/build_release.py --output dist --tag v1.2.4
+python scripts/build_release.py --output dist --tag v1.2.5
 ```
 
 Genera el ZIP instalable, sus sumas SHA-256 y el índice XML de distribución. Los archivos resultantes quedan fuera del control de versiones mediante `.gitignore`.
 
 ## Pruebas
+
+La validación consolidada de la 1.2.5 ejecuta **536 pruebas: 520 correctas, 16 omitidas por dependencias o datos externos, sin fallos ni errores**.
 
 Para verificar el empaquetado, desde la raíz del repositorio:
 
@@ -75,7 +89,7 @@ python -m unittest test_flow_quantiles test_basin_hydrology_widget test_reports 
 
 En Windows puede usarse el lanzador `python-qgis-ltr.bat` o el equivalente de la instalación en lugar de `python`. No se fija una ruta de instalación personal. `tests/check_qgis_env.py` permite comprobar las versiones de QGIS y GDAL del intérprete seleccionado.
 
-La validación de la entrega original incluyó **281 pruebas globales**, y una comprobación final de **72 pruebas dirigidas** tras los últimos ajustes de interfaz y versión, sin fallos en esa comprobación final. Son ensayos parcialmente solapados; no representan 353 pruebas independientes. Este repositorio mantiene las pruebas reproducibles y excluye los registros históricos que contenían rutas locales.
+La revisión añade regresiones para el cierre respecto a la sección original, la geometría suavizada, la lectura GDAL, el guardado completo por resolución, la distribución de controles y la conexión IA. Las pruebas de la red utilizan respuestas simuladas controladas; la conexión anónima también se comprueba por separado con datos sintéticos. Las capas originales del caso de la captura no se distribuyen con el repositorio.
 
 ## Publicación y actualizaciones previstas
 

@@ -10,7 +10,7 @@ import math
 from qgis.PyQt.QtCore import QBuffer, QIODevice, QPointF, QRectF, QSize, Qt, pyqtSignal, QTimer
 from qgis.PyQt.QtGui import QColor, QFont, QImage, QPainter, QPen, QPolygonF
 from qgis.PyQt.QtWidgets import (
-    QCheckBox, QDoubleSpinBox, QGridLayout, QHeaderView, QLabel, QPushButton,
+    QCheckBox, QDoubleSpinBox, QGridLayout, QGroupBox, QHeaderView, QLabel, QPushButton,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -146,8 +146,9 @@ def _means(state):
     return [state['rainfall_results'].get(str(period), {}).get('mean_mm') for period in PERIODS]
 
 
-def describe_precipitation_estimates(state):
+def describe_precipitation_estimates(state, rich_text=False):
     state = _normalise(state)
+    highlight = lambda text: '<b>'+text+'</b>' if rich_text else text
     means = _means(state)
     forward = _estimate_precipitation(state['input_period'], means, state['extrapolate'])
     inverse = _estimate_period(state['input_precipitation'], means, state['extrapolate'])
@@ -157,15 +158,15 @@ def describe_precipitation_estimates(state):
         kind = {'exact':'media del cuantil de la capa', 'interpolated':'interpolación',
                 'extrapolated':'extrapolación'}[forward['status']]
         direct_text = (f"Pd({_years(state['input_period'])} años) = "
-                       f"{_number(forward['flow'])} mm ({kind}).")
-    parts = [f"{_years(item['period'])} años" for item in inverse['solutions']]
+                       f"{highlight(_number(forward['flow']))} mm ({kind}).")
+    parts = [f"{highlight(_years(item['period']))} años" for item in inverse['solutions']]
     for interval in inverse['intervals']:
         low, high = interval['min_period'], interval['max_period']
         if high is None:
-            parts.append(f'desde {_years(low)} años sin límite superior (meseta)')
+            parts.append(f'desde {highlight(_years(low))} años sin límite superior (meseta)')
         else:
             beginning = 'entre' if interval['min_inclusive'] else 'más de'
-            parts.append(f'{beginning} {_years(low)} y {_years(high)} años (meseta)')
+            parts.append(f'{beginning} {highlight(_years(low))} y {highlight(_years(high))} años (meseta)')
     if parts:
         multiple = inverse['status'] in ('multiple', 'interval')
         inverse_text = (f"{'T posibles' if multiple else 'T'} para Pd media = "
@@ -189,13 +190,16 @@ def describe_precipitation_estimates(state):
     from .raster_profiles import statistics_for_period
     statistics=statistics_for_period(state)
     if statistics is not None and forward['flow'] is not None:
-        direct_text=(f"Pd({_years(state['input_period'])} años): media {_number(statistics['mean_mm'])} mm · "
+        direct_text=(f"Pd({_years(state['input_period'])} años): media {highlight(_number(statistics['mean_mm']))} mm · "
             f"mediana {_number(statistics['median_mm'])} mm\n"
             f"Máximo: {_number(statistics['max_mm'])} mm · Mínimo: {_number(statistics['min_mm'])} mm\n"
-            f"Desviación típica: {_number(statistics['stddev_mm'])} mm ({kind}).")
+            f"Desviación típica espacial: {_number(statistics['stddev_mm'])} mm")
         note += ' Los estadísticos de Pd(T) se obtienen interpolando por celda en ln(T), sobre la superficie válida común de las capas.'
     elif forward['flow'] is not None:
         direct_text += ' Mediana, extremos y desviación: pendientes de recalcular.'
+    if rich_text:
+        direct_text = direct_text.replace('\n','<br/>')
+        inverse_text = inverse_text.replace('\n','<br/>')
     return dict(forward_text=direct_text, inverse_text=inverse_text, method_note=note)
 
 
@@ -265,6 +269,12 @@ class BasinHydrologyWidget(QWidget):
         self._busy = False
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0,0,0,0)
+        self.p0_group = QGroupBox('Umbral de Escorrentía (P₀)',self)
+        self.rainfall_group = QGroupBox('Precipitación máxima diaria de la cuenca',self)
+        p0_layout = QVBoxLayout(self.p0_group)
+        rainfall_layout = QVBoxLayout(self.rainfall_group)
+        layout.addWidget(self.p0_group)
+        layout.addWidget(self.rainfall_group)
         self.p0_button = QPushButton('Calcular P₀ medio',self)
         self.rainfall_button = QPushButton('Calcular Precipitación diaria\nmáxima anual MEDIA (mm)',self)
         self.rainfall_button.setToolTip('Calcular Precipitación diaria máxima anual MEDIA (mm)')
@@ -288,8 +298,8 @@ class BasinHydrologyWidget(QWidget):
         p0_row.addWidget(self.p0_statistics_label,1,1)
         p0_row.addWidget(self.coverage_label,2,1)
         p0_row.setColumnStretch(1,1)
-        layout.addLayout(p0_row)
-        layout.addWidget(self.rainfall_button,0,Qt.AlignLeft)
+        p0_layout.addLayout(p0_row)
+        rainfall_layout.addWidget(self.rainfall_button,0,Qt.AlignLeft)
         self.rainfall_table = QTableWidget(6,6,self)
         self.rainfall_table.setHorizontalHeader(CompactTableHeader(self.rainfall_table))
         self.rainfall_table.setHorizontalHeaderLabels(
@@ -302,7 +312,7 @@ class BasinHydrologyWidget(QWidget):
         self.rainfall_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.rainfall_table.horizontalHeader().setSectionResizeMode(0,QHeaderView.ResizeToContents)
         self.rainfall_table.setFixedHeight(6*24+self.rainfall_table.horizontalHeader().sizeHint().height()+2*self.rainfall_table.frameWidth())
-        layout.addWidget(self.rainfall_table)
+        rainfall_layout.addWidget(self.rainfall_table)
         controls = QGridLayout()
         self.period_spin = QDoubleSpinBox(self)
         self.period_spin.setDecimals(0)
@@ -313,9 +323,16 @@ class BasinHydrologyWidget(QWidget):
         self.precipitation_spin.setDecimals(2)
         self.precipitation_spin.setRange(0,1e9)
         self.precipitation_spin.setSuffix(' mm')
+        control_width=max(110,self.precipitation_spin.fontMetrics().horizontalAdvance('9999,99 mm')+24)
+        self.period_spin.setFixedWidth(control_width)
+        self.precipitation_spin.setFixedWidth(control_width)
         self.forward_label,self.inverse_label = QLabel(self),QLabel(self)
         self.forward_label.setWordWrap(True)
         self.inverse_label.setWordWrap(True)
+        result_font = QFont(self.font());result_font.setBold(False)
+        for label in (self.forward_label,self.inverse_label):
+            label.setTextFormat(Qt.RichText)
+            label.setFont(result_font)
         controls.addWidget(QLabel('Consultar Pd(T)',self),0,0)
         controls.addWidget(self.period_spin,0,1)
         controls.addWidget(self.forward_label,0,2)
@@ -326,12 +343,12 @@ class BasinHydrologyWidget(QWidget):
         self.extrapolate_check = QCheckBox('Permitir extrapolación',self)
         self.extrapolate_check.setChecked(True)
         controls.addWidget(self.extrapolate_check,2,0,1,3)
-        layout.addLayout(controls)
+        rainfall_layout.addLayout(controls)
         self.method_label = QLabel(self)
         self.method_label.setWordWrap(True)
-        layout.addWidget(self.method_label)
+        rainfall_layout.addWidget(self.method_label)
         self.plots = _PrecipitationPlots(self)
-        layout.addWidget(self.plots)
+        rainfall_layout.addWidget(self.plots)
         self.status_label = QLabel('Selecciona una cuenca para calcular sus datos hidrológicos.',self)
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
@@ -510,7 +527,7 @@ class BasinHydrologyWidget(QWidget):
             self.method_label.setText('P₀ sin aplicar β. La precipitación se calcula únicamente cuando se solicita.')
             self.plots.state = None
         else:
-            descriptions = describe_precipitation_estimates(self._state)
+            descriptions = describe_precipitation_estimates(self._state,rich_text=True)
             self.forward_label.setText(descriptions['forward_text'])
             self.inverse_label.setText(descriptions['inverse_text'])
             self.method_label.setText(descriptions['method_note'])

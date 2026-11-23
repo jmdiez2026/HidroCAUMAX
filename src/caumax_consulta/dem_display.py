@@ -14,7 +14,7 @@ from qgis.PyQt.QtGui import QColor, QPainter
 from qgis.core import (
     Qgis, QgsBilinearRasterResampler, QgsColorRampShader,
     QgsGradientColorRamp, QgsGradientStop, QgsHillshadeRenderer, QgsRasterLayer,
-    QgsRasterShader, QgsSingleBandPseudoColorRenderer,
+    QgsRasterDataProvider, QgsRasterShader, QgsSingleBandPseudoColorRenderer,
 )
 
 from . import basin as _b
@@ -51,6 +51,15 @@ def _natural_items(bottom, top):
         for fraction, colour in NATURAL_RAMP]
 
 
+def _provider_resampling_method(name):
+    # QGIS 3.42 moved this provider enum to Qgis. Retain QGIS 3.34–3.40 support.
+    # https://api.qgis.org/api/3.44/classQgis.html
+    methods = getattr(Qgis, 'RasterResamplingMethod', None)
+    if methods is None:
+        methods = QgsRasterDataProvider.ResamplingMethod
+    return getattr(methods, name)
+
+
 def smooth_terrain_display(layer):
     """Interpolate the display before shading, retaining the native raster grid.
 
@@ -63,7 +72,7 @@ def smooth_terrain_display(layer):
         return False
     provider = layer.dataProvider()
     if provider is not None and provider.enableProviderResampling(True):
-        method = Qgis.RasterResamplingMethod.CubicSpline
+        method = _provider_resampling_method('CubicSpline')
         if (layer.resamplingStage() == Qgis.RasterResamplingStage.Provider
                 and provider.zoomedInResamplingMethod() == method
                 and provider.zoomedOutResamplingMethod() == method):

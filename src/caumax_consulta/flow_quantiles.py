@@ -276,13 +276,20 @@ def _sample(path,x,y,crs_wkt):
             return None
         band = dataset.GetRasterBand(1)
         nodata = band.GetNoDataValue()
-        value = float(band.ReadAsArray(col,row,1,1)[0,0])
-        if (not math.isfinite(value) or value < 0
-                or (nodata is not None and value == nodata)):
+        raw = float(band.ReadAsArray(col,row,1,1)[0,0])
+        if not math.isfinite(raw) or (nodata is not None and raw == nodata):
             return None
         if band.GetMaskBand().ReadAsArray(col,row,1,1)[0,0] == 0:
             return None
-        return value
+        # GDAL reads stored samples; scale/offset convert them to physical Q.
+        # NoData and masks apply to the stored sample, before this conversion.
+        scale, offset = band.GetScale(), band.GetOffset()
+        scale = 1.0 if scale is None else float(scale)
+        offset = 0.0 if offset is None else float(offset)
+        if not math.isfinite(scale) or not math.isfinite(offset):
+            return None
+        value = raw * scale + offset
+        return value if math.isfinite(value) and value >= 0 else None
     except (RuntimeError,TypeError,ValueError,OverflowError):
         return None
 
@@ -361,16 +368,19 @@ class FlowQuantileWidget(QWidget):
         self.period_spin.setSuffix(' años')
         self.flow_spin=QDoubleSpinBox(self);self.flow_spin.setDecimals(2)
         self.flow_spin.setRange(0,1e12);self.flow_spin.setSuffix(' m³/s')
+        control_width=max(110,self.flow_spin.fontMetrics().horizontalAdvance('9999,99 m³/s')+24)
+        self.period_spin.setFixedWidth(control_width);self.flow_spin.setFixedWidth(control_width)
         self.forward_label=QLabel(self);self.inverse_label=QLabel(self)
         self.forward_label.setWordWrap(True);self.inverse_label.setWordWrap(True)
         controls.addWidget(QLabel('Consultar Q(T)',self),0,0);controls.addWidget(self.period_spin,0,1)
-        controls.addWidget(self.forward_label,0,2)
+        controls.addWidget(self.forward_label,0,3)
         controls.addWidget(QLabel('Consultar T(Q)',self),1,0);controls.addWidget(self.flow_spin,1,1)
-        controls.addWidget(self.inverse_label,1,2);controls.setColumnStretch(2,1)
-        self.extrapolate_check=QCheckBox('Permitir extrapolación',self)
+        controls.addWidget(self.inverse_label,1,3);controls.setColumnStretch(3,1)
+        self.extrapolate_check=QCheckBox('Permitir\nextrapolación',self)
         self.extrapolate_check.setChecked(True)
-        controls.addWidget(self.extrapolate_check,2,0,1,3);layout.addLayout(controls)
-        self.method_label=QLabel(self);self.method_label.setWordWrap(True);layout.addWidget(self.method_label)
+        controls.addWidget(self.extrapolate_check,0,2,2,1,Qt.AlignVCenter)
+        self.controls_layout=controls;layout.addLayout(controls)
+        self.method_label=QLabel(self);self.method_label.hide()
         self.plots=_Plots(self);layout.addWidget(self.plots)
         self.period_spin.valueChanged.connect(lambda value:self._changed('input_period',float(value)))
         self.flow_spin.valueChanged.connect(lambda value:self._changed('input_flow',float(value)))
@@ -425,6 +435,8 @@ class FlowQuantileWidget(QWidget):
     def _refresh(self):
         text=describe_estimates(self._state)
         self.forward_label.setText(text['forward_text']);self.inverse_label.setText(text['inverse_text'])
-        self.method_label.setText(text['method_note']);self.plots.state=self.snapshot()
+        self.method_label.setText(text['method_note'])
+        self.extrapolate_check.setToolTip(text['method_note'])
+        self.plots.state=self.snapshot()
         self.plots.setMinimumHeight(self.plots.heightForWidth(self.plots.width()))
         self.plots.updateGeometry();self.plots.update()

@@ -123,51 +123,24 @@ class DemHydrologyTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "memoria"):
                 hydro._accumulation(path, lambda: False, lambda n: None)
 
-    def test_snap_chooses_nearest_main_channel_not_largest_accumulation(self):
+    def test_snap_requires_directions_to_verify_upstream_relationship(self):
         counts = np.zeros((3, 5), dtype=np.uint32)
         counts[1, 2], counts[1, 1], counts[1, 4] = 1, 90, 1000
-        effective, snap = hydro._nearest_main_channel(
-            counts, (100, 10, 0, 200, 0, -10), 125, 185, 10000, .9, 50)
-        self.assertEqual((effective.row, effective.col), (1, 1))
-        self.assertEqual((snap["snapped_x"], snap["snapped_y"]), (115, 185))
-        self.assertEqual(snap["distance_m"], 10)
-        self.assertEqual(snap["candidate_upstream_area_m2"], 9000)
-        self.assertEqual(snap["candidate_count"], 2)
-        self.assertEqual(snap["status"], "snapped")
-
-    def test_snap_equal_distance_uses_row_column_not_larger_area(self):
-        counts = np.zeros((3, 5), dtype=np.uint32)
-        counts[0, 2], counts[2, 2], counts[1, 2] = 90, 1000, 1
-        effective, snap = hydro._nearest_main_channel(
-            counts, (100, 10, 0, 200, 0, -10), 125, 185, 10000, .9, 50)
-        self.assertEqual((effective.row, effective.col), (0, 2))
-        self.assertEqual(snap["tie_break"], "row_col")
-        self.assertEqual(snap["candidate_upstream_area_m2"], 9000)
-
-    def test_snap_no_candidate_or_outside_radius_never_uses_global_fallback(self):
-        counts = np.zeros((3, 5), dtype=np.uint32)
-        counts[1, 1], counts[1, 2] = 1000, 1
-        original = counts.copy()
-        with self.assertRaisesRegex(ValueError, "No se encuentra"):
-            hydro._nearest_main_channel(counts, (100, 10, 0, 200, 0, -10),
-                                         125, 185, 10000, .9, 9)
-        np.testing.assert_array_equal(counts, original)
+        with self.assertRaisesRegex(ValueError, "direcciones D8.*aguas arriba"):
+            hydro._nearest_main_channel(
+                counts, (100, 10, 0, 200, 0, -10), 125, 185, 10000, .9, 50)
 
     def test_snap_rejects_original_direction_nodata_even_if_channel_nearby(self):
-        counts = np.full((3, 5), 1000, dtype=np.uint32)
-        counts[1, 2] = 0
+        codes = np.zeros((3, 5), dtype=np.uint8)
+        codes[1, 2] = 255
+        transform = (100, 10, 0, 200, 0, -10)
+        path = self.raster(codes, transform=transform, nodata=255)
+        dataset = gdal.Open(str(path))
+        counts = hydro._flow_accumulation(dataset.GetRasterBand(1))
+        dataset = None
         with self.assertRaisesRegex(ValueError, "original.*D8"):
-            hydro._nearest_main_channel(counts, (100, 10, 0, 200, 0, -10),
-                                         125, 185, 10000, .9, 50)
-
-    def test_snap_unchanged_means_same_cell_and_keeps_actual_click_distance(self):
-        counts = np.full((3, 5), 100, dtype=np.uint32)
-        effective, snap = hydro._nearest_main_channel(
-            counts, (100, 10, 0, 200, 0, -10), 125.25, 185.5, 10000, .9, 50)
-        self.assertEqual((effective.row, effective.col), (1, 2))
-        self.assertEqual(snap["status"], "unchanged")
-        self.assertAlmostEqual(snap["distance_m"], math.hypot(.25, .5))
-        self.assertEqual((snap["original_x"], snap["original_y"]), (125.25, 185.5))
+            hydro._nearest_main_channel(counts, transform, 125, 185, 10000, .9, 50,
+                                         directions_path=path)
 
     def test_snap_policy_uses_original_diagonal_and_validates_reference(self):
         area, fraction, radius = hydro._snap_parameters(389e6, 500, 500, None, .9)
@@ -367,7 +340,7 @@ class DemHydrologyTests(unittest.TestCase):
         self.assertEqual((result.outlet_x, result.outlet_y), (snap["snapped_x"], snap["snapped_y"]))
         self.assertEqual(snap["candidate_upstream_area_m2"], result.area_m2)
         self.assertGreaterEqual(result.area_m2, 72)
-        self.assertEqual(snap["method"], "nearest_main_channel_d8")
+        self.assertEqual(snap["method"], "upstream_section_d8")
         self.assertEqual(snap["status"], "snapped")
         self.assertEqual(snap["candidate_touches_boundary"], result.touches_boundary)
         self.assertEqual(progress, sorted(progress))

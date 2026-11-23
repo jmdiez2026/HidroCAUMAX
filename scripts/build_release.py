@@ -182,16 +182,11 @@ def build(source: Path, output: Path, tag: str | None = None,
         source_files={name:sha256(path) for name,path in sorted(files.items())})
     (output/'release_manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+'\n',encoding='utf-8',newline='\n')
     channel = 'experimental' if manifest['experimental'] else 'estable'
+    changelog = source/'CHANGELOG.md'
+    changes = changelog.read_text(encoding='utf-8') if changelog.is_file() else ''
     notes = (f'HidroCAUMAX {version} para QGIS 3.34–3.99.\n\n'
         f'Canal {channel}; requiere CAUMAX original.\n\n'
-        'Paleta natural continua: verdes salvia luminosos, ocres suaves y tonos de roca. Transiciones graduales y sombreado con luz del noroeste a 35°, realce vertical visual ×3 y opacidad del 80 %. La interpolación cúbica spline suaviza la representación antes de calcular las sombras. El ajuste es visual y conserva las cotas del MDT y los cálculos hidrológicos.\n\n'
-        'TauDEM 5.5.0, Microsoft MPI y GDAL/PROJ incluidos para Windows de 64 bits. Generar capas D8 prepara automáticamente los componentes en una carpeta privada, sin instalaciones separadas ni descargas.\n\n'
-        'Curva hipsométrica: marcas horizontales enteras, aproximadamente el doble de divisiones, título horizontal más próximo al eje y máximo de dos decimales en etiquetas e HI mostrado. La precisión de cálculo se conserva. El PDF refleja el mismo formato.\n\n'
-        'Las divisorias original y suavizada permanecen como capas QGIS al cerrar el diálogo, con archivos GeoPackage persistentes y reutilización de la misma consulta.\n\n'
-        'El rango de cotas utiliza el rectángulo de la cuenca con un 10 % de margen por lado, intersectado con el encuadre visible. '
-        'Al acercar el mapa usa el área visible; fuera del entorno de la cuenca usa una ventana centrada en el lienzo y limitada al tamaño de ese entorno.\n\n'
-        'Los proyectos antiguos sin contexto usan el área visible hasta abrir la consulta o recalcular. '
-        'Se conservan los cálculos, cotas del MDT, tablas, exportaciones, suavizado y orden de capas.\n\n'
+        + (changes.strip()+'\n\n' if changes else '') +
         f'Repositorio QGIS: {index_url}\n\n'
         f'Instalación manual: {filename}, sin descomprimir.\n\n'
         f'SHA-256: {manifest["sha256"]}\n')

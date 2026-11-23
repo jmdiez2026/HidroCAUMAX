@@ -287,7 +287,8 @@ def _grid_lines(mask, transform, cancelled):
 
 
 def analyze_basin(directions_path, dem_path, outlet_x, outlet_y,
-                  cancelled=lambda: False, progress=lambda n: None, surface_wkb=None):
+                  cancelled=lambda: False, progress=lambda n: None, surface_wkb=None,
+                  *, upstream_only=False):
     """Return one delineation with its original-grid terrain characteristics.
 
     Riley TRI and local maximum-descent D8 slope use complete valid 3x3 DEM
@@ -311,6 +312,14 @@ def analyze_basin(directions_path, dem_path, outlet_x, outlet_y,
             outlet_x, outlet_y, transform[0], transform[3] + rows * transform[5],
             transform[0] + cols * transform[1], transform[3], cols, rows,
         )
+        original_selected = selected
+        outlet_snap = None
+        if upstream_only:
+            if surface_wkb is not None:
+                raise ValueError('Una superficie ya fijada conserva su cierre; no se vuelve a ajustar.')
+            selected, outlet_snap = _b._upstream_section_cell(
+                directions_ds.GetRasterBand(1), transform, outlet_x, outlet_y,
+                cancelled=cancelled)
         weights = None
         if surface_wkb is None:
             mask, window, count, touches_boundary = _b._visit_upstream(
@@ -401,6 +410,19 @@ def analyze_basin(directions_path, dem_path, outlet_x, outlet_y,
             "profile_origin": "cierre", "profile_fractions": (0.10, 0.85),
             "basin_length_definition": "máxima distancia recta cierre-vértice exterior",
         })
+        if outlet_snap is not None:
+            original_count = count
+            if (selected.row, selected.col) != (original_selected.row, original_selected.col):
+                _, _, original_count, _ = _b._visit_upstream(
+                    directions_ds.GetRasterBand(1), original_selected.row, original_selected.col,
+                    cancelled, lambda value: None)
+            original_area = original_count * selected.width * selected.height
+            outlet_snap.update(reference_area_m2=area, candidate_upstream_area_m2=area,
+                               original_cell_upstream_area_m2=original_area,
+                               candidate_touches_boundary=bool(touches_boundary),
+                               area_change_vs_original_cell_m2=area - original_area,
+                               area_change_vs_reference_pct=0.0)
+            diagnostics['outlet_snap'] = outlet_snap
         notes = [
             "Lb es la máxima distancia recta del centro de cierre a un vértice exterior de la divisoria.",
             "El tramo 10–85 % se mide desde el cierre sobre el curso D8 de máxima longitud.",
@@ -410,6 +432,12 @@ def analyze_basin(directions_path, dem_path, outlet_x, outlet_y,
             "Tc(L) usa el curso D8 de máxima longitud y su pendiente de extremos; Tc(10–85) usa la longitud 0,75·L y la pendiente propia de ese tramo, sin suavizado cartográfico.",
             "Son cálculos sobre el curso elegido. La 5.2-IC requiere tantear recorridos para determinar el tiempo de concentración global; el máximo de todos los recorridos se conserva solo como diagnóstico.",
         ]
+        if outlet_snap is not None:
+            notes.append(
+                'Cierre en la misma sección o aguas arriba del punto original; nunca aguas abajo. '
+                f"Desplazamiento a centro de celda: {outlet_snap['distance_m']:.2f} m. "
+                'La sección local es perpendicular a la dirección D8; no sustituye una sección topográfica medida. '
+                'La cuenca se ha delimitado de nuevo desde ese cierre efectivo.')
         if weights is not None:
             diagnostics['terrain_valid_area_m2'] = float(valid_weights.sum())
             diagnostics['terrain_weighting'] = 'exact_polygon_cell_overlap'

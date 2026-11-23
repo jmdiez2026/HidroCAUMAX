@@ -9,9 +9,9 @@ from caumax_consulta.parameter_schema import METRICS,format_value,interpret_valu
 
 class ParameterSchemaTests(unittest.TestCase):
     def test_rectangular_resolution_and_real_cell_area(self):
-        self.assertEqual(format_value('cell_resolution',(500,250)),'500 m × 250 m')
+        self.assertEqual(format_value('cell_resolution',(500,250)),'500mx250m')
         self.assertIn('12,5 ha',interpret_value('cell_resolution',(500,250)))
-        self.assertEqual(format_value('cell_resolution',(.25,.5)),'0,25 m × 0,5 m')
+        self.assertEqual(format_value('cell_resolution',(.25,.5)),'0,25mx0,5m')
         for invalid in (None,(0,500),(-500,500),(500,float('nan')),(500,)):
             self.assertEqual(format_value('cell_resolution',invalid),'No disponible')
 

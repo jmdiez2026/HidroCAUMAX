@@ -24,7 +24,7 @@ def integer_log_ticks(low, high, count=12):
 def geometry(state, known, forward, inverse, width, height, font_family=None):
     width = max(320, int(width))
     font = QFont(font_family or QApplication.font().family())
-    font.setPixelSize(max(10, min(18, int(width / 65))))
+    font.setPixelSize(round(max(10, min(18, int(width / 65))) * 1.10))
     metrics = QFontMetricsF(font)
     line = math.ceil(metrics.height())
     periods = [period for period, _ in known] or [2., 500.]
@@ -53,7 +53,7 @@ def geometry(state, known, forward, inverse, width, height, font_family=None):
     axis_height = max((len(qticks) - 1) * (line + 3), math.ceil((line + 3) / smallest))
     stacked = width < 580
     rows = 2 if stacked else 1
-    top, bottom, legend, gap = line + 12, line * 2 + 12, line + 10, 14
+    top, bottom, legend, gap = line + 12, line * 2 + 12, 0, 14
     height = max(int(height), rows * (axis_height + top + bottom) + legend + (gap if stacked else 0))
     panels = ([QRectF(0, 0, width, (height - legend - gap) / 2),
                QRectF(0, (height - legend + gap) / 2, width, (height - legend - gap) / 2)]
@@ -154,10 +154,6 @@ def render(state, known, forward, inverse, width, height, font_family=None, quan
         low, high = max(layout['tmin'], interval['min_period']), min(layout['tmax'], interval['max_period'] or layout['tmax'])
         if low <= high:
             painter.drawLine(point(low, state['input_flow'], 1), point(high, state['input_flow'], 1))
-    painter.setPen(QColor('#80501B'))
-    painter.drawText(QRectF(0, height - layout['legend'], width, layout['legend']), Qt.AlignCenter,
-                     'Azul: cuantiles CAUMAX · Naranja: consulta seleccionada' if quantity=='Qci' else
-                     'Azul: Pd media de cuenca · Naranja: consulta seleccionada')
     painter.end()
     buffer = QBuffer()
     buffer.open(QIODevice.WriteOnly)

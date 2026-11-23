@@ -7,6 +7,7 @@ from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 import sys
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -223,11 +224,34 @@ class BasinHydrologyDialogTests(unittest.TestCase):
             variants={'25': dict(analysis=self.analysis, query=self.query, smoothing_state=dialog.get_smoothing_state()),
                       '5': dict(analysis=fine, query=fine_query, smoothing_state=None)}, dispose=lambda:None)
         dialog._resolution_controller = controller
-        dialog._resolution_result('5', fine, fine_query)
-        self.assertIsNone(dialog.basin_hydrology_widget.snapshot()['p0_result'])
-        self.assertEqual(dialog.basin_hydrology_widget.snapshot()['rainfall_results'], {})
-        dialog._basin_hydrology_ready(basin_fingerprint(fine), 'p0', self.stats(55.0, analysis=fine))
-        dialog._resolution_result('25', self.analysis, self.query)
+
+        def select_and_finish(key, analysis, query, mean):
+            # Interactive resolution changes deliberately clear the snapshot
+            # until the debounced, complete surface transaction has finished.
+            # This fixture holds task scheduling, so release the queued worker
+            # after Qt has delivered the debounce timer instead of treating the
+            # selection callback as synchronous publication.
+            dialog._resolution_result(key, analysis, query)
+            self.assertTrue(dialog._surface_pending)
+            self.assertIsNone(dialog.basin_hydrology_widget.snapshot())
+            deadline = time.monotonic()+2
+            while dialog._surface_task is None and time.monotonic() < deadline:
+                QTest.qWait(10)
+            task = dialog._surface_task
+            self.assertIsNotNone(task, 'The resolution change did not queue its surface task')
+            def result(current, path, **kwargs):
+                offset = (0 if path == self.sources['p0']
+                          else list(self.sources['rainfall'].values()).index(path))
+                return self.stats(mean+offset, analysis=current)
+            with patch('caumax_consulta.basin_hydrology.basin_raster_mean', side_effect=result):
+                success = task.run()
+            self.assertTrue(success, task.error+'\n'+task.trace)
+            task.finished(success)
+            self.assertFalse(dialog._surface_pending)
+            self.assertIsNotNone(dialog.basin_hydrology_widget.snapshot())
+
+        select_and_finish('5', fine, fine_query, 55.0)
+        select_and_finish('25', self.analysis, self.query, 10.0)
         self.assertEqual(dialog.basin_hydrology_widget.snapshot(), coarse_state)
         state = dialog.get_smoothing_state()
         dialog._cache_variant_state()
@@ -236,18 +260,19 @@ class BasinHydrologyDialogTests(unittest.TestCase):
         save_session(path, self.analysis, self.query, state, resolution_state=resolution)
         for source in (self.dem, self.directions, fine_dem, fine_directions):
             source.unlink()
+        scheduled_tasks = len(self.manager.tasks)
         saved = load_session(path)
         restored = self.make_dialog(saved)
         self.assertEqual(restored.basin_hydrology_widget.snapshot(), coarse_state)
         self.assertEqual(saved.resolution_state['variants']['5']['smoothing_state']['basin_hydrology']['p0_result']['mean_mm'], 55)
-        self.assertFalse(self.manager.tasks)
+        self.assertEqual(len(self.manager.tasks), scheduled_tasks)
         legacy_state = {key:value for key,value in state.items() if key != 'basin_hydrology'}
         legacy = self.make_dialog(replace(saved, smoothing_state=legacy_state, resolution_state=None))
         empty = legacy.basin_hydrology_widget.snapshot()
         self.assertIsNone(empty['p0_result'])
         self.assertEqual(empty['rainfall_results'], {})
         self.assertIn('no calculado', legacy.basin_hydrology_widget.p0_label.text().lower())
-        self.assertFalse(self.manager.tasks)
+        self.assertEqual(len(self.manager.tasks), scheduled_tasks)
 
     def test_discovery_failure_does_not_unlock_save_or_pdf_while_mean_task_is_busy(self):
         dialog = self.dialog
