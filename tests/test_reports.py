@@ -155,7 +155,7 @@ class ReportTests(unittest.TestCase):
         analysis, query = example(candidate=True)
         result = reports.generate_basin_pdf(self.folder / 'candidate.pdf', analysis, query, open_after=False)
         text = normalized(' '.join(page.extract_text() for page in PdfReader(str(result)).pages))
-        self.assertIn('No disponible', text)
+        self.assertIn('n.d.', text)
         self.assertIn('0.163456 h', text)
         self.assertIn('0.123456 h', text)
         self.assertIn('fórmula de Tc(L)', text)
@@ -296,7 +296,7 @@ class ReportTests(unittest.TestCase):
         )
         text = normalized(' '.join(page.extract_text() for page in PdfReader(str(result)).pages))
         for expected in (
-            'HidroCAUMAX v1.2.7', 'Resolución MDT seleccionada', 'MDT25 IGN',
+            'HidroCAUMAX v1.2.8', 'Resolución MDT seleccionada', 'MDT25 IGN',
             '25,00 × 25,00 m', 'IGN/CNIG', 'https://centrodedescargas.cnig.es/',
             'Mayor detalle espacial', 'Caudal CAUMAX original', '177.000000 m³/s',
             'no se recalcula al descargar o seleccionar otro MDT',
@@ -668,7 +668,7 @@ class ReportTests(unittest.TestCase):
         for key in ('tc_h', 'tc_10_85_h', 'hypsometric', 'tri_m'):
             expected = schema.interpret_value(key, None, self.analysis.values)
             self.assertIn(reports._text(expected), content)
-        self.assertGreaterEqual(content.count('No disponible'), 4)
+        self.assertGreaterEqual(content.count('n.d.'), 4)
 
     def test_opener_runs_only_after_final_pdf_is_complete_and_replaces_old_file(self):
         destination = self.folder / 'complete.pdf'

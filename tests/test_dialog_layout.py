@@ -1,11 +1,13 @@
 """Real Qt/QGIS checks for the requested dialog layout and result placement."""
 from types import SimpleNamespace
+from html import unescape
 import unittest
 from unittest.mock import patch
 
-from qgis.PyQt.QtCore import QRect, Qt
+from qgis.PyQt.QtCore import QPoint, QRect, Qt
 from qgis.PyQt.QtGui import QFontMetrics
-from qgis.PyQt.QtWidgets import QMainWindow
+from qgis.PyQt.QtWidgets import QLabel, QMainWindow, QPushButton
+from qgis.PyQt.QtTest import QTest
 from qgis.core import QgsApplication, QgsProject, QgsVectorLayer
 
 import test_drainage_dialog as fixture
@@ -27,17 +29,49 @@ class DialogLayoutTests(unittest.TestCase):
         self.dialog.show()
         self.fixture.app.processEvents()
 
-    def test_notes_are_immediately_below_morphology_and_export_is_compact_left(self):
+    def test_notes_are_below_morphology_and_compact_export_is_immediately_after_degree(self):
         dialog = self.dialog
         body = dialog.body_scroll.widget().layout()
         self.assertEqual(body.indexOf(dialog.status), body.indexOf(dialog.morphology_group) + 1)
         self.assertLess(body.indexOf(dialog.status), body.indexOf(dialog.hypsometry_widget))
         self.assertTrue(dialog.status.isReadOnly())
         button = dialog.export_button
-        layout = button.parentWidget().layout()
-        self.assertTrue(layout.itemAt(layout.indexOf(button)).alignment() & Qt.AlignLeft)
-        self.assertLess(button.height(), 30)
-        self.assertLess(button.width(), 160)
+        row = button.parentWidget().layout().itemAt(0).layout()
+        self.assertEqual(row.indexOf(button),row.indexOf(dialog.smoothing_degree)+1)
+        for width in (520,650,900):
+            with self.subTest(width=width):
+                dialog.resize(width,1000)
+                QTest.qWait(100)
+                dialog._fit_rows()
+                self.fixture.app.processEvents()
+                spin = dialog.smoothing_degree
+                self.assertLessEqual(abs(button.geometry().center().y()-spin.geometry().center().y()),1)
+                self.assertEqual(button.x()-spin.geometry().right()-1,row.spacing())
+                self.assertGreaterEqual(button.width(),button.minimumSizeHint().width())
+                self.assertLessEqual(button.mapTo(dialog.body_scroll.viewport(),QPoint()).x()+button.width(),
+                                     dialog.body_scroll.viewport().width())
+                self.assertLess(button.height(),30)
+                self.assertLess(button.width(),160)
+
+    def test_report_buttons_use_ninety_percent_natural_height_and_compact_centered_widths(self):
+        dialog=self.dialog
+        buttons=(dialog.report_button,dialog.save_project_button,dialog.open_project_button)
+        for button in buttons:
+            baseline=QPushButton(button.text(),button.parentWidget())
+            baseline.ensurePolished()
+            self.assertEqual(button.height(),round(baseline.sizeHint().height()*.90))
+            self.assertGreaterEqual(button.height(),button.fontMetrics().height()+4)
+            baseline.deleteLater()
+        for width in (520,650,900):
+            dialog.resize(width,900)
+            self.fixture.app.processEvents()
+            group=buttons[0].parentWidget()
+            self.assertEqual(len({button.y() for button in buttons}),1)
+            self.assertLessEqual(abs((buttons[0].x()+buttons[-1].geometry().right())/2-group.width()/2),1)
+            for button in buttons:
+                self.assertLessEqual(button.width(),button.sizeHint().width()+1)
+                self.assertGreaterEqual(button.width(),button.fontMetrics().horizontalAdvance(button.text())+20)
+                self.assertLessEqual(button.geometry().right(),group.width())
 
     def test_resolution_and_complete_smoothing_section_are_first(self):
         dialog = self.dialog
@@ -52,10 +86,60 @@ class DialogLayoutTests(unittest.TestCase):
             self.assertTrue(smoothing.isAncestorOf(control))
             self.assertFalse(control.isHidden())
             self.assertLessEqual(control.geometry().bottom(), smoothing.height())
+        summary = dialog.smoothing_status
+        self.assertIsInstance(summary,QLabel)
+        self.assertEqual(summary.textFormat(),Qt.PlainText)
+        self.assertTrue(summary.textInteractionFlags() & Qt.TextSelectableByMouse)
+        self.assertTrue(summary.wordWrap())
+        heights = {}
+        for smoothed in (False,True):
+            dialog.smooth_check.blockSignals(True)
+            dialog.smooth_check.setChecked(smoothed)
+            dialog.smooth_check.blockSignals(False)
+            dialog.smoothing_degree.blockSignals(True)
+            dialog.smoothing_degree.setValue(2)
+            dialog.smoothing_degree.blockSignals(False)
+            dialog._update_smoothing()
+            stats = dialog._geometry_stats()
+            dialog._show_smoothing_summary()
+            self.assertEqual(stats,dialog._geometry_stats())
+            for title,digits in (('área',3),('perímetro',3),('Kc',4),('Ic',4)):
+                self.assertRegex(summary.text(),rf'{title} [-+]?\d+,\d{{{digits}}}')
+            self.assertNotRegex(summary.text(),r'\d\.\d')
+            if smoothed:
+                self.assertIn('Gauss gradual · escala 3,33333 m',summary.text())
+                self.assertRegex(summary.text(),r'Variación: área [-+]\d+,\d{3} %; perímetro [-+]\d+,\d{3}')
+            for width in (650,900):
+                dialog.resize(width,1000)
+                QTest.qWait(100)
+                dialog._fit_rows()
+                self.fixture.app.processEvents()
+                natural = summary.heightForWidth(summary.width())
+                self.assertLessEqual(abs(summary.height()-natural),2)
+                heights[smoothed,width] = summary.height()
+        self.assertGreater(heights[True,650],heights[False,650])
+        self.assertGreater(heights[True,650],heights[True,900])
+
+    def test_complete_manual_outlet_label_fits_the_action_row(self):
+        dialog = self.dialog
+        self.assertEqual(dialog.outlet_adjust_button.text(),'Ajuste Punto de Cierre')
+        self.assertEqual(dialog.clear_delineation_button.text(),'Borrar Delineado')
+        for width in (520,650,900):
+            with self.subTest(width=width):
+                dialog.resize(width,900)
+                self.fixture.app.processEvents()
+                grid,adjust,clear=(dialog.cell_grid_check,dialog.outlet_adjust_button,
+                                   dialog.clear_delineation_button)
+                self.assertLess(grid.geometry().right(),adjust.geometry().left())
+                self.assertLess(adjust.geometry().right(),clear.geometry().left())
+                self.assertEqual(adjust.geometry().center().y(),clear.geometry().center().y())
+                self.assertLessEqual(clear.geometry().right(),dialog.resolution_group.width())
+                self.assertGreaterEqual(adjust.width(),adjust.minimumSizeHint().width())
+                self.assertLess(adjust.height(),30)
 
     def test_morphology_widths_alignments_and_complete_interpretation_are_retained(self):
         dialog = self.dialog
-        for width in (520, 760):
+        for width in (520, 650, 900):
             with self.subTest(width=width):
                 dialog.resize(width, 900)
                 self.fixture.app.processEvents()
@@ -63,13 +147,19 @@ class DialogLayoutTests(unittest.TestCase):
                 table = dialog.table
                 actual = [table.columnWidth(column) for column in range(4)]
                 self.assertLessEqual(abs(sum(actual) - table.viewport().width()), 1)
-                for column, ratio in enumerate((.46, .13, .09, .32)):
-                    self.assertAlmostEqual(actual[column] / sum(actual), ratio, delta=.01)
+                for column,ratio in ((1,.13),(3,.38)):
+                    self.assertAlmostEqual(actual[column]/sum(actual),ratio,delta=.01)
+                self.assertAlmostEqual((actual[0]+actual[2])/sum(actual),.49,delta=.01)
+                self.assertLessEqual(actual[0]/sum(actual),.41)
+                header = table.horizontalHeader()
+                text_width = QFontMetrics(header.font()).horizontalAdvance(table.horizontalHeaderItem(2).text())
+                self.assertGreaterEqual(actual[2],text_width+10)
+                self.assertEqual(header.font(),dialog.font())
                 for row in range(table.rowCount()):
                     for column in (1, 2):
                         self.assertEqual(table.item(row, column).textAlignment(), int(Qt.AlignCenter))
                     item = table.item(row, 3)
-                    self.assertIn(item.text(), item.toolTip())
+                    self.assertIn(item.text(), unescape(item.toolTip()))
                     shown = three_line_text(item.text(), table.font(), actual[3] - 6)
                     self.assertLessEqual(len(shown.splitlines()), 3)
 

@@ -514,11 +514,13 @@ def _valid_cache(path, dem, key):
         cached = None
 
 
-def _flow_accumulation(band, cancelled=lambda: False, progress=lambda fraction: None):
+def _flow_accumulation(band, cancelled=lambda: False, progress=lambda fraction: None, *, weights=None):
     """Exact inclusive upstream counts on an acyclic ESRI D8 forest.
 
     Zero is a valid terminal; NoData contributes zero. Outward directions end
     at the data boundary. A topological queue detects even disconnected cycles.
+    Optional binary weights count only upstream cells belonging to a reference
+    mask while preserving the same full D8 topology and cycle checks.
     UInt32 is exact under MAX_RASTER_CELLS; flat chunks bound index temporaries
     for unusually wide rasters as well as ordinary rectangular DEM grids.
     """
@@ -549,7 +551,15 @@ def _flow_accumulation(band, cancelled=lambda: False, progress=lambda fraction: 
     del raw, raw_flat
     downstream = np.full(total, -1, dtype=np.int32)
     incoming = np.zeros(total, dtype=np.uint8)
-    counts = valid_flat.astype(np.uint32)
+    if weights is None:
+        counts = valid_flat.astype(np.uint32)
+    else:
+        weights = np.asarray(weights)
+        if weights.shape != valid.shape or weights.dtype.kind not in 'biu':
+            raise ValueError('La máscara de referencia no comparte la malla D8.')
+        if np.any((weights != 0) & (weights != 1)):
+            raise ValueError('La máscara de referencia debe ser binaria.')
+        counts = (valid_flat & (weights.ravel() != 0)).astype(np.uint32)
     queue = np.empty(total, dtype=np.int32)
     for start in range(0, total, chunk):
         _check(cancelled)
@@ -962,11 +972,18 @@ def _preflight_analysis(directions_path, selected, cancelled):
 def analyze_dem(dem_path, outlet_x, outlet_y, cache_dir,
                 cancelled=lambda: False, progress=lambda n: None, *,
                 reference_area_m2=None, reference_cell_width=None, reference_cell_height=None,
-                snap_enabled=False, snap_radius_m=None, snap_minimum_fraction=0.9):
+                snap_enabled=False, snap_radius_m=None, snap_minimum_fraction=0.9,
+                refinement_reference=None):
     """Return DemResult from a real, native-resolution local DEM.
 
     DEM: north-up, unrotated, metric projected grid with metre elevations.
-    Without snap_enabled the containing input cell is used. With snapping, the
+    The default outlet is always the centre of the cell containing the exact
+    input point. It never selects a neighbouring cell by length, area or section
+    projection. The original input coordinates remain in Analysis.selected_x/y.
+    A refinement_reference enables a separate spatial correspondence check
+    against the actual coarse basin. It keeps the containing cell when verified,
+    otherwise identifies one matching D8 chain or requests a manual choice.
+    ``snap_enabled=True`` retains the optional legacy association: the
     clicked cell's bounded downstream trace associates a receiving network;
     local segment proximity identifies the branch and the exact original point
     defines its section. The first centre on or upstream of it is selected;
@@ -987,9 +1004,21 @@ def analyze_dem(dem_path, outlet_x, outlet_y, cache_dir,
     progress(0)
     if not isinstance(snap_enabled, bool):
         raise ValueError("La activación del ajuste debe ser booleana.")
+    refinement_enabled = refinement_reference is not None
+    if refinement_enabled and snap_enabled:
+        raise ValueError('El refinamiento espacial y el ajuste legacy no se activan simultáneamente.')
     snap_parameters = (_snap_parameters(reference_area_m2, reference_cell_width,
                                         reference_cell_height, snap_radius_m, snap_minimum_fraction)
                        if snap_enabled else None)
+    if refinement_enabled:
+        ref = refinement_reference if isinstance(refinement_reference, dict) else {}
+        width = _positive_finite(reference_cell_width if reference_cell_width is not None
+                                 else ref.get('cell_width'), 'La anchura de referencia')
+        height = _positive_finite(reference_cell_height if reference_cell_height is not None
+                                  else ref.get('cell_height'), 'La altura de referencia')
+        radius = (max(500., math.hypot(width, height)) if snap_radius_m is None else
+                  _positive_finite(snap_radius_m, 'El radio de correspondencia'))
+        snap_parameters = (_positive_finite(reference_area_m2, 'El área de referencia'), None, radius)
     source = Path(dem_path).expanduser().resolve()
     if not source.is_file():
         raise ValueError("El MDT debe ser un archivo local disponible.")
@@ -1053,21 +1082,29 @@ def analyze_dem(dem_path, outlet_x, outlet_y, cache_dir,
         accumulation_path = None
         accumulation_reused = False
         effective = selected
-        if snap_enabled:
+        if snap_enabled or refinement_enabled:
             counts, accumulation_path, accumulation_reused = _accumulation(
                 directions, cancelled, lambda fraction: progress(65 + min(8, int(fraction * 8))))
             selection_error = None
+            selection_context = {}
             try:
-                effective, snap = _nearest_main_channel(
-                    counts, transform, outlet_x, outlet_y, *snap_parameters, cancelled=cancelled,
-                    directions_path=directions)
+                if refinement_enabled:
+                    from .refinement_snap import select_reference_outlet
+                    effective, snap = select_reference_outlet(
+                        directions, counts, outlet_x, outlet_y, snap_parameters[2], refinement_reference,
+                        cancelled, reference_area_m2=snap_parameters[0])
+                else:
+                    effective, snap = _nearest_main_channel(
+                        counts, transform, outlet_x, outlet_y, *snap_parameters, cancelled=cancelled,
+                        directions_path=directions)
             except ValueError as error:
                 # Preserve only the explanation, not the traceback's large
                 # accumulation array, while the UI waits for a manual point.
                 selection_error = str(error)
+                selection_context = dict(getattr(error, 'selection_context', {}) or {})
             del counts
             if selection_error is not None:
-                raise OutletSelectionRequired(selection_error, {
+                raise OutletSelectionRequired(selection_error, dict(selection_context, **{
                     'dem_path': str(source), 'directions_path': str(directions),
                     'crs_wkt': reference.ExportToWkt(),
                     'original_x': float(outlet_x), 'original_y': float(outlet_y),
@@ -1084,7 +1121,7 @@ def analyze_dem(dem_path, outlet_x, outlet_y, cache_dir,
                                  'elevation_source': 'original DEM; not filled or resampled',
                                  'accumulation_path': accumulation_path,
                                  'accumulation_cache_reused': accumulation_reused},
-                })
+                }))
             progress(74)
         count, window_cells, boundary, feasibility = _preflight_analysis(directions, effective, cancelled)
         if snap is not None:
@@ -1100,7 +1137,8 @@ def analyze_dem(dem_path, outlet_x, outlet_y, cache_dir,
                     "native_resolution": (selected.width, selected.height),
                     "raster_cells": cols * rows, "analysis_window_cells": window_cells,
                     "basin_cells": count, "raster_boundary_touched": boundary,
-                    "source_key": key, "outlet_snapped_to_channel": bool(snap_enabled),
+                    "source_key": key, "outlet_snapped_to_channel": bool(snap and snap['status'] == 'snapped'),
+                    "outlet_reference_checked": refinement_enabled,
                     "memory_feasibility": feasibility,
                     "cache_directory": str(cache), "requested_cache_directory": str(requested_cache),
                     "accumulation_path": accumulation_path,
@@ -1110,9 +1148,10 @@ def analyze_dem(dem_path, outlet_x, outlet_y, cache_dir,
         dataset = None
     _check(cancelled)
     progress(75)
-    calculation_x, calculation_y = ((effective.x, effective.y) if snap_enabled else (outlet_x, outlet_y))
-    analysis = analyze_basin(str(directions), str(source), calculation_x, calculation_y,
-                             cancelled=cancelled,
+    # D8 caches contain the drainage grid, never a previously selected outlet.
+    # Delineate explicitly from this cell centre and disable any second snap.
+    analysis = analyze_basin(str(directions), str(source), effective.x, effective.y,
+                             cancelled=cancelled, upstream_only=False,
                              progress=lambda n: progress(75 + min(24, int(24 * n / max(count, 1)))))
     diagnostic = dict(analysis.diagnostics)
     diagnostic["dem_hydrology"] = metadata
@@ -1122,7 +1161,15 @@ def analyze_dem(dem_path, outlet_x, outlet_y, cache_dir,
              "Las direcciones D8 se recalculan con GRASS r.watershed (-s -m) sobre el MDT "
              "a su resolución original, resolviendo depresiones y planicies por búsqueda de coste. "
              "Las cotas, el TRI y la pendiente local se calculan sobre el MDT original, sin rellenarlo ni remuestrearlo.")
-    if snap is not None:
+    if snap is not None and snap.get('method') == 'reference_basin_d8':
+        notes += (f"Correspondencia espacial entre resoluciones: el cierre comparte "
+                  f"{100 * snap['reference_coverage_fraction']:.1f} % de la huella original y "
+                  f"{100 * snap['candidate_overlap_fraction']:.1f} % de su propia cuenca con ella. "
+                  "La política exige mayoría estricta en ambas direcciones, sin reproducir un área objetivo. "
+                  "Se conserva la celda del clic cuando cumple; un ajuste usa la sección de una única "
+                  "cadena D8 compatible y se verifica frente a la orientación del curso original. "
+                  "Esta comprobación ráster no certifica por sí sola la identidad física del cauce.",)
+    elif snap is not None:
         association = ("Se ha seguido la traza D8 fina del punto original para asociar el cauce "
                        "receptor por sus aportes relativos. Después se identifica el ramal por "
                        "la proximidad de sus segmentos reales al clic, sin decidirlo por su longitud global. "

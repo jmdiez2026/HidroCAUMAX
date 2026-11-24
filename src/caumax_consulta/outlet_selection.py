@@ -40,13 +40,14 @@ class OutletSelectionDialog(QDialog):
         self._row = self._col = None
         self._load_context(context)
 
-        self.setWindowTitle('HidroCAUMAX · Elegir cierre de la cuenca')
+        self.setWindowTitle('HidroCAUMAX · Ajuste Punto de Cierre')
         self.setModal(False)
         self.setWindowModality(Qt.NonModal)
         layout = QVBoxLayout(self)
         introduction = QLabel(
-            'Selecciona la celda donde debe comenzar el curso principal. '
-            'El cálculo se actualizará únicamente al aplicar el cierre.', self)
+            'El cierre automático se sitúa en el centro de la celda del punto de consulta. '
+            'Para ajustarlo manualmente, usa las direcciones o «Elegir en el mapa». '
+            'El cálculo se actualizará al pulsar «Aplicar cierre».', self)
         introduction.setWordWrap(True)
         introduction.setTextFormat(Qt.PlainText)
         layout.addWidget(introduction)

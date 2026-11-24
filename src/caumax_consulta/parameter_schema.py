@@ -29,7 +29,7 @@ METRICS = (
     Metric('zmin_m', 'Altitud mínima (Hmín)', 'm', 2, 'Mínima cota válida del MDT dentro de las celdas de la cuenca.'),
     Metric('zmedian_m', 'Altitud mediana (Hmed · P50)', 'm', 2, 'Percentil 50 de las cotas válidas de la cuenca; ponderado por superficie en la divisoria suavizada. La media de cotas se conserva para el índice hipsométrico.'),
     Metric('main_length_km', 'Longitud del curso principal total (L)', 'km', 2, 'Trayectoria D8 de mayor longitud desde el centro de cierre hasta una celda de cabecera. Longitud horizontal, incluidos los pasos diagonales.'),
-    Metric('main_length_10_85_km', 'Longitud del curso principal entre el 10% y el 85% (L10-85)', 'km', 2, 'Tramo entre 0,10·L y 0,85·L, medido sobre el curso principal desde el cierre hacia la cabecera. Longitud igual a 0,75·L; no usa el suavizado cartográfico de la divisoria.'),
+    Metric('main_length_10_85_km', 'Longitud curso principal 10%-85% (L10-85)', 'km', 2, 'Tramo entre 0,10·L y 0,85·L, medido sobre el curso principal desde el cierre hacia la cabecera. Longitud igual a 0,75·L; no usa el suavizado cartográfico de la divisoria.'),
     Metric('tc_h', 'Tiempo de concentración (L)', 'h', 2, 'Fórmula del apartado 2.2.2.5 de 5.2-IC: Tc = 0,3·L^0,76·J^−0,19, con L en km, cotas en m y J = (Hcabecera − Hcierre)/(1000·L) en m/m. Se aplica al mismo curso principal de máxima longitud, no al máximo entre otras ramas. Tc ≤ 0,25 h requiere cálculo por tramos y se muestra como no disponible.'),
     Metric('tc_10_85_h', 'Tiempo de concentración (L10-85)', 'h', 2, 'Comparación de la misma fórmula sobre el tramo central: Tc10-85 = 0,3·L10-85^0,76·J10-85^−0,19; J10-85 = (H85 − H10)/L10-85, con longitud en km en la fórmula y en m al calcular J. No sustituye el Tc de la cuenca completa. Se aplica el mismo control de disponibilidad de 0,25 h.'),
 )
@@ -43,18 +43,18 @@ def format_value(key, value):
         try:
             width, height = (float(v) for v in value)
         except (TypeError, ValueError, OverflowError):
-            return 'No disponible'
+            return 'n.d.'
         if not all(math.isfinite(v) and v > 0 for v in (width, height)):
-            return 'No disponible'
+            return 'n.d.'
         return f'{_short(width, 2)}mx{_short(height, 2)}m'
     if value is None:
-        return 'No disponible'
+        return 'n.d.'
     try:
         number = float(value)
     except (TypeError, ValueError, OverflowError):
-        return 'No disponible'
+        return 'n.d.'
     if not math.isfinite(number):
-        return 'No disponible'
+        return 'n.d.'
     metric = BY_KEY[key]
     if metric.precision > 0 and 0 < number < 0.01:
         # A positive value below the display precision must not look like zero.
@@ -72,7 +72,7 @@ def _short(value, precision=1):
 def interpret_value(key, value, values=None):
     """Short practical readings without unsupported flood-risk categories."""
     values = values or {}
-    if format_value(key, value) == 'No disponible':
+    if format_value(key, value) == 'n.d.':
         if key == 'hypsometric' and values.get('relief_m') == 0:
             return 'No definido en una cuenca sin desnivel.'
         return 'No evaluable; consulta las observaciones del cálculo.'

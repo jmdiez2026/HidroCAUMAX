@@ -326,14 +326,17 @@ class _Binding:
     original_report: object = None
     wrapper: object = None
     query: object = None
+    query_dirty: bool = False
+    settle_pending: bool = False
 
 
 class CaumaxBridge(QObject):
     """Watch native MaxFlowDialog instances; start/stop are idempotent."""
-    def __init__(self, iface, on_basin_requested):
+    def __init__(self, iface, on_basin_requested, on_query_started=None):
         super().__init__(iface.mainWindow())
         self.iface = iface
         self.on_basin_requested = on_basin_requested
+        self.on_query_started = on_query_started
         self._running = False
         self._bindings = {}
         self._notified = set()
@@ -426,11 +429,13 @@ class CaumaxBridge(QObject):
         connect(button.clicked, lambda _checked=False, key=key: self._request(key))
         connect(dialog.finished, lambda *_args, key=key: self._detach(key))
         connect(dialog.destroyed, lambda *_args, key=key: self._detach(key))
-        for widget in (dialog.txtX, dialog.txtY, dialog.txtResultFlow, dialog.txtResultReturnPeriod):
+        for widget in (dialog.txtX, dialog.txtY):
+            connect(widget.textChanged, lambda *_args, key=key: self._begin_query(key))
+        for widget in (dialog.txtResultFlow, dialog.txtResultReturnPeriod):
             connect(widget.textChanged, lambda *_args, key=key: self._sync(key))
         for radio in dialog.buttonsAndLayers:
             connect(radio.toggled, lambda *_args, key=key: self._sync(key))
-        connect(dialog.btnCalculate.clicked, lambda *_args, key=key: self._sync(key))
+        connect(dialog.btnCalculate.clicked, lambda *_args, key=key: self._begin_query(key))
         try:
             original = dialog.createReport
             wrapper = report_with_auto_open(
@@ -447,7 +452,9 @@ class CaumaxBridge(QObject):
             binding.original_report, binding.wrapper = original, wrapper
         except (AttributeError, TypeError, ValueError, RuntimeError) as error:
             self._notify('Se conserva el informe original: ' + str(error))
-        self._sync(key)
+        # A newly opened native query is a new point context, even if CAUMAX
+        # filled its coordinates before this bridge attached to the window.
+        self._begin_query(key)
         QTimer.singleShot(0, button.install_logo)
 
     def eventFilter(self, obj, event):
@@ -467,6 +474,33 @@ class CaumaxBridge(QObject):
         except (AttributeError, TypeError, ValueError, RuntimeError, OSError):
             binding.query = None
         binding.button.setEnabled(binding.query is not None)
+        if binding.query is not None and binding.query_dirty and not binding.settle_pending:
+            binding.settle_pending = True
+            QTimer.singleShot(0, lambda key=key: self._settle_query(key))
+
+    def _begin_query(self, key):
+        """Invalidate old results once for the native X/Y update sequence."""
+        binding = self._bindings.get(key)
+        if binding is None or not self._running:
+            return
+        if not binding.query_dirty:
+            # Set before closing windows: Qt callbacks can re-enter the bridge.
+            binding.query_dirty = True
+            if self.on_query_started is not None:
+                self.on_query_started(binding.dialog)
+        self._sync(key)
+
+    def _settle_query(self, key):
+        """Rearm after both coordinates and the native result are consistent."""
+        binding = self._bindings.get(key)
+        if binding is None or not self._running:
+            return
+        binding.settle_pending = False
+        try:
+            make_native_query(binding.dialog, binding.module)
+        except (AttributeError, TypeError, ValueError, RuntimeError, OSError):
+            return
+        binding.query_dirty = False
 
     def _request(self, key):
         binding = self._bindings.get(key)
@@ -476,6 +510,9 @@ class CaumaxBridge(QObject):
         if binding.query is None:
             self._notify('Vuelve a consultar un caudal válido antes de abrir la cuenca hidrográfica.')
             return
+        # Opening the result establishes this valid query immediately; a new
+        # coordinate signal must invalidate it even before the next event turn.
+        binding.query_dirty = False
         try:
             self.on_basin_requested(binding.dialog, binding.query)
         except Exception as error:

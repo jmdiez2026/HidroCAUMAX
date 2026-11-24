@@ -228,6 +228,59 @@ class BridgeTests(unittest.TestCase):
         self.assertFalse(button.isEnabled(), 'An old T5 result must not become a T2 query.')
         self.assertFalse(self.calls)
 
+    def test_new_point_cleans_once_before_a_valid_result_and_polling_does_not_clean(self):
+        self.valid_query()
+        started = []
+        self.bridge.on_query_started = started.append
+        self.bridge.start()
+        self.app.processEvents()
+        self.assertEqual(started, [self.dialog])
+        started.clear()
+        # A new click arrives as separate X and Y signals. Cleanup must happen
+        # on the first one, even while CAUMAX's native result is invalid.
+        self.dialog.txtX.setText('341900')
+        self.assertEqual(started, [self.dialog])
+        self.assertFalse(self.basin_button().isEnabled())
+        self.dialog.txtY.setText('4646800')
+        for _ in range(3):
+            self.bridge.scan()
+            self.app.processEvents()
+        self.assertEqual(started, [self.dialog])
+        self.dialog.lastValidPoint = QgsPointXY(341900, 4646800)
+        self.dialog.btnReport.setEnabled(True)
+        self.app.processEvents()
+        self.basin_button().click()
+        self.bridge.scan()
+        self.assertEqual(len(started), 1)
+        self.assertEqual((self.calls[-1][1].x, self.calls[-1][1].y), (341900, 4646800))
+        # A later point invalidates this result immediately, without needing
+        # to press the extended basin button first.
+        self.dialog.txtX.setText('341901')
+        self.assertEqual(len(started), 2)
+
+    def test_repeat_native_query_cleans_but_period_changes_and_reopening_do_not(self):
+        self.valid_query()
+        started = []
+        self.bridge.on_query_started = started.append
+        self.bridge.start()
+        self.app.processEvents()
+        started.clear()
+        self.basin_button().click()
+        self.basin_button().click()
+        self.dialog.txtResultFlow.setText('30')
+        self.bridge.scan()
+        self.assertEqual(started, [])
+        self.dialog.btnCalculate.click()
+        self.assertEqual(started, [self.dialog])
+        self.app.processEvents()
+        self.dialog.radio2.setChecked(True)
+        self.bridge.scan()
+        self.assertEqual(started, [self.dialog])
+        self.bridge.stop()
+        self.dialog.txtX.setText('341999')
+        self.app.processEvents()
+        self.assertEqual(started, [self.dialog])
+
     def test_logo_reserves_width_and_scales_label_and_height(self):
         self.valid_query()
         with patch.object(bridge_module.QTimer,'singleShot'):

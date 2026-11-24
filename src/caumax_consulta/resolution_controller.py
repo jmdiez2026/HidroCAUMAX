@@ -76,12 +76,12 @@ def _check(cancelled):
         raise InterruptedError('La operación de resolución del MDT se ha cancelado.')
 
 
-def _buffered_bounds(analysis):
+def _buffered_bounds(analysis,geometry_wkb=None):
     reference=osr.SpatialReference()
     if (reference.ImportFromWkt(str(analysis.crs_wkt))!=0 or not reference.IsProjected()
             or not math.isclose(reference.GetLinearUnits(),1.0,rel_tol=1e-8)):
         raise ValueError('La cuenca original necesita un CRS proyectado con unidades en metros.')
-    geometry=ogr.CreateGeometryFromWkb(bytes(analysis.geometry_wkb))
+    geometry=ogr.CreateGeometryFromWkb(bytes(analysis.geometry_wkb if geometry_wkb is None else geometry_wkb))
     if geometry is None or geometry.IsEmpty():
         raise ValueError('La cuenca original no tiene una geometría válida.')
     xmin,xmax,ymin,ymax=geometry.GetEnvelope()
@@ -136,9 +136,17 @@ def _build(option,bounds,basin_crs,source_crs,x,y,cache_root,snap_options,cancel
         _check(cancelled)
         native_x,native_y=_dem_point(path,source_crs,x,y)
         publish(label+': calculando drenaje y cuenca',45)
-        result=_analyze_dem(path,native_x,native_y,directory/'hydrology',cancelled,
-                            lambda p:publish(label+': calculando drenaje y cuenca',45+float(p)*.55),
-                            **snap_options)
+        try:
+            result=_analyze_dem(path,native_x,native_y,directory/'hydrology',cancelled,
+                                lambda p:publish(label+': calculando drenaje y cuenca',45+float(p)*.55),
+                                **snap_options)
+        except ValueError as error:
+            if ((getattr(error,'selection_context',None) or {}).get('reason_code')=='reference_outside_dem'
+                    and attempt<2):
+                current=_enlarge(current)
+                publish(label+': ampliando cobertura para la cuenca de referencia',100)
+                continue
+            raise
         _check(cancelled)
         if not result.analysis.touches_boundary:
             break
@@ -225,6 +233,9 @@ class ResolutionController(QObject):
         self.engine={}
         self.requested_key=None
         self.outlet_selection_context=None
+        # Only current-run automatic variants are invalidated when the coarse
+        # outlet changes. Portable snapshots and explicit manual choices stay put.
+        self._automatic_references={}
         self._set_base(base_analysis,base_query)
         self.active_key=self._base_key
         self.variants={self._base_key:{'analysis':base_analysis,'query':base_query,
@@ -346,7 +357,7 @@ class ResolutionController(QObject):
         if self._disposed:return False
         key=str(key)
         option=next((item for item in self.options if item['key']==key),None)
-        if key in self.variants:
+        if key in self.variants and not self._needs_reference_rebuild(key):
             self.cancel()
             self.active_key=key
             variant=self.variants[key]
@@ -400,19 +411,47 @@ class ResolutionController(QObject):
 
     def _start_build(self,key,kind):
         option=self._option_objects[key]
+        reference_analysis,reference_geometry=self._current_reference()
+        refinement_reference=None
+        if float(key)<min(reference_analysis.cell_width,reference_analysis.cell_height):
+            refinement_reference=dict(geometry_wkb=reference_geometry,
+                main_course_wkb=reference_analysis.main_course_wkb,
+                crs_wkt=reference_analysis.crs_wkt,cell_width=reference_analysis.cell_width,
+                cell_height=reference_analysis.cell_height)
         snap_options={
             'reference_area_m2':self.reference_area_m2,
-            'reference_cell_width':float(self.base_analysis.cell_width),
-            'reference_cell_height':float(self.base_analysis.cell_height),
-            'snap_enabled':float(key)<float(self._base_key),
+            'reference_cell_width':float(reference_analysis.cell_width),
+            'reference_cell_height':float(reference_analysis.cell_height),
+            'snap_enabled':False,
+            'refinement_reference':refinement_reference,
             'snap_radius_m':float(self.snap_radius_m),
             'snap_minimum_fraction':float(self.snap_minimum_fraction),
         }
-        args=(option,tuple(self.bounds),self.crs_wkt,self._query_crs,self._query_x,self._query_y,
+        bounds=_buffered_bounds(reference_analysis,reference_geometry)
+        args=(option,bounds,str(reference_analysis.crs_wkt),self._query_crs,self._query_x,self._query_y,
               self.cache_dir/('resolution_'+key.replace('.','_')),snap_options)
         operation=lambda cancelled,publish:_build(*args,cancelled,publish)
         self._on_status('Preparando el MDT de '+key+' m…')
         self._start('CAUMAX: MDT de '+key+' m',operation,kind,key)
+        self._task.reference_signature=self._reference_signature() if refinement_reference is not None else None
+
+    def _current_reference(self):
+        base=self.variants.get(self._base_key,{'analysis':self.base_analysis})
+        reference_analysis=base['analysis']
+        state=base.get('smoothing_state') or {}
+        reference_geometry=state.get('base_geometry_wkb')
+        if reference_geometry is None and not (reference_analysis.diagnostics or {}).get('analysis_surface'):
+            reference_geometry=reference_analysis.geometry_wkb
+        return reference_analysis,reference_geometry
+
+    def _reference_signature(self):
+        analysis,geometry=self._current_reference()
+        raw=bytes(geometry or b'')+bytes(analysis.main_course_wkb or b'')+str(analysis.crs_wkt).encode('utf-8')
+        return hashlib.sha256(raw).hexdigest()
+
+    def _needs_reference_rebuild(self,key):
+        signature=self._automatic_references.get(key)
+        return signature is not None and signature!=self._reference_signature()
 
     def ensure_all(self,on_ready):
         if self._disposed:return False
@@ -420,7 +459,8 @@ class ResolutionController(QObject):
         self.cancel()
         self._ensure_ready=on_ready
         self._ensure_queue=[item['key'] for item in self.options
-                            if item['available'] and item['key'] not in self.variants]
+                            if item['available'] and (item['key'] not in self.variants
+                                                      or self._needs_reference_rebuild(item['key']))]
         self._next_bulk()
         return True
 
@@ -474,6 +514,9 @@ class ResolutionController(QObject):
             query=replace(self.base_query,directions_path=data['directions_path'],dem_path=data['dem_path'])
             self.variants[key]={'analysis':data['analysis'],'query':query,
                                 'smoothing_state':None,'metadata':data['metadata']}
+            signature=getattr(task,'reference_signature',None)
+            if signature is not None:self._automatic_references[key]=signature
+            else:self._automatic_references.pop(key,None)
             self.last_errors.pop(key,None)
             for item in self.options:
                 if item['key']==key:
@@ -512,6 +555,7 @@ class ResolutionController(QObject):
             if not isinstance(variant,dict) or 'analysis' not in variant or 'query' not in variant:
                 raise ValueError('Variante incompleta en el proyecto.')
         self.cancel()
+        self._automatic_references.clear()
         self.variants={str(key):dict(value) for key,value in variants.items()}
         self.options=options
         self.active_key=active

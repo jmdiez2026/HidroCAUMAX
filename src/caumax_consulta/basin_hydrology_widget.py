@@ -178,11 +178,13 @@ def describe_precipitation_estimates(state, rich_text=False):
     else:
         inverse_text = 'T(Pd): no disponible para esta precipitación con las medias calculadas.'
     note = ('Promedio espacial de los cuantiles puntuales de precipitación máxima diaria '
-            'sobre la parte válida de la cuenca. Interpolación lineal de Pd media frente '
-            'a ln(T), con la inversa sobre los mismos tramos. No equivale a una frecuencia '
-            'de tormenta areal. P₀ se presenta sin aplicar β ni otros coeficientes correctores. '
-            + ('Extrapolación permitida.' if state['extrapolate']
-               else 'Sin extrapolación fuera de los cuantiles calculados.'))
+            'sobre la parte válida de la cuenca.')
+    if not rich_text:
+        note += (' Interpolación lineal de Pd media frente a ln(T), con la inversa sobre los mismos tramos. '
+                 'No equivale a una frecuencia de tormenta areal. P₀ se presenta sin aplicar β '
+                 'ni otros coeficientes correctores. '
+                 + ('Extrapolación permitida.' if state['extrapolate']
+                    else 'Sin extrapolación fuera de los cuantiles calculados.'))
     if any(mean is None for mean in means):
         note += ' Los periodos no calculados o sin datos válidos no se sustituyen por cero.'
     if any(result['status'] == 'partial' for result in state['rainfall_results'].values()):
@@ -190,10 +192,12 @@ def describe_precipitation_estimates(state, rich_text=False):
     from .raster_profiles import statistics_for_period
     statistics=statistics_for_period(state)
     if statistics is not None and forward['flow'] is not None:
+        maximum,minimum,deviation = (('Máx','Mín','Desv. típ. espacial') if rich_text else
+                                    ('Máximo','Mínimo','Desviación típica espacial'))
         direct_text=(f"Pd({_years(state['input_period'])} años): media {highlight(_number(statistics['mean_mm']))} mm · "
             f"mediana {_number(statistics['median_mm'])} mm\n"
-            f"Máximo: {_number(statistics['max_mm'])} mm · Mínimo: {_number(statistics['min_mm'])} mm\n"
-            f"Desviación típica espacial: {_number(statistics['stddev_mm'])} mm")
+            f"{maximum}: {_number(statistics['max_mm'])} mm · {minimum}: {_number(statistics['min_mm'])} mm\n"
+            f"{deviation}: {_number(statistics['stddev_mm'])} mm")
         note += ' Los estadísticos de Pd(T) se obtienen interpolando por celda en ln(T), sobre la superficie válida común de las capas.'
     elif forward['flow'] is not None:
         direct_text += ' Mediana, extremos y desviación: pendientes de recalcular.'
@@ -276,20 +280,18 @@ class BasinHydrologyWidget(QWidget):
         layout.addWidget(self.p0_group)
         layout.addWidget(self.rainfall_group)
         self.p0_button = QPushButton('Calcular P₀ medio',self)
-        self.rainfall_button = QPushButton('Calcular Precipitación diaria\nmáxima anual MEDIA (mm)',self)
+        self.rainfall_button = QPushButton('Calcular Precipitación diaria máxima anual MEDIA (mm)',self)
         self.rainfall_button.setToolTip('Calcular Precipitación diaria máxima anual MEDIA (mm)')
-        caption_lines = self.rainfall_button.text().split('\n')
-        metrics = self.rainfall_button.fontMetrics()
-        button_width = max(metrics.horizontalAdvance(line) for line in caption_lines)+22
-        button_height = max(32,max(metrics.height(),metrics.lineSpacing())*2+6)
         for button in (self.p0_button,self.rainfall_button):
             button.setStyleSheet('QPushButton { padding:2px 9px; min-height:0px; }')
-            button.setFixedSize(button_width,button_height)
+        self.rainfall_button.setStyleSheet('QPushButton { padding:2px 1px; min-height:0px; }')
+        self._fit_calculation_buttons()
         self.p0_label = QLabel('P₀ medio: no calculado. β no aplicado.',self)
         self.p0_label.setTextFormat(Qt.RichText)
-        self.p0_statistics_label = QLabel('Mediana, máximo, mínimo y desviación típica: no calculados.',self)
+        self.p0_statistics_label = QLabel('Mediana, Máx, Mín y Desv. típ: no calculados.',self)
         self.p0_statistics_label.setWordWrap(True)
         self.coverage_label = QLabel('Cobertura: no calculada.',self)
+        self.coverage_label.hide()
         self.p0_label.setWordWrap(True)
         self.coverage_label.setWordWrap(True)
         p0_row = QGridLayout()
@@ -303,15 +305,22 @@ class BasinHydrologyWidget(QWidget):
         self.rainfall_table = QTableWidget(6,6,self)
         self.rainfall_table.setHorizontalHeader(CompactTableHeader(self.rainfall_table))
         self.rainfall_table.setHorizontalHeaderLabels(
-            ['Periodo T (años)','Pd (media)','Pd mínimo','Pd máximo','Desv. Típica','Estado'])
+            ['Periodo T (años)','Pd (media)','Pd mín','Pd máx','Desv. típ.','Estado'])
         self.rainfall_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.rainfall_table.setAlternatingRowColors(False)
         self.rainfall_table.setStyleSheet('QTableWidget { background-color:white; alternate-background-color:white; }')
         self.rainfall_table.verticalHeader().setVisible(False)
-        self.rainfall_table.verticalHeader().setDefaultSectionSize(24)
+        row_height=max(self.rainfall_table.fontMetrics().height(),self.rainfall_table.fontMetrics().lineSpacing())+2
+        self.rainfall_table.verticalHeader().setMinimumSectionSize(row_height)
+        self.rainfall_table.verticalHeader().setDefaultSectionSize(row_height)
+        self.rainfall_table.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
         self.rainfall_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.rainfall_table.horizontalHeader().setSectionResizeMode(0,QHeaderView.ResizeToContents)
-        self.rainfall_table.setFixedHeight(6*24+self.rainfall_table.horizontalHeader().sizeHint().height()+2*self.rainfall_table.frameWidth())
+        self.rainfall_table.horizontalHeader().setSectionResizeMode(5,QHeaderView.ResizeToContents)
+        self.rainfall_table.setFixedHeight(6*row_height+self.rainfall_table.horizontalHeader().sizeHint().height()+2*self.rainfall_table.frameWidth())
+        self._rainfall_rows_timer=QTimer(self)
+        self._rainfall_rows_timer.setSingleShot(True)
+        self._rainfall_rows_timer.timeout.connect(self._fit_rainfall_rows)
+        self.rainfall_table.horizontalHeader().sectionResized.connect(lambda *_:self._rainfall_rows_timer.start(0))
         rainfall_layout.addWidget(self.rainfall_table)
         controls = QGridLayout()
         self.period_spin = QDoubleSpinBox(self)
@@ -366,13 +375,36 @@ class BasinHydrologyWidget(QWidget):
 
     def _fit_calculation_buttons(self):
         try:
-            for button in (self.p0_button,self.rainfall_button):button.ensurePolished()
-            metrics=self.rainfall_button.fontMetrics()
-            width=max(metrics.horizontalAdvance(line) for line in self.rainfall_button.text().split('\n'))+22
-            height=max(32,max(metrics.height(),metrics.lineSpacing())*2+6)
-            for button in (self.p0_button,self.rainfall_button):button.setFixedSize(width,height)
+            for button in (self.p0_button,self.rainfall_button):
+                button.ensurePolished()
+                metrics=button.fontMetrics()
+                width=metrics.horizontalAdvance(button.text())+(4 if button is self.rainfall_button else 22)
+                height=max(26,max(metrics.height(),metrics.lineSpacing())+6)
+                button.setFixedSize(width,height)
         except RuntimeError:
             return
+
+    def _fit_rainfall_rows(self):
+        table=self.rainfall_table
+        metrics=table.fontMetrics()
+        minimum=max(metrics.height(),metrics.lineSpacing())+2
+        table.verticalHeader().setMinimumSectionSize(minimum)
+        table.verticalHeader().setDefaultSectionSize(minimum)
+        for row in range(table.rowCount()):
+            height=minimum
+            for column in range(table.columnCount()):
+                item=table.item(row,column)
+                if item is not None:
+                    bounds=metrics.boundingRect(0,0,max(1,table.columnWidth(column)-6),1000,
+                                                Qt.AlignCenter|Qt.TextWordWrap,item.text())
+                    height=max(height,bounds.height()+2)
+            table.setRowHeight(row,height)
+        table.horizontalHeader()._fit_height()
+
+    def resizeEvent(self,event):
+        super().resizeEvent(event)
+        if hasattr(self,'_rainfall_rows_timer'):
+            self._rainfall_rows_timer.start(0)
 
     def set_analysis(self,analysis,state=_NOT_GIVEN):
         if analysis is None:
@@ -446,9 +478,15 @@ class BasinHydrologyWidget(QWidget):
         self._busy = bool(busy)
         self._sync_busy()
         if text:
-            self.status_label.setText(str(text))
-        elif not self._busy:
-            self.status_label.setText(self._ready_status())
+            self._set_status(str(text))
+        elif self._busy:
+            self._set_status('Calculando datos hidrológicos…')
+        else:
+            self._set_status(self._ready_status())
+
+    def _set_status(self,text):
+        self.status_label.setText(text)
+        self.status_label.setVisible(bool(text))
 
     def _sync_busy(self):
         enabled = self._analysis is not None and not self._busy
@@ -472,16 +510,14 @@ class BasinHydrologyWidget(QWidget):
             return 'Datos todavía no calculados. Pulsa el botón correspondiente.'
         partial = any(result['status'] != 'ok' for result in
                       ([p0] if p0 is not None else [])+list(self._state['rainfall_results'].values()))
-        return (f"P₀: {'calculado' if p0 is not None else 'no calculado'} · "
-                f'Precipitación: {count}/6 periodos calculados.'
-                + (' Revisa las coberturas parciales o los datos no disponibles.' if partial else ''))
+        return 'Revisa las coberturas parciales o los datos no disponibles.' if partial else ''
 
     def _refresh(self):
         self._sync_busy()
         p0 = self._state['p0_result'] if self._state is not None else None
         if p0 is None:
             self.p0_label.setText('P₀ medio: no calculado. β no aplicado.')
-            self.p0_statistics_label.setText('Mediana, máximo, mínimo y desviación típica: no calculados.')
+            self.p0_statistics_label.setText('Mediana, Máx, Mín y Desv. típ: no calculados.')
             self.coverage_label.setText('Cobertura: no calculada.')
             self.p0_label.setToolTip('')
         else:
@@ -494,8 +530,8 @@ class BasinHydrologyWidget(QWidget):
             else:
                 numbers = {key:f'{value:.2f}'.replace('.', ',') for key,value in statistics.items()}
                 self.p0_statistics_label.setText(
-                    f"Mediana: {numbers['median_mm']} mm · Máximo: {numbers['max_mm']} mm · Mínimo: {numbers['min_mm']} mm\n"
-                    f"Desviación típica: {numbers['stddev_mm']} mm")
+                    f"Mediana: {numbers['median_mm']} mm · Máx: {numbers['max_mm']} mm · Mín: {numbers['min_mm']} mm\n"
+                    f"Desv. típ: {numbers['stddev_mm']} mm")
             self.p0_statistics_label.setToolTip('Mediana y desviación típica poblacional ponderadas por el área válida de los píxeles dentro de la cuenca. No se aplica β.')
             self.coverage_label.setText(
                 f"Cobertura ráster: {_number(p0['coverage_fraction']*100)} % · "
@@ -534,5 +570,6 @@ class BasinHydrologyWidget(QWidget):
             self.plots.state = self.snapshot()
         self.plots.setMinimumHeight(self.plots.heightForWidth(self.plots.width()))
         self.plots.updateGeometry();self.plots.update()
+        self._rainfall_rows_timer.start(0)
         if not self._busy:
-            self.status_label.setText(self._ready_status())
+            self._set_status(self._ready_status())

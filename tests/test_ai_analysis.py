@@ -11,8 +11,9 @@ from unittest.mock import patch
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 
-from qgis.PyQt.QtCore import QByteArray, QObject, pyqtSignal
+from qgis.PyQt.QtCore import QByteArray, QCoreApplication, QEvent, QObject, pyqtSignal
 from qgis.PyQt.QtNetwork import QNetworkRequest
+from qgis.PyQt.QtWidgets import QWidget
 from qgis.core import QgsApplication
 from caumax_consulta import ai_analysis as ai
 from caumax_consulta.parameter_schema import METRICS
@@ -101,10 +102,12 @@ class ContextTests(unittest.TestCase):
 
     def test_new_snap_modes_share_numeric_diagnostics_without_the_location_proof(self):
         for mode in ('upstream_main_course','upstream_lateral_main_course','user_selected_cell',
-                     'upstream_nearest_branch','upstream_lateral_nearest_branch'):
+                     'upstream_nearest_branch','upstream_lateral_nearest_branch','reference_basin_overlap'):
             analysis,query,state=sample_state()
             snap=analysis.diagnostics['outlet_snap']
-            snap.update(selection_mode=mode,association_lateral_distance_m=18.,
+            snap.update(selection_mode=mode,reference_geometry_wkb_hex='SECRET_GEOMETRY',
+                reference_crs_wkt='SECRET_CRS',reference_grid_bounds=[1234567,7654321,1234568,7654322],
+                association_lateral_distance_m=18.,
                 channel_anchor_upstream_area_m2=25000.,section_projection_x=1234567,
                 section_projection_y=7654321,manual_requested_x=1234567,
                 manual_requested_y=7654321,downstream_connection_path=[[1234567,7654321]],
@@ -119,7 +122,8 @@ class ContextTests(unittest.TestCase):
             self.assertEqual(context['outlet_adjustment']['branch_distance_m'],7.6)
             encoded=json.dumps(context,allow_nan=False)
             for forbidden in ('1234567','7654321','section_projection','manual_requested',
-                              'downstream_connection_path','upstream_path','manual_raster'):
+                              'downstream_connection_path','upstream_path','manual_raster','reference_grid',
+                              'reference_geometry','reference_crs','SECRET'):
                 self.assertNotIn(forbidden,encoded)
             if mode=='user_selected_cell':
                 self.assertIs(context['outlet_adjustment']['explicit_user_choice'],True)
@@ -282,6 +286,8 @@ class DialogTests(unittest.TestCase):
         self.network=patch.object(ai,'QgsNetworkAccessManager',
                                  SimpleNamespace(instance=lambda:self.manager));self.network.start()
         self.dialog=ai.AnalysisDialog(None,ai.build_context(*sample_state()))
+        self.received=[]
+        self.dialog.interpretations_ready.connect(lambda values:self.received.append(dict(values)))
 
     def tearDown(self):
         self.dialog.close();self.autostart.stop();self.network.stop()
@@ -309,6 +315,9 @@ class DialogTests(unittest.TestCase):
         self.assertEqual(len(self.manager.requests),1)
         self.assertIn('recuperado',self.dialog.status.text())
         self.assertFalse(self.dialog.cooldown.isActive())
+        self.assertEqual(len(self.received),2)
+        self.assertEqual(self.received[0],self.received[1])
+        self.assertEqual(set(self.received[0]),{metric.key for metric in METRICS})
 
     def test_flagged_interpretation_is_visible_for_review_but_not_cached_as_complete(self):
         result=json.loads(structured())
@@ -318,6 +327,13 @@ class DialogTests(unittest.TestCase):
         self.assertIn(ai.REVIEW_PREFIX,self.dialog.result_text)
         self.assertTrue(self.dialog.copy_button.isEnabled())
         self.assertFalse(ai._CACHE)
+        self.assertEqual(len(self.received),1)
+        text=self.received[0]['zmin_m']
+        self.assertTrue(text.startswith(ai.REVIEW_PREFIX))
+        self.assertIn('Hmín no identifica necesariamente el cierre de la cuenca.',text)
+        self.assertIn('**Texto recibido de IA:**',text)
+        self.assertNotEqual(text,result['parameter_interpretations']['zmin_m'])
+        self.assertIn(text.replace('|','\\|'),self.dialog.result_text)
 
     def test_reject_cancels_like_close_and_ignores_late_results(self):
         self.dialog.start();ai._ACTIVE_DIALOG=self.dialog
@@ -330,6 +346,7 @@ class DialogTests(unittest.TestCase):
         self.assertEqual(len(self.manager.requests),1)
         self.assertFalse(ai._CACHE)
         self.assertFalse(self.dialog.timer.isActive())
+        self.assertFalse(self.received)
 
     def test_timeout_aborts_and_never_invents_or_caches_analysis(self):
         self.dialog.start();self.dialog._timeout()
@@ -337,6 +354,7 @@ class DialogTests(unittest.TestCase):
         self.assertIn('tiempo de espera',self.dialog.status.text())
         self.assertFalse(self.dialog.result_text)
         self.assertFalse(ai._CACHE)
+        self.assertFalse(self.received)
 
     def test_oversize_final_chunk_is_bounded_and_finished_is_not_reentrant(self):
         self.dialog.start()
@@ -373,6 +391,98 @@ class DialogTests(unittest.TestCase):
         self.assertIn('incompleta',self.dialog.status.text())
         self.assertFalse(self.dialog.copy_button.isEnabled())
         self.assertFalse(ai._CACHE)
+        self.assertFalse(self.received)
+
+    def test_public_callback_receives_all_reviewed_report_rows_without_markdown_parsing(self):
+        self.dialog.close()
+        self.dialog=ai.show_analysis(None,*sample_state(),on_interpretations=self.received.append)
+        result=json.loads(structured())
+        result['parameter_interpretations']={metric.key:'Lectura específica de '+metric.key+'.'
+                                              for metric in METRICS}
+        result['parameter_interpretations']['area_km2']=' Primera línea | alternativa.\nSegunda línea. '
+        self.dialog.start();self.complete(response(json.dumps(result)))
+        self.assertEqual(len(self.received),1)
+        delivered=self.received[0]
+        self.assertEqual(list(delivered),[metric.key for metric in METRICS])
+        for metric in METRICS:
+            expected=result['parameter_interpretations'][metric.key].replace('\n',' ').strip()
+            self.assertEqual(delivered[metric.key],expected)
+            self.assertIn(' | '+expected.replace('|','\\|')+' |',self.dialog.result_text)
+        self.assertEqual(delivered['area_km2'],'Primera línea | alternativa. Segunda línea.')
+
+    def test_reopened_cache_delivers_fresh_dictionary_without_a_network_request(self):
+        self.dialog.start();self.complete()
+        expected=dict(self.received[0])
+        cached_text=self.dialog.result_text
+        self.dialog.close()
+        def consumer(values):
+            self.received.append(dict(values))
+            values['area_km2']='Consumer-local edit'
+        self.dialog=ai.show_analysis(None,*sample_state(),on_interpretations=consumer)
+        self.dialog.start();self.dialog.start()
+        self.assertEqual(len(self.manager.requests),1)
+        self.assertEqual(self.received,[expected,expected,expected])
+        self.assertEqual(self.dialog.interpretations,expected)
+        self.assertEqual(self.dialog.result_text,cached_text)
+        self.assertNotIn('Consumer-local edit',self.dialog.result_text)
+
+    def test_invalid_or_incomplete_response_never_publishes_parameter_rows(self):
+        missing=json.loads(structured())
+        missing['parameter_interpretations'].pop('area_km2')
+        cases=((response('{"parameter_interpretations":'),200),
+               (response(json.dumps(missing)),200),
+               (response(structured(),'length'),200),
+               (response(structured()),503))
+        for raw,status in cases:
+            with self.subTest(status=status,raw=raw[:60]):
+                self.dialog.close()
+                ai._NEXT_REQUEST_AT=0.
+                self.reply=FakeReply();self.manager.reply=self.reply
+                self.dialog=ai.show_analysis(None,*sample_state(),on_interpretations=self.received.append)
+                self.dialog.start();self.complete(raw,status)
+                self.assertFalse(self.received)
+                self.assertFalse(self.dialog.interpretations)
+                self.assertFalse(ai._CACHE)
+
+    def test_closed_dialog_does_not_publish_a_ready_cached_result(self):
+        self.dialog.start();self.complete()
+        self.assertEqual(len(self.received),1)
+        self.dialog.close()
+        self.dialog=ai.show_analysis(None,*sample_state(),on_interpretations=self.received.append)
+        self.dialog.reject()
+        self.dialog.start()
+        self.assertEqual(len(self.received),1)
+        self.assertEqual(len(self.manager.requests),1)
+
+    def test_consumer_can_close_the_dialog_after_receiving_the_result(self):
+        self.dialog.interpretations_ready.connect(lambda values:self.dialog.close())
+        self.dialog.start();self.complete()
+        self.assertEqual(len(self.received),1)
+        self.assertTrue(self.dialog._closed)
+        self.assertIsNone(self.dialog.reply)
+        self.assertEqual(self.reply.deleted,1)
+
+    def test_destroyed_parent_drops_active_dialog_and_allows_a_new_analysis(self):
+        self.dialog.close()
+        parent=QWidget()
+        self.dialog=ai.show_analysis(parent,*sample_state(),on_interpretations=self.received.append)
+        self.dialog.start()
+        previous=self.dialog
+        parent.deleteLater()
+        QCoreApplication.sendPostedEvents(parent,QEvent.DeferredDelete)
+        # These can also be pending Python callbacks when Qt removes a parent.
+        previous.start()
+        previous._finished()
+        self.assertIsNone(ai._ACTIVE_DIALOG)
+        self.assertFalse(self.received)
+        self.assertEqual(len(self.manager.requests),1)
+        self.reply=FakeReply();self.manager.reply=self.reply
+        ai._NEXT_REQUEST_AT=0.
+        self.dialog=ai.show_analysis(None,*sample_state(),on_interpretations=self.received.append)
+        self.dialog.start();self.complete()
+        self.assertIs(ai._ACTIVE_DIALOG,self.dialog)
+        self.assertEqual(len(self.manager.requests),2)
+        self.assertEqual(len(self.received),1)
 
     def test_failed_retry_does_not_copy_stale_partial_text(self):
         self.dialog.start();self.complete(response('Texto previo','length'))

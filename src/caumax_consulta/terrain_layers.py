@@ -120,7 +120,7 @@ class TerrainLayers:
                 f'HidroCAUMAX · MDT {analysis.cell_width:g} × {analysis.cell_height:g} m · Relieve', 30)
             group.setCustomProperty('HidroCAUMAX/terrain_owner', self.owner_key)
             group.setExpanded(False)
-            visible = not bool(self._variants)
+            visible = False
             for index, layer in enumerate(layers):
                 layer.setCustomProperty('HidroCAUMAX/terrain_owner', self.owner_key)
                 project.addMapLayer(layer, False)
@@ -143,11 +143,12 @@ class TerrainLayers:
             self._group = create_result_group(project, 'HidroCAUMAX · MDT y relieve', 30)
             self._group.setCustomProperty('HidroCAUMAX/terrain_owner', self.owner_key)
             self._group.setExpanded(False)
+            self._group.setItemVisibilityChecked(False)
         self._group.setName(f'HidroCAUMAX · MDT {analysis.cell_width:g} × {analysis.cell_height:g} m · Relieve')
         for index, layer in enumerate(layers):
             layer.setCustomProperty('HidroCAUMAX/terrain_owner', self.owner_key)
             project.addMapLayer(layer, False)
-            self._group.insertLayer(index, layer)
+            self._group.insertLayer(index, layer).setItemVisibilityChecked(False)
         self.layers = layers
         self._signature = signature
         ensure_results_above_official(project)

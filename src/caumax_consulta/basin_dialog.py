@@ -1,15 +1,18 @@
 """Basin window opened from CAUMAX's own maximum-flow query dialog."""
 import traceback
+import hashlib
+import json
+from html import escape
 from pathlib import Path
 from dataclasses import replace
 from copy import deepcopy
 from types import SimpleNamespace
 
-from qgis.PyQt.QtCore import Qt, QTimer, QSettings, QEvent
-from qgis.PyQt.QtGui import QColor, QFont, QFontMetrics
+from qgis.PyQt.QtCore import Qt, QTimer, QSettings, QEvent, QSize
+from qgis.PyQt.QtGui import QColor, QFont, QFontMetrics, QIcon
 from qgis.PyQt.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QDialog, QDialogButtonBox,
-    QDoubleSpinBox, QSpinBox, QFileDialog, QGridLayout, QGroupBox, QHBoxLayout, QMessageBox,
+    QDoubleSpinBox, QSpinBox, QFileDialog, QFrame, QGridLayout, QGroupBox, QHBoxLayout, QMessageBox,
     QHeaderView, QLabel, QPlainTextEdit, QProgressBar, QPushButton, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QScrollArea, QSizePolicy, QWidget,
 )
@@ -19,9 +22,9 @@ from qgis.core import (
 )
 from qgis.gui import QgsRubberBand, QgsVertexMarker
 
-from .parameter_schema import METRICS, format_value, interpret_value
+from .parameter_schema import METRICS, format_value
 from .metrics import shape_metrics
-from .morphology_table import InterpretationDelegate
+from .morphology_table import InterpretationDelegate, InterpretationHeader
 
 
 BLUE_BUTTON_STYLE = '''
@@ -83,34 +86,14 @@ class AnalysisTask(QgsTask):
         self.outlet = tuple(outlet) if outlet is not None else (query.x, query.y)
         self.result = None
         self.error = self.trace = ''
-        self.selection_context = None
 
     def run(self):
         try:
             from .terrain import analyze_basin
-            from .outlet_errors import OutletSelectionRequired
-            try:
-                self.result = analyze_basin(
-                    self.query.directions_path, self.query.dem_path,
-                    *self.outlet, cancelled=self.isCanceled, upstream_only=True,
-                )
-            except OutletSelectionRequired as error:
-                if self.isCanceled():
-                    raise InterruptedError()
-                # Preserve a real, unsnapped delineation while the user reviews
-                # the ambiguous branch. Ordinary raster errors still fail.
-                self.result = analyze_basin(
-                    self.query.directions_path, self.query.dem_path,
-                    *self.outlet, cancelled=self.isCanceled, upstream_only=False,
-                )
-                note = ('Ajuste automático pendiente de revisión: ' + str(error)
-                        + ' Se conserva la cuenca de la celda original hasta elegir el cierre.')
-                self.result = replace(self.result, notes=(*self.result.notes,note),
-                    diagnostics=dict(self.result.diagnostics,outlet_review_pending=note))
-                self.selection_context = dict(deepcopy(error.selection_context),
-                    resolution_key=f'{min(self.result.cell_width,self.result.cell_height):g}',
-                    reference_area_m2=float(self.result.area_m2),
-                    reason=note,manual_selection_scope='raster_extent')
+            self.result = analyze_basin(
+                self.query.directions_path, self.query.dem_path,
+                *self.outlet, cancelled=self.isCanceled, upstream_only=False,
+            )
             return not self.isCanceled()
         except InterruptedError:
             return False
@@ -126,13 +109,16 @@ class BasinDialog(QDialog):
     def __init__(self, query, iface, parent=None, saved_session=None):
         super().__init__(parent)
         self.setObjectName('CaumaxCuencaHidrograficaDialog')
-        self.setWindowTitle('HidroCAUMAX v1.2.7 · Cuenca hidrográfica')
+        self.setWindowTitle('HidroCAUMAX v1.2.8 · Cuenca hidrográfica')
         self.setStyleSheet(BLUE_BUTTON_STYLE)
         self.setAttribute(Qt.WA_DeleteOnClose)
         self.setModal(False)
         self.setWindowModality(Qt.NonModal)
         self.query, self.iface = query, iface
         self.analysis = None
+        self._ai_interpretations = {}
+        self._ai_fingerprint = None
+        self._ai_revision = 0
         self._base_geometry_wkb = None
         self._outlet_selector = None
         self._outlet_apply_pending = False
@@ -192,6 +178,24 @@ class BasinDialog(QDialog):
         self._smoothing_timer.setInterval(100)
         self._smoothing_timer.timeout.connect(self._update_smoothing)
         outer = QVBoxLayout(self)
+        self.analysis_toolbar = QWidget(self)
+        self.analysis_toolbar.setObjectName('HidroCAUMAXAnalysisToolbar')
+        self.analysis_toolbar.setSizePolicy(QSizePolicy.Preferred,QSizePolicy.Fixed)
+        toolbar = QHBoxLayout(self.analysis_toolbar)
+        toolbar.setContentsMargins(0,0,0,0)
+        toolbar.addStretch()
+        self.analysis_ai_button = QPushButton('Análisis IA',self.analysis_toolbar)
+        self.analysis_ai_button.setObjectName('HidroCAUMAXAnalysisAI')
+        self.analysis_ai_button.setStyleSheet(AI_BUTTON_STYLE)
+        self.analysis_ai_button.setIcon(QIcon(str(Path(__file__).parent/'assets'/'analysis_ai.svg')))
+        self.analysis_ai_button.setIconSize(QSize(18,18))
+        self.analysis_ai_button.setLayoutDirection(Qt.LeftToRight)
+        self.analysis_ai_button.setSizePolicy(QSizePolicy.Maximum,QSizePolicy.Fixed)
+        self.analysis_ai_button.setToolTip('Analizar los resultados completos de la cuenca activa.')
+        self.analysis_ai_button.setEnabled(False)
+        self.analysis_ai_button.clicked.connect(self._show_ai_analysis)
+        toolbar.addWidget(self.analysis_ai_button,0,Qt.AlignRight)
+        outer.addWidget(self.analysis_toolbar)
         self.body_scroll = QScrollArea(self)
         self.body_scroll.setWidgetResizable(True)
         body = QWidget(self.body_scroll)
@@ -213,24 +217,19 @@ class BasinDialog(QDialog):
         context_header_layout.addWidget(self.context_mdt)
         context_header_layout.addWidget(self.context_point, 1)
         self.context_header.installEventFilter(self)
-        layout.addWidget(self.context_header)
         self.context = QLabel(self)
         self.context.setTextFormat(Qt.PlainText)
         self.context.setWordWrap(True)
         self._update_context()
-        layout.addWidget(self.context)
         group = QGroupBox('Morfología de la Cuenca', self)
         self.morphology_group = group
-        self.analysis_ai_button = QPushButton('Análisis IA', group)
-        self.analysis_ai_button.setObjectName('HidroCAUMAXAnalysisAI')
-        self.analysis_ai_button.setStyleSheet(AI_BUTTON_STYLE)
-        self.analysis_ai_button.setToolTip('Analizar los resultados completos de la cuenca activa.')
-        self.analysis_ai_button.setEnabled(False)
-        self.analysis_ai_button.clicked.connect(self._show_ai_analysis)
-        group.installEventFilter(self)
         box = QVBoxLayout(group)
         self.table = QTableWidget(len(METRICS), 4, group)
         self.table.setHorizontalHeaderLabels(['Parámetro', 'Valor', 'Unidad', 'Interpretación'])
+        self.table.setHorizontalHeader(InterpretationHeader(self.table))
+        self.analysis_header_button = self.table.horizontalHeader().analysis_button
+        self.analysis_header_button.setEnabled(False)
+        self.table.horizontalHeader().analysis_requested.connect(self._show_ai_analysis)
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -247,9 +246,9 @@ class BasinDialog(QDialog):
         self.table.setItemDelegateForColumn(3, InterpretationDelegate(self.table))
         self.table.setMinimumHeight(280)
         for row, metric in enumerate(METRICS):
-            for column, text in enumerate((metric.label, 'Calculando…', metric.unit, 'Calculando…')):
+            for column, text in enumerate((metric.label, 'Calculando…', metric.unit, '')):
                 item = QTableWidgetItem(text)
-                item.setToolTip(metric.definition)
+                item.setToolTip('' if column == 3 else metric.definition)
                 if column in (1, 2):
                     item.setTextAlignment(Qt.AlignCenter)
                 self.table.setItem(row, column, item)
@@ -299,21 +298,30 @@ class BasinDialog(QDialog):
         self.smoothing_degree.setSingleStep(1)
         self.smoothing_degree.setValue(3)
         self.smoothing_degree.setToolTip('Grado entero de 1 a 45. Recalcula automáticamente morfología, hipsometría, P₀ y Pd sobre la divisoria activa.')
-        controls.addWidget(self.original_check)
-        controls.addWidget(self.smooth_check)
-        controls.addWidget(QLabel('Grado:', smoothing))
-        controls.addWidget(self.smoothing_degree)
-        controls.addStretch()
-        smoothing_layout.addLayout(controls)
-        self.smoothing_status = NotesBox(smoothing)
-        self.smoothing_status.setFixedHeight(76)
-        self.smoothing_status.setText('Original: rojo y malla de celdas. Suavizada: contorno azul en el mapa de QGIS.')
-        smoothing_layout.addWidget(self.smoothing_status)
+        degree_label = QLabel('Grado:', smoothing)
         self.export_button = QPushButton('Exportar shape', smoothing)
-        self.export_button.setStyleSheet('QPushButton { padding: 2px 9px; min-height: 0px; }')
+        self.export_button.setStyleSheet('QPushButton { padding: 2px 6px; min-height: 0px; }')
+        self.export_button.setSizePolicy(QSizePolicy.Maximum,QSizePolicy.Fixed)
         self.export_button.setEnabled(False)
         self.export_button.clicked.connect(self._export)
-        smoothing_layout.addWidget(self.export_button, 0, Qt.AlignLeft)
+        self._smoothing_controls = (self.original_check,self.smooth_check,degree_label,
+                                    self.smoothing_degree,self.export_button)
+        self._smoothing_controls_layout = controls
+        controls.setSpacing(4)
+        for control in self._smoothing_controls:
+            controls.addWidget(control)
+        controls.addStretch()
+        smoothing_layout.addLayout(controls)
+        self.smoothing_status = QLabel(smoothing)
+        self.smoothing_status.setTextFormat(Qt.PlainText)
+        self.smoothing_status.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
+        self.smoothing_status.setWordWrap(True)
+        self.smoothing_status.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        self.smoothing_status.setSizePolicy(QSizePolicy.Preferred,QSizePolicy.Maximum)
+        self.smoothing_status.setContentsMargins(6,4,6,4)
+        self.smoothing_status.setStyleSheet('QLabel { background-color: #FFFFFF; border: 1px solid #C8CDD2; }')
+        self.smoothing_status.setText('Original: rojo y malla de celdas. Suavizada: contorno azul en el mapa de QGIS.')
+        smoothing_layout.addWidget(self.smoothing_status)
         for control in (self.original_check, self.smooth_check, self.smoothing_degree):
             control.setEnabled(False)
         self.original_check.toggled.connect(self._queue_smoothing)
@@ -338,15 +346,15 @@ class BasinDialog(QDialog):
         self.cell_grid_check.toggled.connect(self._grid_visibility_changed)
         resolution_actions = QHBoxLayout()
         resolution_actions.addWidget(self.cell_grid_check)
-        self.outlet_adjust_button = QPushButton('Ajustar cierre…', resolution_group)
+        self.outlet_adjust_button = QPushButton('Ajuste Punto de Cierre', resolution_group)
         self.outlet_adjust_button.setStyleSheet('QPushButton { padding: 2px 9px; min-height: 0px; }')
-        self.outlet_adjust_button.setToolTip('Elegir el cierre en el mapa o desplazarlo por celdas; recalcula toda la cuenca.')
+        self.outlet_adjust_button.setToolTip('Ajustar manualmente el punto de cierre con las direcciones o un clic en el mapa; recalcula toda la cuenca al aplicar.')
         self.outlet_adjust_button.setEnabled(False)
         self.outlet_adjust_button.clicked.connect(self._open_outlet_selection)
         resolution_actions.addWidget(self.outlet_adjust_button)
-        self.clear_delineation_button = QPushButton('Borrar divisoria', resolution_group)
+        self.clear_delineation_button = QPushButton('Borrar Delineado', resolution_group)
         self.clear_delineation_button.setStyleSheet('QPushButton { padding: 2px 9px; min-height: 0px; }')
-        self.clear_delineation_button.setToolTip('Retirar las capas y marcas creadas por esta cuenca; conserva sus cálculos y las capas del usuario.')
+        self.clear_delineation_button.setToolTip('Retirar todas las capas de divisoria, MDT y curso principal generadas en esta sesión; conserva los cálculos y las capas del usuario.')
         self.clear_delineation_button.setEnabled(False)
         self.clear_delineation_button.clicked.connect(self._clear_delineation)
         resolution_actions.addWidget(self.clear_delineation_button)
@@ -358,6 +366,16 @@ class BasinDialog(QDialog):
         self.resolution_status = QLabel('El MDT original estará disponible al terminar el cálculo.', resolution_group)
         self.resolution_status.setWordWrap(True)
         resolution_layout.addWidget(self.resolution_status)
+        self.context_frame = QFrame(resolution_group)
+        self.context_frame.setObjectName('HidroCAUMAXResolutionContext')
+        self.context_frame.setStyleSheet('QFrame#HidroCAUMAXResolutionContext { '
+            'background-color: #FFFFFF; border: 1px solid #C8CDD2; }')
+        context_layout = QVBoxLayout(self.context_frame)
+        context_layout.setContentsMargins(6,6,6,6)
+        context_layout.setSpacing(3)
+        context_layout.addWidget(self.context_header)
+        context_layout.addWidget(self.context)
+        resolution_layout.addWidget(self.context_frame)
         self.resolution_progress = QProgressBar(resolution_group)
         self.resolution_progress.setRange(0, 100)
         self.resolution_progress.hide()
@@ -371,59 +389,64 @@ class BasinDialog(QDialog):
         drainage_group = QGroupBox('Generación capas resolución mejorada', self)
         self.drainage_group = drainage_group
         drainage_layout = QVBoxLayout(drainage_group)
-        drainage_help = QLabel('Genera el MDT elegido, sus direcciones D8 y la red de drenaje con TauDEM. Las direcciones usan CAUMAX/ESRI · Método Racional.', drainage_group)
+        drainage_help = QLabel('Genera el MDT elegido, el ráster de Dirección de Flujo y el shape de la Red de Drenaje con el esquema D8 (TauDEM/Esri)', drainage_group)
         drainage_help.setWordWrap(True)
         drainage_layout.addWidget(drainage_help)
         preparation = QHBoxLayout()
+        preparation.setSpacing(2)
         self.drainage_prepare_button = QPushButton('Generar capas D8', drainage_group)
+        self.drainage_prepare_button.setStyleSheet('QPushButton { padding: 2px 4px; min-height: 0px; }')
+        self.drainage_prepare_button.setSizePolicy(QSizePolicy.Maximum,QSizePolicy.Fixed)
         self.drainage_prepare_button.clicked.connect(self._prepare_drainage)
-        preparation.addWidget(self.drainage_prepare_button)
-        self.drainage_cancel_button = QPushButton('Cancelar cálculo', drainage_group)
-        self.drainage_cancel_button.clicked.connect(self._cancel_drainage)
-        self.drainage_cancel_button.setEnabled(False)
-        preparation.addWidget(self.drainage_cancel_button)
-        drainage_layout.addLayout(preparation)
-        threshold_line = QHBoxLayout()
-        threshold_line.addWidget(QLabel('Umbral de inicio de corriente:', drainage_group))
+        threshold_label = QLabel('Umbral inicio corriente', drainage_group)
+        threshold_label.setWordWrap(False)
         self.drainage_threshold = QDoubleSpinBox(drainage_group)
         self.drainage_threshold.setDecimals(6)
         self.drainage_threshold.setRange(.000001,1000000)
         self.drainage_threshold.setSuffix(' km²')
         self.drainage_threshold.valueChanged.connect(self._drainage_threshold_changed)
-        threshold_line.addWidget(self.drainage_threshold)
+        self.drainage_threshold.valueChanged.connect(lambda *_:self._row_timer.start(0))
         self.drainage_auto = QCheckBox('Automático', drainage_group)
         self.drainage_auto.setChecked(True)
         self.drainage_auto.toggled.connect(self._drainage_auto_changed)
-        threshold_line.addWidget(self.drainage_auto)
         self.drainage_visible = QCheckBox('Mostrar red', drainage_group)
         self.drainage_visible.setChecked(True)
         self.drainage_visible.toggled.connect(self._drainage_visibility_changed)
-        threshold_line.addWidget(self.drainage_visible)
-        drainage_layout.addLayout(threshold_line)
+        for check in (self.drainage_auto,self.drainage_visible):
+            check.setStyleSheet('QCheckBox { spacing: 2px; }')
+        self._drainage_controls = (self.drainage_prepare_button,threshold_label,
+                                  self.drainage_threshold,self.drainage_auto,self.drainage_visible)
+        self._drainage_controls_layout = preparation
+        for control in self._drainage_controls:
+            preparation.addWidget(control)
+        preparation.addStretch()
+        drainage_layout.addLayout(preparation)
         density_help = QLabel('Un umbral menor produce una red más densa. El valor automático es una propuesta inicial y puedes editarlo.', drainage_group)
         density_help.setWordWrap(True)
         drainage_layout.addWidget(density_help)
-        exports = QGridLayout()
-        exports.setHorizontalSpacing(8)
+        self._drainage_exports_widget = QWidget(drainage_group)
+        exports = QGridLayout(self._drainage_exports_widget)
+        exports.setContentsMargins(0,0,0,0)
+        exports.setHorizontalSpacing(2)
         self.dem_export_button = QPushButton('Exportar MDT (TIFF)…',drainage_group)
         self.directions_export_button = QPushButton('Exportar dirección de drenaje (TIFF)…',drainage_group)
         self.network_export_button = QPushButton('Exportar Red de Drenaje (SHP)…',drainage_group)
         for column,(title,button,kind) in enumerate((
-                ('Modelo de Elevaciones',self.dem_export_button,'dem'),
-                ('Modelo de Dirección de Flujo D8',self.directions_export_button,'directions'),
+                ('Modelo Digital Terreno',self.dem_export_button,'dem'),
+                ('Direcciones de Drenaje',self.directions_export_button,'directions'),
                 ('Red de drenaje',self.network_export_button,'network'))):
             label=QLabel(title,drainage_group)
             label.setAlignment(Qt.AlignCenter)
             label.setWordWrap(True)
             exports.addWidget(label,0,column,Qt.AlignHCenter)
-            button.setStyleSheet('QPushButton { padding: 2px 6px; min-height: 0px; }')
+            button.setStyleSheet('QPushButton { padding: 2px 1px; min-height: 0px; }')
             button.setSizePolicy(QSizePolicy.Maximum,QSizePolicy.Fixed)
             font=QFont(button.font())
             font.setPointSizeF(8.5)
             button.setFont(font)
             button.clicked.connect(lambda checked=False,kind=kind:self._export_hydrology(kind))
             exports.addWidget(button,1,column,Qt.AlignHCenter)
-        drainage_layout.addLayout(exports)
+        drainage_layout.addWidget(self._drainage_exports_widget,0,Qt.AlignLeft)
         self.drainage_status = DrainageStatusLabel(drainage_group)
         self.drainage_status.setText('TauDEM predeterminado seleccionado. Pulsa Generar capas D8.')
         drainage_layout.addWidget(self.drainage_status)
@@ -431,9 +454,10 @@ class BasinDialog(QDialog):
         self.drainage_progress.setRange(0,100)
         self.drainage_progress.hide()
         drainage_layout.addWidget(self.drainage_progress)
-        layout.addWidget(drainage_group)
+        layout.addWidget(drainage_group,0,Qt.AlignLeft)
         for label in drainage_group.findChildren(QLabel):
-            label.setWordWrap(True)
+            if label is not threshold_label:
+                label.setWordWrap(True)
         self._refresh_drainage_controls()
         reports = QGroupBox('Informe', self)
         report_layout = QHBoxLayout(reports)
@@ -449,6 +473,14 @@ class BasinDialog(QDialog):
         self.open_project_button = QPushButton('Abrir proyecto', reports)
         self.open_project_button.clicked.connect(self._choose_open_project)
         report_layout.addWidget(self.open_project_button)
+        for button in (self.report_button,self.save_project_button,self.open_project_button):
+            button.ensurePolished()
+            natural_height = button.sizeHint().height()
+            button.setStyleSheet('QPushButton { padding: 3px 10px; min-height: 0px; }')
+            button.setSizePolicy(QSizePolicy.Maximum,QSizePolicy.Fixed)
+            button.setFixedHeight(round(natural_height*.90))
+        report_layout.insertStretch(0)
+        report_layout.addStretch()
         outer.addWidget(reports)
         buttons = QDialogButtonBox(self)
         self.close_button = buttons.addButton('Cerrar', QDialogButtonBox.RejectRole)
@@ -475,6 +507,8 @@ class BasinDialog(QDialog):
                      else QApplication.desktop().availableGeometry(self))
         self.resize(round(available.width() * .36), max(300, available.height() - 40))
         self._row_timer.start(0)
+        from .delineation_cleanup import register_dialog
+        register_dialog(self)
         if saved_session is None:
             self._start()
         else:
@@ -499,9 +533,6 @@ class BasinDialog(QDialog):
                                 getattr(self, 'context_header', None))
                 and event.type() == QEvent.Resize):
             self._row_timer.start(0)
-        if (watched is getattr(self, 'morphology_group', None)
-                and event.type() in (QEvent.Resize, QEvent.Show, QEvent.FontChange)):
-            self._place_ai_button()
         return super().eventFilter(watched, event)
 
     def _place_beside_map(self):
@@ -521,18 +552,84 @@ class BasinDialog(QDialog):
             return
         self._layout_resolution_options()
         self._fit_context_header()
-        self._place_ai_button()
+        self._fit_smoothing_controls()
+        self._fit_drainage_controls()
         width = self.table.viewport().width()
         header = self.table.horizontalHeader()
         blocked = header.blockSignals(True)
         try:
-            widths = [round(width * ratio) for ratio in (.46, .13, .09)]
+            widths = [round(width * ratio) for ratio in (.40, .13, .09)]
+            unit_header = self.table.horizontalHeaderItem(2)
+            unit_font = unit_header.data(Qt.FontRole) or header.font()
+            # The header stylesheet has 4px padding plus its 1px border per side.
+            unit_minimum = QFontMetrics(unit_font).horizontalAdvance(unit_header.text())+10
+            extra = min(max(0,unit_minimum-widths[2]),max(0,widths[0]-header.minimumSectionSize()))
+            widths[0] -= extra
+            widths[2] += extra
             widths.append(max(20, width - sum(widths)))
             for column, value in enumerate(widths):
                 self.table.setColumnWidth(column, value)
         finally:
             header.blockSignals(blocked)
+        header.update_layout()
         self.table.resizeRowsToContents()
+
+    def _fit_smoothing_controls(self):
+        """Keep the complete controls together, including export beside the degree."""
+        group = self.export_button.parentWidget()
+        margins = (self.body_scroll.widget().layout().contentsMargins(),
+                   group.contentsMargins(),group.layout().contentsMargins())
+        available = self.body_scroll.viewport().width()-sum(m.left()+m.right() for m in margins)
+        font = QFont(self.font())
+        points = font.pointSizeF() if font.pointSizeF() > 0 else 10.
+        minimum = min(points,8.)
+        while True:
+            font.setPointSizeF(points)
+            for control in self._smoothing_controls:
+                if control.font() != font:
+                    control.setFont(font)
+            needed = sum(control.sizeHint().width() for control in self._smoothing_controls)
+            needed += self._smoothing_controls_layout.spacing()*(len(self._smoothing_controls)-1)
+            if needed <= available or points <= minimum:
+                break
+            points = max(minimum,points-.25)
+
+    def _fit_drainage_controls(self):
+        """Fit full drainage captions in the available sidebar width."""
+        group = self.drainage_group
+        margins = (self.body_scroll.widget().layout().contentsMargins(),
+                   group.contentsMargins(),group.layout().contentsMargins())
+        available = max(1,self.body_scroll.viewport().width()-sum(m.left()+m.right() for m in margins))
+        group.setMaximumWidth(max(1,self.body_scroll.viewport().width()-margins[0].left()-margins[0].right()))
+        exports = (self.dem_export_button,self.directions_export_button,self.network_export_button)
+        for controls,spacing,maximum in ((self._drainage_controls,2,12.),(exports,2,8.5)):
+            font = QFont(self.font())
+            points = min(maximum,font.pointSizeF() if font.pointSizeF() > 0 else 10.)
+            minimum = min(points,7.5)
+            while True:
+                font.setPointSizeF(points)
+                for control in controls:
+                    if control.font() != font:
+                        control.setFont(font)
+                if controls is self._drainage_controls:
+                    # The embedded editor can retain its explicit inherited font.
+                    self.drainage_threshold.lineEdit().setFont(font)
+                    # Size for the value being shown, not a much longer range maximum.
+                    self.drainage_threshold.setFixedWidth(
+                        QFontMetrics(font).horizontalAdvance(self.drainage_threshold.text())+26)
+                needed = sum(control.width() if control is self.drainage_threshold
+                             else control.sizeHint().width() for control in controls)
+                needed += spacing*(len(controls)-1)
+                if needed <= available or points <= minimum:
+                    break
+                points = max(minimum,points-.25)
+        self._drainage_exports_widget.setMaximumWidth(available)
+        self._drainage_exports_widget.setFixedHeight(
+            self._drainage_exports_widget.layout().heightForWidth(available))
+        # The outer scroll layout may offer a wider width than this capped group.
+        # Reserve the height required at the group's actual width, not that offer.
+        group.setMinimumHeight(0)
+        group.setMinimumHeight(group.heightForWidth(group.width()))
 
     def _update_context(self):
         query,analysis = self.query,self.analysis
@@ -553,8 +650,13 @@ class BasinDialog(QDialog):
                 'Mapa: original naranja; cierre ajustado azul.')
             context += ('\nCierre aproximado a centro de celda; no es una sección topográfica exacta. '
                         'La referencia sigue siendo el punto original.')
-        elif analysis is not None and analysis.diagnostics.get('dem_hydrology'):
-            context += '\nResultado guardado sin ajuste al cauce. Una nueva consulta aplica el snap automático.'
+        elif analysis is not None:
+            crs = QgsCoordinateReferenceSystem.fromWkt(analysis.crs_wkt)
+            context += (
+                f'\nCierre automático (centro de la celda del punto de consulta): '
+                f'X={analysis.outlet_x:.3f}; Y={analysis.outlet_y:.3f} · '
+                f'{crs.authid() or crs.description()}. '
+                'Puedes modificarlo con «Ajuste Punto de Cierre».')
         self.context.setText(context)
         self._fit_context_header()
 
@@ -583,14 +685,6 @@ class BasinDialog(QDialog):
         # label; ordinary widths display both labels in the same first line.
         self.context_point.setWordWrap(required() > available)
 
-    def _place_ai_button(self):
-        if not hasattr(self, 'analysis_ai_button'):
-            return
-        button,group = self.analysis_ai_button,self.morphology_group
-        button.setFixedSize(button.sizeHint())
-        button.move(max(0,group.width()-button.width()-12),0)
-        button.raise_()
-
     def _ai_available(self):
         drainage_busy = bool(self._drainage_timer.isActive()
             or (self._drainage_controller and self._drainage_controller.busy))
@@ -599,7 +693,66 @@ class BasinDialog(QDialog):
             and not self._basin_hydrology_busy() and not drainage_busy and self._task is None)
 
     def _refresh_ai_button(self):
-        self.analysis_ai_button.setEnabled(self._ai_available())
+        available = self._ai_available()
+        self.analysis_ai_button.setEnabled(available)
+        self.analysis_header_button.setEnabled(available)
+
+    def _ai_data_fingerprint(self, state=None):
+        """Identify the interpreted data locally, excluding map/display preferences."""
+        from .ai_analysis import build_context
+        if state is None:
+            state = dict(degree=self.smoothing_degree.value(),
+                         flow_quantiles=self.quantiles_widget.snapshot(),
+                         basin_hydrology=self.basin_hydrology_widget.snapshot())
+        analysis,query = self.analysis,self.query
+        context = dict(report=build_context(analysis,query,state),
+                       resolution_key=self._active_resolution_key,
+                       query_point=(query.x,query.y,query.crs.toWkt()),
+                       outlet=(analysis.outlet_x,analysis.outlet_y),
+                       selected_point=(analysis.selected_x,analysis.selected_y))
+        digest = hashlib.sha256()
+        for part in (bytes(analysis.geometry_wkb),bytes(analysis.main_course_wkb),
+                     analysis.crs_wkt.encode('utf-8'),
+                     json.dumps(context,sort_keys=True,ensure_ascii=False,allow_nan=False).encode('utf-8')):
+            digest.update(len(part).to_bytes(8,'big'))
+            digest.update(part)
+        return digest.hexdigest()
+
+    def _render_interpretations(self):
+        self.table.horizontalHeaderItem(3).setText('Interpretación')
+        for row,metric in enumerate(METRICS):
+            text = self._ai_interpretations.get(metric.key,'')
+            self.table.item(row,3).setText(text)
+            self.table.item(row,3).setToolTip('<qt>'+escape(text).replace('\n','<br>')+'</qt>' if text else '')
+        self._row_timer.start(0)
+
+    def _reset_ai_interpretations(self):
+        self._ai_revision += 1
+        self._ai_fingerprint = None
+        self._ai_interpretations = {}
+        self._render_interpretations()
+
+    def _sync_ai_interpretations(self):
+        if self._ai_fingerprint is not None and self._ai_data_fingerprint() != self._ai_fingerprint:
+            self._reset_ai_interpretations()
+
+    def _apply_ai_interpretations(self, revision, analysis, query, fingerprint, interpretations):
+        if (self._disposed or revision != self._ai_revision
+                or analysis is not self.analysis or query is not self.query
+                or not self._surface_valid or self._resolution_pending
+                or self._basin_hydrology_busy() or self._task is not None):
+            return False
+        if (not isinstance(interpretations,dict)
+                or set(interpretations) != {metric.key for metric in METRICS}
+                or any(not isinstance(text,str) or not text.strip() for text in interpretations.values())):
+            return False
+        if self._ai_data_fingerprint() != fingerprint:
+            self._reset_ai_interpretations()
+            return False
+        self._ai_interpretations = dict(interpretations)
+        self._ai_fingerprint = fingerprint
+        self._render_interpretations()
+        return True
 
     def _show_ai_analysis(self):
         if not self._ai_available():
@@ -607,7 +760,15 @@ class BasinDialog(QDialog):
             return
         try:
             from .ai_analysis import show_analysis
-            return show_analysis(self,self.analysis,self.query,self.get_smoothing_state())
+            state = self.get_smoothing_state()
+            fingerprint = self._ai_data_fingerprint(state)
+            if self._ai_fingerprint is not None and fingerprint != self._ai_fingerprint:
+                self._reset_ai_interpretations()
+            self._ai_revision += 1
+            revision,analysis,query = self._ai_revision,self.analysis,self.query
+            self._ai_fingerprint = fingerprint
+            return show_analysis(self,analysis,query,state,on_interpretations=lambda rows:
+                self._apply_ai_interpretations(revision,analysis,query,fingerprint,rows))
         except Exception as error:
             QMessageBox.critical(self,'Análisis IA',str(error))
 
@@ -632,10 +793,10 @@ class BasinDialog(QDialog):
             self._failed(str(error))
 
     def _failed(self, message):
+        self._reset_ai_interpretations()
         self.progress.hide()
         for row, metric in enumerate(METRICS):
             self.table.item(row, 1).setText(format_value(metric.key, None))
-            self.table.item(row, 3).setText(interpret_value(metric.key, None))
         self.status.setText(message)
         self._row_timer.start(0)
 
@@ -650,7 +811,6 @@ class BasinDialog(QDialog):
                 QgsMessageLog.logMessage(task.trace, 'CAUMAX · Cuenca', Qgis.Warning)
             return
         self.analysis = task.result
-        self._delineation_cleared = False
         self._base_geometry_wkb = bytes(self.analysis.geometry_wkb)
         self._display_analysis()
         from .boundary_smoothing import suggested_degree
@@ -665,7 +825,7 @@ class BasinDialog(QDialog):
         self.smoothing_degree.setValue(max(1, round(degree)))
         self.smoothing_degree.blockSignals(False)
         self._update_smoothing()
-        self._setup_resolutions(outlet_selection_context=getattr(task,'selection_context',None))
+        self._setup_resolutions()
 
     def _display_analysis(self, quantile_snapshot=None):
         key = f'{min(self.analysis.cell_width, self.analysis.cell_height):g}'
@@ -686,10 +846,8 @@ class BasinDialog(QDialog):
         self.progress.hide()
         for row, metric in enumerate(METRICS):
             self.table.item(row, 1).setText(format_value(metric.key, self.analysis.values.get(metric.key)))
-            interpretation = interpret_value(metric.key, self.analysis.values.get(metric.key), self.analysis.values)
-            self.table.item(row, 3).setText(interpretation)
-            self.table.item(row, 3).setToolTip(interpretation + '\n' + metric.definition)
-        self._row_timer.start(0)
+        self._sync_ai_interpretations()
+        self._render_interpretations()
         crs = QgsCoordinateReferenceSystem.fromWkt(self.analysis.crs_wkt)
         summary = (
             f'Malla de drenaje: {self.analysis.cell_width:g} × {self.analysis.cell_height:g} m. '
@@ -727,7 +885,7 @@ class BasinDialog(QDialog):
         self._display_drainage_layers()
         self._refresh_basin_hydrology_controls()
 
-    def _setup_resolutions(self, resolution_state=None, outlet_selection_context=None):
+    def _setup_resolutions(self, resolution_state=None):
         self._close_outlet_selection()
         from .resolution_controller import ResolutionController
         if self._resolution_controller is not None:
@@ -744,9 +902,6 @@ class BasinDialog(QDialog):
             self._resolution_error, parent=self)
         self._resolution_controller = controller
         self._outlet_manual_token = self._outlet_dismissed_token = None
-        if outlet_selection_context:
-            controller.outlet_selection_context = deepcopy(outlet_selection_context)
-            self._outlet_offer_pending = True
         self._active_resolution_key = resolution_state['active_key'] if resolution_state else controller.active_key
         self.resolution_refresh_button.setEnabled(True)
         if resolution_state:
@@ -771,11 +926,13 @@ class BasinDialog(QDialog):
 
     def _quantiles_changed(self,*args):
         if self._quantiles_loading or self._smoothing_loading or self._disposed:return
+        self._sync_ai_interpretations()
         self._cache_variant_state()
 
     def _basin_hydrology_changed(self, *args):
         if self._basin_hydrology_loading or self._smoothing_loading or self._disposed:
             return
+        self._sync_ai_interpretations()
         self._cache_variant_state()
 
     def _basin_hydrology_busy(self):
@@ -901,7 +1058,6 @@ class BasinDialog(QDialog):
             self.drainage_visible.setChecked(True)
         self._drainage_loading = False
         self.drainage_prepare_button.setEnabled(allowed and source_available and not busy)
-        self.drainage_cancel_button.setEnabled(busy)
         self.drainage_threshold.setEnabled(bool(state) and allowed and source_available and not busy)
         self.drainage_auto.setEnabled(bool(state) and allowed and source_available and not busy)
         self.drainage_visible.setEnabled(bool(state))
@@ -1022,7 +1178,7 @@ class BasinDialog(QDialog):
         self._drainage_timer.start()
 
     def _mark_drainage_pending(self):
-        for name in ('report_button','save_project_button','export_button','network_export_button','analysis_ai_button'):
+        for name in ('report_button','save_project_button','export_button','network_export_button','analysis_ai_button','analysis_header_button'):
             button=getattr(self,name,None)
             if button is not None:button.setEnabled(False)
 
@@ -1220,7 +1376,7 @@ class BasinDialog(QDialog):
             dialog.finished.connect(finished)
             dialog.show()
         except Exception as error:
-            QMessageBox.warning(self, 'Ajustar cierre', str(error))
+            QMessageBox.warning(self, 'Ajuste Punto de Cierre', str(error))
 
     def _apply_outlet_selection(self, dialog, controller, context):
         if (self._disposed or controller is not self._resolution_controller
@@ -1230,6 +1386,7 @@ class BasinDialog(QDialog):
         point = dialog.selection()
         if point is None:
             return
+        self._reset_ai_interpretations()
         self._outlet_apply_pending = True
         self._outlet_manual_token = None
         self._delineation_cleared = False
@@ -1265,6 +1422,12 @@ class BasinDialog(QDialog):
         self._outlet_apply_pending = False
 
     def _clear_delineation(self):
+        from .delineation_cleanup import clear_delineations
+        clear_delineations()
+
+    def _clear_local_delineation(self):
+        if self._disposed:
+            return
         self._delineation_cleared = True
         self._close_outlet_selection()
         self._remove_preview()
@@ -1274,7 +1437,7 @@ class BasinDialog(QDialog):
                 layers.remove()
         self._map_data = {}
         self._restored = False
-        self.resolution_status.setText('Divisoria y capas de esta cuenca retiradas. Puedes ajustar el cierre o elegir otra resolución para dibujarla de nuevo.')
+        self.resolution_status.setText('Delineados de la sesión retirados. Los cálculos se conservan. Puedes usar «Ajuste Punto de Cierre» o elegir otra resolución para dibujar de nuevo esta cuenca.')
         self._refresh_outlet_button()
 
     def _refresh_resolutions(self):
@@ -1315,6 +1478,7 @@ class BasinDialog(QDialog):
             return
         if self._resolution_pending and self._resolution_controller.requested_key == key:
             return
+        self._reset_ai_interpretations()
         self._resolution_pending = True
         self._refresh_ai_button()
         self.basin_hydrology_widget.setEnabled(False)
@@ -1396,6 +1560,7 @@ class BasinDialog(QDialog):
             return
         if self.analysis is None:
             return
+        self._reset_ai_interpretations()
         if self._base_geometry_wkb is None:
             self._base_geometry_wkb = bytes(self.analysis.geometry_wkb)
         self._cancel_drainage()
@@ -1591,6 +1756,7 @@ class BasinDialog(QDialog):
 
     def _show_smoothing_summary(self):
         lines = []
+        number = lambda value, spec='g': format(value,spec).replace('.',',')
         stats = self._geometry_stats()
         for kind in ('suavizada','original'):
             if kind not in stats:
@@ -1599,13 +1765,15 @@ class BasinDialog(QDialog):
             if kind == 'original' and 'suavizada' in stats:
                 continue  # The original measurements are already in the table above.
             label = 'Original' if kind == 'original' else f'Suavizada · grado {self.smoothing_degree.value():g}'
-            lines.append(f"{label}: área {values['area_km2']:.3f} km²; perímetro {values['perimeter_km']:.3f} km; "
-                         f"Kc {values['kc']:.4f}; Ic {values['ic']:.4f}.")
+            lines.append(f"{label}: área {number(values['area_km2'],'.3f')} km²; "
+                         f"perímetro {number(values['perimeter_km'],'.3f')} km; "
+                         f"Kc {number(values['kc'],'.4f')}; Ic {number(values['ic'],'.4f')}.")
             if kind == 'suavizada':
-                lines.append(f"Variación: área {values['delta_area_pct']:+.3f} %; perímetro {values['delta_perimeter_pct']:+.3f} %.")
+                lines.append(f"Variación: área {number(values['delta_area_pct'],'+.3f')} %; "
+                             f"perímetro {number(values['delta_perimeter_pct'],'+.3f')} %.")
         if self.smooth_check.isChecked():
             sigma = min(self.analysis.cell_width, self.analysis.cell_height) * self.smoothing_degree.value() / 15
-            lines.append(f'Gauss gradual · escala {sigma:g} m · sección de cierre fija.')
+            lines.append(f'Gauss gradual · escala {number(sigma)} m · sección de cierre fija.')
         if not stats:
             lines.append('Selecciona al menos una divisoria para exportarla.')
         lines.append('Original: rojo y malla de celdas. Suavizada: contorno azul en QGIS.')
@@ -1988,6 +2156,7 @@ class BasinDialog(QDialog):
         return saved
 
     def _restore_session(self, saved):
+        self._reset_ai_interpretations()
         self._cancel_save_surfaces()
         self._saving_project = False
         self._cancel_drainage()
@@ -2150,6 +2319,11 @@ class BasinDialog(QDialog):
         if self._disposed:
             return
         self._disposed = True
+        self._ai_revision += 1
+        self._ai_interpretations = {}
+        self._ai_fingerprint = None
+        from .delineation_cleanup import unregister_dialog
+        unregister_dialog(self)
         self._close_outlet_selection()
         self._cancel_save_surfaces()
         self._placement_timer.stop()

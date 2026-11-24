@@ -1,7 +1,141 @@
-"""Compact, bounded interpretation text while retaining the full model value."""
-from qgis.PyQt.QtCore import Qt
-from qgis.PyQt.QtGui import QFontMetrics, QTextLayout, QTextOption
-from qgis.PyQt.QtWidgets import QApplication, QStyle, QStyledItemDelegate, QStyleOptionViewItem
+"""Compact interpretation cells and an in-column action without text overlap."""
+from qgis.PyQt.QtCore import QEvent, QRect, Qt, pyqtSignal
+from qgis.PyQt.QtGui import QFont, QFontMetrics, QPalette, QTextLayout, QTextOption
+from qgis.PyQt.QtWidgets import (
+    QApplication, QHeaderView, QPushButton, QStyle, QStyledItemDelegate,
+    QStyleOptionHeader, QStyleOptionViewItem, QToolTip,
+)
+
+
+class InterpretationHeader(QHeaderView):
+    """Keep the interpretation label and AI action inside logical column 3.
+
+    Only this section's painted label and child button may use a smaller local
+    font. The table and the other headers retain their application fonts.
+    ``update_layout`` also supports callers that resize sections with signals
+    blocked; paint/resize/scroll events provide the normal automatic updates.
+    """
+    analysis_requested = pyqtSignal()
+    COLUMN = 3
+    TITLE = 'Interpretación'
+    _LEFT_PADDING = 5
+    _GAP = 6
+    _BUTTON_INSET = 10  # Two 4px paddings and two 1px borders.
+
+    def __init__(self, table):
+        super().__init__(Qt.Horizontal, table)
+        self._title_font = QFont(self.font())
+        self._title_rect = QRect()
+        self._title_text = self.TITLE
+        self.analysis_button = QPushButton('Análisis IA', self.viewport())
+        self.analysis_button.setObjectName('HidroCAUMAXInterpretationAI')
+        self.analysis_button.setAutoDefault(False)
+        self.analysis_button.setToolTip('Generar las 19 interpretaciones de la cuenca con IA.')
+        self.analysis_button.setStyleSheet('''
+            QPushButton { background-color: #174D78; color: white;
+                border: 1px solid #103B5C; border-radius: 3px;
+                padding: 0px 4px; margin: 0px; min-height: 0px; min-width: 0px; }
+            QPushButton:hover { background-color: #216493; }
+            QPushButton:pressed { background-color: #103B5C; }
+            QPushButton:disabled { background-color: #91A5B5; color: #F4F7FA;
+                border-color: #8298A9; }
+        ''')
+        self.analysis_button.clicked.connect(lambda _=False: self.analysis_requested.emit())
+        self.sectionResized.connect(self.update_layout)
+        self.sectionMoved.connect(self.update_layout)
+        self.geometriesChanged.connect(self.update_layout)
+        table.horizontalScrollBar().valueChanged.connect(self.update_layout)
+        self.update_layout()
+
+    def _fonts(self):
+        """Local sizes from the real header font down to a readable fallback."""
+        base = QFont(self.font())
+        if base.pixelSize() > 0:
+            for size in range(base.pixelSize(), min(base.pixelSize(), 9) - 1, -1):
+                font = QFont(base)
+                font.setPixelSize(size)
+                yield font
+        else:
+            size = base.pointSizeF()
+            minimum = min(size, 7.)
+            while size >= minimum:
+                font = QFont(base)
+                font.setPointSizeF(size)
+                yield font
+                if size == minimum:
+                    break
+                size = max(minimum, size - .25)
+
+    def update_layout(self, *args):
+        if not hasattr(self, 'analysis_button'):
+            return
+        if self.count() <= self.COLUMN or self.isSectionHidden(self.COLUMN):
+            self.analysis_button.hide()
+            self._title_rect = QRect()
+            return
+        width, height = self.sectionSize(self.COLUMN), self.viewport().height()
+        left = self.sectionViewportPosition(self.COLUMN)
+        title_font = QFont(self.font())
+        for font in self._fonts():
+            title_font = font
+            metrics = QFontMetrics(font)
+            button_width = metrics.horizontalAdvance(self.analysis_button.text()) + self._BUTTON_INSET
+            if metrics.horizontalAdvance(self.TITLE) + button_width + self._LEFT_PADDING + self._GAP <= width:
+                break
+        metrics = QFontMetrics(title_font)
+        button_width = metrics.horizontalAdvance(self.analysis_button.text()) + self._BUTTON_INSET
+        self._title_font = title_font
+        self.analysis_button.setFont(title_font)
+        # An exceptionally narrow/hidden section must not put its action over
+        # the neighbouring headers. The upper toolbar action remains available.
+        show_button = width >= button_width + self._LEFT_PADDING
+        self.analysis_button.setVisible(show_button)
+        if show_button:
+            self.analysis_button.setGeometry(left + width - button_width, 0, button_width, height)
+        text_width = max(0, width - self._LEFT_PADDING - (button_width + self._GAP if show_button else 0))
+        self._title_rect = QRect(left + self._LEFT_PADDING, 0, text_width, height)
+        self._title_text = metrics.elidedText(self.TITLE, Qt.ElideRight, text_width)
+        self.analysis_button.raise_()
+
+    def paintEvent(self, event):
+        self.update_layout()
+        super().paintEvent(event)
+
+    def paintSection(self, painter, rect, logical_index):
+        if logical_index != self.COLUMN:
+            super().paintSection(painter, rect, logical_index)
+            return
+        option = QStyleOptionHeader()
+        self.initStyleOption(option)
+        option.rect = rect
+        option.section = logical_index
+        option.text = ''
+        self.style().drawControl(QStyle.CE_Header, option, painter, self)
+        painter.save()
+        painter.setClipRect(self._title_rect.intersected(rect))
+        painter.setFont(self._title_font)
+        painter.setPen(self.palette().color(QPalette.ButtonText))
+        painter.drawText(self._title_rect, Qt.AlignLeft | Qt.AlignVCenter, self._title_text)
+        painter.restore()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.update_layout()
+
+    def event(self, event):
+        result = super().event(event)
+        if event.type() in (QEvent.FontChange, QEvent.StyleChange, QEvent.LayoutDirectionChange):
+            self.update_layout()
+        return result
+
+    def viewportEvent(self, event):
+        if event.type() == QEvent.ToolTip and self.logicalIndexAt(event.pos()) == self.COLUMN:
+            detail = 'Interpretación · Análisis IA: genera las 19 interpretaciones de la cuenca.'
+            if self._title_text != self.TITLE or self.analysis_button.isHidden():
+                detail += ' Amplía esta columna o usa el botón superior «Análisis IA».'
+            QToolTip.showText(event.globalPos(), detail, self)
+            return True
+        return super().viewportEvent(event)
 
 
 def three_line_text(text, font, width):

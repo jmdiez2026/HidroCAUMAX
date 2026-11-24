@@ -9,6 +9,7 @@ from .rational_export import RationalExportBridge
 from .rational_inputs import RationalInputsBridge
 from .visible_dem import VisibleDemController
 from .update_ui import UpdateNotifier
+from .delineation_cleanup import clear_delineations
 
 
 class NativeCaumaxPlugin(QObject):
@@ -20,7 +21,7 @@ class NativeCaumaxPlugin(QObject):
         self._dialogs = {}
         self._saved_dialogs = []
         self._enabled = False
-        self._bridge = CaumaxBridge(iface, self._open_basin)
+        self._bridge = CaumaxBridge(iface, self._open_basin, self._new_query_started)
         self._rational = RationalExportBridge(iface)
         self._rational_inputs = RationalInputsBridge(iface)
         self._visible_dem = VisibleDemController(iface, self)
@@ -89,6 +90,10 @@ class NativeCaumaxPlugin(QObject):
         return (query.x, query.y, query.period, query.flow,
                 str(query.directions_path), str(query.dem_path), query.crs.toWkt())
 
+    def _new_query_started(self, native_dialog):
+        if self._enabled:
+            clear_delineations(close_dialogs=True)
+
     def _open_basin(self, native_dialog, query):
         if not self._enabled:
             return
@@ -96,15 +101,18 @@ class NativeCaumaxPlugin(QObject):
         previous = self._dialogs.get(native_dialog)
         if previous is not None:
             try:
-                if self._key(previous.query) == self._key(query):
+                if self._key(getattr(previous, '_native_query', previous.query)) == self._key(query):
                     previous.show()
                     previous.raise_()
                     previous.activateWindow()
                     return
-                previous.close()
             except RuntimeError:
                 self._dialogs.pop(native_dialog, None)
+        # Also cover layers from closed dialogs or a restored QGIS project.
+        # Dispose live computations before deleting their published results.
+        clear_delineations(close_dialogs=True)
         dialog = BasinDialog(query, self.iface, native_dialog)
+        dialog._native_query = query
         self._dialogs[native_dialog] = dialog
         dialog.finished.connect(lambda result, parent=native_dialog, current=dialog: self._forget(parent, current))
         dialog.show()

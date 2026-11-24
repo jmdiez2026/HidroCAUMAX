@@ -5,7 +5,7 @@ import sys
 import unittest
 from unittest.mock import Mock, patch
 
-from qgis.PyQt.QtCore import Qt
+from qgis.PyQt.QtCore import QPoint, Qt
 from qgis.PyQt.QtGui import QFontMetrics
 from qgis.PyQt.QtTest import QTest
 from qgis.PyQt.QtWidgets import QGroupBox
@@ -68,6 +68,17 @@ class CompactLayoutTests(unittest.TestCase):
 
     def test_first_header_line_keeps_mdt_and_exact_point_without_overlap(self):
         dialog = self.dialog
+        self.assertIs(dialog.context_frame.parentWidget(),dialog.resolution_group)
+        self.assertIs(dialog.context_header.parentWidget(),dialog.context_frame)
+        self.assertIs(dialog.context.parentWidget(),dialog.context_frame)
+        resolution_layout=dialog.resolution_group.layout()
+        self.assertEqual(resolution_layout.indexOf(dialog.context_frame),
+                         resolution_layout.indexOf(dialog.resolution_status)+1)
+        self.assertEqual(resolution_layout.indexOf(dialog.resolution_progress),
+                         resolution_layout.indexOf(dialog.context_frame)+1)
+        body=dialog.body_scroll.widget().layout()
+        self.assertEqual([body.itemAt(i).widget() for i in range(3)],
+                         [dialog.resolution_group,dialog.export_button.parentWidget(),dialog.morphology_group])
         for width in (650,900):
             with self.subTest(width=width):
                 self.resize(width)
@@ -81,14 +92,36 @@ class CompactLayoutTests(unittest.TestCase):
                     self.assertLessEqual(QFontMetrics(label.font()).horizontalAdvance(label.text()),label.width())
                 self.assertLess(dialog.context_header.geometry().bottom(),dialog.context.geometry().top())
                 self.assertTrue(dialog.context.text().startswith('Caudal CAUMAX original:'))
+                self.assertLess(dialog.resolution_status.geometry().bottom(),dialog.context_frame.geometry().top())
+                self.assertLessEqual(dialog.context.geometry().bottom(),dialog.context_frame.height()-6)
 
-    def test_ai_button_is_at_right_of_morphology_title_and_disabled_during_work(self):
+    def test_ai_button_is_fixed_at_top_right_with_icon_and_disabled_during_work(self):
         dialog = self.dialog
-        self.assertEqual(dialog.analysis_ai_button.text(),'Análisis IA')
-        self.assertIn('#174D78',dialog.analysis_ai_button.styleSheet())
-        self.assertEqual(dialog.analysis_ai_button.parentWidget(),dialog.morphology_group)
-        self.assertEqual(dialog.analysis_ai_button.y(),0)
-        self.assertLessEqual(dialog.analysis_ai_button.geometry().right(),dialog.morphology_group.width())
+        button=dialog.analysis_ai_button
+        self.assertEqual(button.text(),'Análisis IA')
+        self.assertIn('#174D78',button.styleSheet())
+        self.assertIs(button.parentWidget(),dialog.analysis_toolbar)
+        self.assertIs(dialog.analysis_toolbar.parentWidget(),dialog)
+        self.assertIs(dialog.layout().itemAt(0).widget(),dialog.analysis_toolbar)
+        self.assertIs(dialog.layout().itemAt(1).widget(),dialog.body_scroll)
+        self.assertFalse(button.icon().isNull())
+        self.assertFalse(button.icon().pixmap(button.iconSize()).isNull())
+        self.assertEqual(button.iconSize().width(),18)
+        self.assertEqual(button.layoutDirection(),Qt.LeftToRight)
+        for width in (520,650):
+            with self.subTest(width=width):
+                self.resize(width)
+                self.assertEqual(button.geometry().right(),dialog.analysis_toolbar.width()-1)
+                self.assertLess(dialog.analysis_toolbar.geometry().bottom(),dialog.body_scroll.y())
+                text_width=QFontMetrics(button.font()).horizontalAdvance(button.text())
+                self.assertGreaterEqual(button.width(),text_width+button.iconSize().width()+4)
+                position=button.mapTo(dialog,QPoint(0,0))
+                scrollbar=dialog.body_scroll.verticalScrollBar()
+                self.assertGreater(scrollbar.maximum(),0)
+                scrollbar.setValue(scrollbar.maximum())
+                self.fixture.app.processEvents()
+                self.assertEqual(button.mapTo(dialog,QPoint(0,0)),position)
+                self.assertTrue(button.isVisible())
         self.assertTrue(dialog.analysis_ai_button.isEnabled())
         for flag in ('_surface_pending','_resolution_pending','_saving_project'):
             with self.subTest(flag=flag):
@@ -109,7 +142,9 @@ class CompactLayoutTests(unittest.TestCase):
 
     def test_ai_lazy_call_receives_current_analysis_query_and_snapshot(self):
         dialog = self.dialog
+        from caumax_consulta.ai_analysis import build_context
         module = ModuleType('caumax_consulta.ai_analysis')
+        module.build_context = build_context
         module.show_analysis = Mock(return_value='opened')
         with patch.dict(sys.modules,{'caumax_consulta.ai_analysis':module}):
             self.assertEqual(dialog._show_ai_analysis(),'opened')
@@ -118,6 +153,7 @@ class CompactLayoutTests(unittest.TestCase):
             self.assertIs(args[1],dialog.analysis)
             self.assertIs(args[2],dialog.query)
             self.assertEqual(args[3],dialog.get_smoothing_state())
+            self.assertTrue(callable(module.show_analysis.call_args.kwargs['on_interpretations']))
             module.show_analysis.reset_mock()
             dialog._surface_pending = True
             self.assertIsNone(dialog._show_ai_analysis())

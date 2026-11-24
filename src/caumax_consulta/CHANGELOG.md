@@ -1,3 +1,67 @@
+# HidroCAUMAX 1.2.8
+
+## Punto original y cierre de la malla de 500 m
+
+En la malla original de **500 m**, las consultas nuevas utilizan el **centro de la celda que contiene el punto original de consulta**, transformado al CRS del MDT. La divisoria y el curso principal se calculan desde esa celda. Los proyectos anteriores conservan sus cierres y diagnósticos históricos al abrirse; una consulta nueva aplica el procedimiento vigente.
+
+## Correspondencia de cuenca al refinar el MDT
+
+El criterio local de las revisiones anteriores podía aceptar una rama de dos celdas frente a vecinas de una celda, sin acreditar su correspondencia con el río original. Los MDT mejorados reciben ahora la geometría nativa y el curso de la cuenca de referencia vigente, incluidas las elecciones manuales posteriores en 500 m.
+
+La acumulación D8 ponderada por esa superficie permite calcular la parte común de las dos cuencas. Se exige mayoría espacial estricta en ambas superficies rasterizadas, una cadena ancestral única y una sección local inequívoca. Se mantiene la celda del clic cuando cumple esas condiciones; en otro caso se busca un centro próximo del cauce compatible. El área de 500 m no es un objetivo numérico y no se vuelve al umbral rígido del 90 %. Una asociación no demostrada solicita revisión manual en lugar de publicar una minicuenca.
+
+La regresión reproducible de 25 m parte de una referencia de **54 km²** y una celda de clic que aporta **0,00125 km²**. El resultado corregido del ráster de ensayo es **53,84 km²**, coincide con una delimitación independiente y evita el río vecino de mayor aporte. No se presenta este ensayo como ejecución de los archivos del usuario. Se conserva el motor GRASS y sus direcciones; cambia el procedimiento de asociación del cierre.
+
+La evidencia espacial se guarda con el proyecto y se valida al abrirlo, sin los rásteres de origen. El snapshot de referencia conserva su significado aunque después cambie manualmente el cierre de otra resolución.
+
+## Ajuste manual y borrado de toda la sesión
+
+El botón se llama **Ajuste Punto de Cierre**. Conserva el selector no modal, las flechas Norte, Sur, Este y Oeste, el paso en celdas y **Elegir en el mapa**. Permite repetir los ajustes y recalcular sin cerrar la cuenca. La selección expresa puede usar cualquier celda válida del MDT disponible, manteniendo el punto y caudal originales como referencia.
+
+**Borrar Delineado** retira los trazados, marcadores y capas generadas de todas las consultas de la sesión: divisorias, cursos, MDT y relieve, direcciones y red, incluidas las variantes y los resultados de ventanas ya cerradas. La limpieza utiliza las propiedades de pertenencia al complemento y conserva las capas ajenas y los archivos de disco. Las ventanas permanecen abiertas y mantienen sus cálculos para informe y guardado. Las tareas pendientes no vuelven a dibujar lo retirado; un ajuste o cambio explícito de resolución permite representarlo de nuevo.
+
+Cada nuevo clic rojo de consulta limpia los resultados anteriores y cierra sus ventanas antes de iniciar el nuevo punto. Sus tareas se cancelan y los callbacks tardíos no publican capas de la consulta anterior.
+
+El resumen de coordenadas, MDT, caudal y cierre se sitúa en un recuadro blanco de **Resolución MDT**, debajo del mensaje de estado.
+
+## MDT y relieve desactivados al crearse
+
+Todas las capas nuevas de terreno, incluida la primera cuenca de 500 m, se añaden desmarcadas. El usuario puede activarlas en el panel de capas. Se conserva su elección al recalcular o reutilizar el grupo, y se respeta la visibilidad de las capas existentes en un proyecto QGIS guardado. No cambian las cotas, la representación disponible ni los cálculos del MDT.
+
+## Análisis IA en la cabecera
+
+El botón azul oscuro **Análisis IA** se sitúa en la esquina superior derecha, en una barra fija por encima del contenido desplazable. Incluye a la izquierda del texto un icono vectorial de conexiones neuronales. Se conservan su acción y las condiciones de disponibilidad durante los cálculos.
+
+La columna **Interpretación** empieza vacía. Su cabecera incluye un segundo botón **Análisis IA**, situado a la derecha del título y con la misma altura del encabezado. Ambos botones acceden a la misma consulta gratuita. Al obtener una respuesta completa, las 19 interpretaciones del informe se incorporan a la tabla, vinculadas por la clave de cada parámetro. Se incluyen las observaciones de revisión que aparecen en el informe y se admite la recuperación desde la caché de la sesión. Un error, una cancelación o una respuesta incompleta no reemplazan el contenido de la tabla. Cuando cambian los resultados se vacía la columna y se descartan las respuestas tardías del análisis anterior.
+
+## Tabla y suavizado más compactos
+
+**Exportar shape** pasa a la misma fila que **Grado**, inmediatamente a su derecha. El resumen blanco de suavizado presenta sus cifras con coma decimal y adapta la altura al contenido. Las demás observaciones de la ventana conservan sus controles.
+
+El parámetro del tramo central se muestra como **Longitud curso principal 10%-85% (L10-85)**. La columna Parámetro se reduce del 46 % a un máximo del 40 % del ancho de la tabla y el espacio liberado se asigna a Interpretación. En ventanas estrechas se reserva el ancho necesario para leer entera la cabecera Unidad. Los valores ausentes se presentan como **n.d.**, tanto en la tabla como en su informe, sin convertirlos en cero ni modificar los cálculos.
+
+El resumen de **Umbral de Escorrentía (P₀)** utiliza **Mín**, **Máx** y **Desv. típ** y prescinde de la línea de cobertura ráster y área válida. Sus valores y datos de cobertura siguen guardándose y utilizándose en los cálculos y el informe.
+
+El botón **Calcular Precipitación diaria máxima anual MEDIA (mm)** presenta el texto en una sola línea y adapta su ancho. Las seis filas de la tabla de precipitación reducen su altura sin recortar las cifras. Se abrevian sus encabezados de extremos y desviación, y la consulta utiliza **Mín**, **Máx** y **Desv. típ. espacial**.
+
+Se retira del panel el párrafo sobre interpolación e inversa, frecuencia de tormenta, P₀ sin coeficientes y permiso de extrapolación, así como el resumen de cálculos completados situado bajo los gráficos. La casilla de extrapolación y los mensajes necesarios para calcular o revisar incidencias siguen disponibles.
+
+## Generación de capas en una fila compacta
+
+El texto introductorio pasa a ser **Genera el MDT elegido, el ráster de Dirección de Flujo y el shape de la Red de Drenaje con el esquema D8 (TauDEM/Esri)**. Se retira la frase adicional sobre CAUMAX/ESRI y Método Racional. El botón **Generar capas D8** reduce su tamaño y comparte fila con **Umbral inicio corriente**, su entrada numérica y las casillas **Automático** y **Mostrar red**. Se elimina el botón **Cancelar cálculo**; la limpieza al cerrar o cambiar de consulta conserva su cancelación interna.
+
+Los productos se titulan **Modelo Digital Terreno**, **Direcciones de Drenaje** y **Red de drenaje**, centrados sobre sus botones de exportación. Esta reorganización no cambia el motor ni los formatos y códigos de las direcciones exportadas.
+
+Los tres botones de **Informe** —Informe (PDF), Guardar proyecto y Abrir proyecto— ajustan su ancho al texto y reducen su altura al **90 %** de la anterior, manteniendo una fila alineada.
+
+## Verificación y compatibilidad
+
+Las regresiones incluyen selección manual repetida, guardado y restauración, limpieza global con cálculos pendientes, preservación de capas ajenas y visibilidad inicial del MDT. Se conservan las pruebas de lectura de sesiones con ajustes históricos. La verificación se realiza con QGIS 3.40.6 y GDAL 3.10.3 reales en Linux; no se atribuye una nueva ejecución en Windows ni una nueva comprobación del servicio externo de IA.
+
+**730 pruebas: 714 correctas, 16 omitidas, sin fallos ni errores**, con el código sin cambios durante la ejecución y cierre limpio de QGIS. Las omisiones corresponden a 7 pruebas con CAUMAX externo, 6 con GRASS, 2 con TauDEM/MPI reales y 1 con datos climáticos externos. Las respuestas de IA se simulan para verificar la tabla, la caché, las cancelaciones y los cambios de consulta. Se comprueba la integridad de los 240 archivos del runtime TauDEM/MPI de Windows, sin modificarlo. La revisión visual a 520, 650 y 900 píxeles comprueba los controles compactos, la cabecera de IA y los botones de informe.
+
+---
+
 # HidroCAUMAX 1.2.7
 
 ## Elegir el ramal por el punto señalado

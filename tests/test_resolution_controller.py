@@ -11,7 +11,8 @@ import unittest
 from unittest.mock import patch
 
 os.environ.setdefault('QT_QPA_PLATFORM','offscreen')
-from osgeo import gdal,osr
+import numpy as np
+from osgeo import gdal,ogr,osr
 from qgis.PyQt.QtCore import QThread
 from qgis.PyQt.QtTest import QTest
 from qgis.core import QgsApplication,QgsCoordinateReferenceSystem,QgsGeometry
@@ -22,6 +23,7 @@ from caumax_consulta.basin import BasinResult
 from caumax_consulta.caumax_bridge import NativeQuery
 from caumax_consulta.terrain import Analysis
 from caumax_consulta import resolution_controller as rc
+from caumax_consulta import dem_hydrology as hydro
 
 
 def sample(resolution=500,boundary=False):
@@ -245,6 +247,15 @@ class ResolutionControllerTests(unittest.TestCase):
         self.assertEqual(self.downloads,[])
         self.assertEqual(self.analyses,[])
         self.assertIsNone(c.outlet_selection_context)
+        c.select('500')
+        c.select('25')
+        self.assertIs(c.variants['25']['analysis'],result)
+        ready=[]
+        c.ensure_all(lambda variants:ready.append(variants))
+        self.wait(lambda:bool(ready))
+        self.assertIs(ready[0]['25']['analysis'],result)
+        self.assertEqual([entry[0] for entry in self.downloads],[5])
+        self.assertEqual(manual.call_count,1)
 
     def test_invalid_manual_cell_preserves_previous_result_and_allows_another_choice(self):
         c=self.controller()
@@ -284,13 +295,13 @@ class ResolutionControllerTests(unittest.TestCase):
         self.assertEqual(c.variants['5']['smoothing_state'],{'degree':15.5})
         self.assertTrue(all(t is self.app.thread() for t in self.threads))
 
-    def test_improved_variants_receive_explicit_original_area_and_bounded_nearest_channel_rules(self):
+    def test_improved_variants_keep_reference_data_without_enabling_channel_snap(self):
         c=self.controller()
         self.discover(c)
         c.select('25')
         self.wait(lambda:not c.busy)
         settings=self.snap_options[-1]
-        self.assertTrue(settings['snap_enabled'])
+        self.assertFalse(settings['snap_enabled'])
         self.assertEqual(settings['reference_area_m2'],self.base.area_m2)
         self.assertEqual((settings['reference_cell_width'],settings['reference_cell_height']),(500,500))
         self.assertAlmostEqual(settings['snap_radius_m'],math.hypot(500,500))
@@ -300,44 +311,150 @@ class ResolutionControllerTests(unittest.TestCase):
         self.assertEqual(len(self.analyses),count)
         self.assertIs(self.results[-1][1],self.base)
 
-    def test_adjusted_closure_does_not_overwrite_original_query_or_selected_point(self):
+    def test_real_native_variants_and_bulk_save_cache_verify_the_matching_clicked_cell(self):
         c=self.controller()
         self.discover(c)
-        normal=self.fake_analyze
-        def snapped(*args,**kwargs):
-            result=normal(*args,**kwargs)
-            x,y=args[1:3]
-            snap=dict(original_x=x,original_y=y,snapped_x=262.5,snapped_y=252.5,
-                      distance_m=math.hypot(262.5-x,252.5-y),search_radius_m=math.hypot(500,500),
-                      minimum_upstream_area_m2=.9*self.base.area_m2,
-                      reference_area_m2=self.base.area_m2,candidate_upstream_area_m2=240000,
-                      method='nearest_main_channel_d8',status='snapped')
-            analysis=replace(result.analysis,
-                             basin=replace(result.analysis.basin,outlet_x=262.5,outlet_y=252.5),
-                             selected_x=x,selected_y=y,diagnostics={'outlet_snap':snap})
-            return SimpleNamespace(analysis=analysis,directions_path=result.directions_path,
-                                   dem_path=result.dem_path,metadata={})
-        with patch.object(rc,'_analyze_dem',side_effect=snapped):
+        expected={}
+        expected_counts={}
+        def prepared_download(source,bounds,crs,destination,cancelled,progress):
+            resolution=source.resolution_m
+            path=Path(destination)
+            path.parent.mkdir(parents=True,exist_ok=True)
+            self.downloads.append((resolution,tuple(bounds),str(path)))
+            size=round(500/resolution)
+            transform=(-resolution,resolution,0,500+resolution,0,-resolution)
+            outlet_col=math.floor(self.query.x/resolution)+1
+            outlet_row=math.floor((500-self.query.y)/resolution)+1
+            codes=np.full((size+2,size+2),255,dtype=np.uint8)
+            codes[1:size+1,1:outlet_col]=1
+            codes[1:size+1,outlet_col]=4
+            codes[1:size+1,outlet_col+1:size+1]=16
+            codes[size,outlet_col]=0
+            row,col=np.indices(codes.shape)
+            dem=gdal.GetDriverByName('GTiff').Create(str(path),size+2,size+2,1,gdal.GDT_Float64)
+            dem.SetGeoTransform(transform)
+            dem.SetProjection(source.source_crs_wkt)
+            dem.GetRasterBand(1).SetNoDataValue(-9999)
+            dem.GetRasterBand(1).WriteArray(np.where(codes==255,-9999,1000-row+abs(col-12)))
+            dem=None
+            dem=gdal.Open(str(path))
+            source_key=hydro._source_key(dem,path)
+            dem=None
+            cache=path.parent/'hydrology'
+            cache.mkdir()
+            directions=gdal.GetDriverByName('GTiff').Create(
+                str(cache/('d8_'+source_key[:32]+'.tif')),size+2,size+2,1,gdal.GDT_Byte)
+            directions.SetGeoTransform(transform)
+            directions.SetProjection(source.source_crs_wkt)
+            directions.GetRasterBand(1).SetNoDataValue(255)
+            directions.GetRasterBand(1).WriteArray(codes)
+            directions.SetMetadata({'SOURCE_KEY':source_key,'HYDRO_VERSION':hydro._VERSION})
+            directions=None
+            expected[rc._key(resolution)]=tuple(gdal.ApplyGeoTransform(transform,outlet_col+.5,outlet_row+.5))
+            expected_counts[rc._key(resolution)]=outlet_row*size
+            progress(100)
+            return path
+        ready=[]
+        with (patch.object(rc,'_download_dem',side_effect=prepared_download),
+              patch.object(rc,'_analyze_dem',side_effect=hydro.analyze_dem) as calculate,
+              patch.object(hydro,'_run_grass',side_effect=AssertionError('Prepared native D8')),
+              patch.object(hydro,'_nearest_main_channel',side_effect=AssertionError('No automatic snap'))):
             c.select('5')
             self.wait(lambda:not c.busy)
+            self.assertFalse(self.errors)
+            first=c.variants['5']['analysis']
+            c.select('500')
+            c.select('5')
+            self.assertIs(c.variants['5']['analysis'],first)
+            self.assertEqual(calculate.call_count,1)
+            c.ensure_all(lambda variants:ready.append(variants))
+            self.wait(lambda:bool(ready))
+            self.assertEqual(calculate.call_count,2)
+            self.assertTrue(all(call.kwargs['snap_enabled'] is False for call in calculate.call_args_list))
         self.assertFalse(self.errors)
-        _,analysis,query=self.results[-1]
-        self.assertEqual((query.x,query.y,query.flow,query.period),(230.2,245.3,177,100))
-        self.assertEqual((analysis.selected_x,analysis.selected_y),(230.2,245.3))
-        self.assertEqual((analysis.outlet_x,analysis.outlet_y),(262.5,252.5))
-        self.assertEqual(c.variants['5']['metadata']['outlet_snap'],analysis.diagnostics['outlet_snap'])
+        self.assertEqual(c.active_key,'5')
+        self.assertEqual([entry[0] for entry in self.downloads],[5,25])
+        self.assertEqual(set(ready[0]),{'500','25','5'})
+        for key in ('5','25'):
+            analysis=ready[0][key]['analysis']
+            query=ready[0][key]['query']
+            self.assertEqual((query.x,query.y,query.flow,query.period),(230.2,245.3,177,100))
+            self.assertEqual((analysis.selected_x,analysis.selected_y),(230.2,245.3))
+            self.assertEqual((analysis.outlet_x,analysis.outlet_y),expected[key])
+            self.assertNotEqual(expected[key],(230.2,245.3))
+            self.assertEqual(analysis.cell_count,expected_counts[key])
+            self.assertEqual(analysis.area_m2,expected_counts[key]*float(key)**2)
+            course=ogr.CreateGeometryFromWkb(analysis.main_course_wkb)
+            self.assertEqual(course.GetPoint_2D(0),expected[key])
+            self.assertEqual(analysis.diagnostics['outlet_snap']['method'],'reference_basin_d8')
+            self.assertEqual(analysis.diagnostics['outlet_snap']['status'],'unchanged')
+            self.assertGreater(analysis.diagnostics['outlet_snap']['reference_coverage_fraction'],.5)
+            self.assertEqual(ready[0][key]['metadata']['outlet_snap'],analysis.diagnostics['outlet_snap'])
+            self.assertTrue(ready[0][key]['metadata']['cache_reused'])
+            self.assertFalse(ready[0][key]['metadata']['outlet_snapped_to_channel'])
 
-    def test_no_eligible_main_channel_is_a_visible_error_without_distant_or_unsnapped_fallback(self):
+    def test_manual_coarse_change_rebuilds_current_run_automatic_variant_with_actual_bounds(self):
         c=self.controller()
         self.discover(c)
-        with patch.object(rc,'_analyze_dem',side_effect=ValueError('No existe cauce principal dentro del radio autorizado')) as engine:
+        c.select('25')
+        self.wait(lambda:not c.busy)
+        first=c.variants['25']['analysis']
+        polygon=QgsGeometry.fromWkt('MULTIPOLYGON (((10000 10000,10500 10000,10500 10500,10000 10500,10000 10000)))')
+        manual=replace(self.base,basin=replace(self.base.basin,
+            geometry_wkb=bytes(polygon.asWkb()),outlet_x=10250,outlet_y=10250))
+        context=dict(resolution_key='500',dem_path=self.query.dem_path,directions_path=self.query.directions_path)
+        payload=dict(analysis=manual,dem_path=self.query.dem_path,
+                     directions_path=self.query.directions_path,metadata={'manual_outlet_selected':True})
+        with patch.object(rc,'_manual_analysis',return_value=payload):
+            c.select_outlet(context,10250,10250)
+            self.wait(lambda:not c.busy)
+        self.assertIs(c.base_analysis,self.base)
+        self.assertTrue(c._needs_reference_rebuild('25'))
+        c.select('25')
+        self.wait(lambda:not c.busy)
+        self.assertIsNot(c.variants['25']['analysis'],first)
+        reference=self.snap_options[-1]['refinement_reference']
+        self.assertEqual(reference['geometry_wkb'],manual.geometry_wkb)
+        self.assertEqual(self.downloads[-1][1],rc._buffered_bounds(manual))
+        self.assertGreater(self.downloads[-1][1][2],manual.outlet_x)
+        self.assertFalse(c._needs_reference_rebuild('25'))
+        # A later explicit fine choice must survive another coarse change.
+        context['resolution_key']='25'
+        payload['analysis']=sample(25)
+        with patch.object(rc,'_manual_analysis',return_value=payload):
+            c.select_outlet(context,237.5,237.5)
+            self.wait(lambda:not c.busy)
+        explicit=c.variants['25']['analysis']
+        c.variants['500']['analysis']=self.base
+        before=len(self.downloads)
+        c.select('25')
+        self.assertIs(c.variants['25']['analysis'],explicit)
+        self.assertEqual(len(self.downloads),before)
+
+    def test_smoothed_reference_uses_native_base_or_requires_explicit_review(self):
+        c=self.controller()
+        self.discover(c)
+        smoothed=replace(self.base,diagnostics={'analysis_surface':{'kind':'smoothed'}})
+        c.variants['500'].update(analysis=smoothed,smoothing_state={'base_geometry_wkb':self.base.geometry_wkb})
+        c.select('25')
+        self.wait(lambda:not c.busy)
+        self.assertEqual(self.snap_options[-1]['refinement_reference']['geometry_wkb'],self.base.geometry_wkb)
+        c.variants['500']['smoothing_state']=None
+        c.select('5')
+        self.wait(lambda:not c.busy)
+        self.assertIsNone(self.snap_options[-1]['refinement_reference']['geometry_wkb'])
+
+    def test_invalid_clicked_direction_is_a_visible_error_without_a_neighbouring_fallback(self):
+        c=self.controller()
+        self.discover(c)
+        with patch.object(rc,'_analyze_dem',side_effect=ValueError('La celda seleccionada no tiene dirección D8 válida (NoData)')) as engine:
             c.select('5')
             self.wait(lambda:not c.busy)
         self.assertEqual(engine.call_count,1)
         self.assertEqual(len(self.downloads),1)
         self.assertEqual(c.active_key,'500')
         self.assertNotIn('5',c.variants)
-        self.assertIn('radio autorizado',self.errors[-1])
+        self.assertIn('NoData',self.errors[-1])
 
     def test_exact_geographic_source_point_is_transformed_for_analysis_only(self):
         query=replace(self.query,x=-3.0,y=43.0,crs=QgsCoordinateReferenceSystem('EPSG:4326'))
@@ -426,6 +543,28 @@ class ResolutionControllerTests(unittest.TestCase):
         self.assertTrue(any('dos ampliaciones' in note for note in c.variants['5']['analysis'].notes))
         self.assertEqual(c.variants['5']['metadata']['coverage_attempts'],3)
 
+    def test_reference_outside_download_retries_coverage_before_requiring_manual_choice(self):
+        c=self.controller()
+        self.discover(c)
+        normal=self.fake_analyze
+        attempts=[]
+        def wider_reference(*args,**kwargs):
+            attempts.append(args[0])
+            if len(attempts)<3:
+                error=ValueError('El MDT no cubre la referencia')
+                error.selection_context={'reason_code':'reference_outside_dem'}
+                raise error
+            return normal(*args,**kwargs)
+        with patch.object(rc,'_analyze_dem',side_effect=wider_reference):
+            c.select('25')
+            self.wait(lambda:not c.busy)
+        self.assertFalse(self.errors)
+        self.assertEqual(len(self.downloads),3)
+        self.assertEqual(c.variants['25']['metadata']['coverage_attempts'],3)
+        widths=[bounds[2]-bounds[0] for _,bounds,_ in self.downloads]
+        self.assertAlmostEqual(widths[1]/widths[0],1.5)
+        self.assertAlmostEqual(widths[2]/widths[1],1.5)
+
     def test_restore_requires_no_network_engine_or_source_rasters(self):
         c=self.controller()
         self.discover(c)
@@ -443,6 +582,24 @@ class ResolutionControllerTests(unittest.TestCase):
             self.assertTrue(restored.select('25'))
             self.assertEqual(restored.active_key,'25')
         self.assertEqual(self.results[-1][0],'25')
+
+    def test_restore_preserves_an_older_explicitly_saved_automatic_snap(self):
+        c=self.controller()
+        legacy=replace(sample(5),basin=replace(sample(5).basin,outlet_x=262.5,outlet_y=252.5),
+            diagnostics={'outlet_snap':dict(method='upstream_section_d8',
+                selection_mode='upstream_lateral_nearest_branch',snapped_x=262.5,snapped_y=252.5)})
+        state=dict(active_key='5',options=[c.options[0],dict(key='5',resolution=5,available=True)],
+            variants={'500':c.variants['500'],'5':dict(analysis=legacy,query=self.query,
+                smoothing_state=None,metadata={})})
+        with (patch.object(rc,'_download_dem',side_effect=AssertionError('No download on restore')),
+              patch.object(rc,'_analyze_dem',side_effect=AssertionError('No reinterpretation on restore'))):
+            self.assertTrue(c.restore(state))
+            self.assertTrue(c.select('500'))
+            self.assertTrue(c.select('5'))
+        restored=c.variants['5']['analysis']
+        self.assertIs(restored,legacy)
+        self.assertEqual((restored.outlet_x,restored.outlet_y),(262.5,252.5))
+        self.assertEqual(restored.diagnostics,legacy.diagnostics)
 
     def test_engine_unavailable_keeps_original_enabled(self):
         c=self.controller()

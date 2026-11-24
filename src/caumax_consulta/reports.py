@@ -169,6 +169,12 @@ def _outlet_snap_report_html(analysis):
     }.get(snap.get('status'), '')
     mode = snap.get('selection_mode')
     criteria = {
+        'reference_basin_overlap': (
+            'Refinamiento del cierre mediante la red D8 del MDT seleccionado y la cuenca original '
+            'como referencia espacial. Se exige correspondencia mayoritaria en ambas direcciones '
+            'antes de elegir el centro próximo al punto consultado sobre el mismo cauce. '
+            'No se impone el área de 500 m ni se sustituye el cálculo por un polígono suavizado. '
+            'Si la correspondencia o la sección no son inequívocas, se solicita elección manual.'),
         'user_selected_cell': (
             'Cierre elegido expresamente por el usuario en el mapa o mediante desplazamiento por celdas. '
             'Se ha recalculado toda la cuenca y su curso principal desde ese centro. Esta elección manual '
@@ -185,14 +191,14 @@ def _outlet_snap_report_html(analysis):
             'o aguas arriba. El receptor de la conexión lateral no se adopta automáticamente como cierre. '
             'No se exige un porcentaje del área de la malla de 500 m ni un umbral fijo de acumulación local.'),
         'upstream_nearest_branch': (
-            'Snap por proximidad al ramal D8 conectado: se comparan las distancias del clic a los '
+            'Criterio guardado de proximidad al ramal D8 conectado: se comparan las distancias del clic a los '
             'segmentos entrantes antes de elegir la celda. El centro se conserva cuando es admisible '
             'o se toma el primero sobre la sección proyectada o aguas arriba del ramal elegido. '
             'La longitud total de otro río no determina el cierre. El curso de máxima longitud '
             'se calcula dentro de la cuenca resultante. Una diferencia de proximidad no concluyente '
             'entre ramales requiere selección manual.'),
         'upstream_lateral_nearest_branch': (
-            'Snap al ramal próximo del MDT activo: la conexión D8 y los aportes relativos identifican '
+            'Criterio guardado de asociación al ramal próximo del MDT: la conexión D8 y los aportes relativos identifican '
             'el receptor; después se comparan los segmentos conectados y se elige el ramal más '
             'próximo al clic, sin dar prioridad al de mayor longitud. El cierre es el primer centro '
             'sobre la sección proyectada o aguas arriba de ese ramal. Una asociación ambigua '
@@ -200,13 +206,13 @@ def _outlet_snap_report_html(analysis):
         'upstream_only': (
             'Criterio de la consulta guardada en 1.2.5: antecesores D8 dentro del semiplano '
             'definido por la dirección local; se seleccionó el centro más cercano que cumplía '
-            'los filtros de acumulación. Una consulta nueva aplica el snap actual sobre el curso principal.'),
+            'los filtros de acumulación. Las consultas nuevas aplican el criterio de cierre de la versión actual.'),
     }
     criterion = criteria.get(mode,
         'Criterio de la consulta guardada: celda D8 más próxima dentro del radio cuya área '
         'aportante cumple el umbral mínimo.')
     current = mode in ('upstream_main_course', 'upstream_lateral_main_course', 'user_selected_cell',
-                       'upstream_nearest_branch', 'upstream_lateral_nearest_branch')
+                       'upstream_nearest_branch', 'upstream_lateral_nearest_branch', 'reference_basin_overlap')
     manual_extent = mode == 'user_selected_cell' and snap.get('manual_selection_scope') == 'raster_extent'
     radius_label = ('radio del snap automático (no limita esta elección manual)' if manual_extent
                     else 'radio de búsqueda')
@@ -218,6 +224,14 @@ def _outlet_snap_report_html(analysis):
         details += area('minimum_upstream_area_m2') + ';'
     details += ' <b>área de referencia:</b> ' + area('reference_area_m2')
     details += '; <b>área aportante del cierre:</b> ' + area('candidate_upstream_area_m2')
+    if mode == 'reference_basin_overlap':
+        details += ('; <b>referencia espacial del refinamiento:</b> ' + area('reference_geometry_area_m2')
+                    + '; <b>área de la celda original:</b> ' + area('original_cell_upstream_area_m2'))
+        for key, label in (('reference_coverage_fraction', 'parte de la referencia captada'),
+                           ('candidate_overlap_fraction', 'parte de la cuenca fina coincidente')):
+            fraction = snap.get(key)
+            if isinstance(fraction, (int, float)) and math.isfinite(fraction):
+                details += '; <b>' + label + ':</b> ' + _text(_number(fraction * 100, 2).replace('.', ',')) + ' %'
     if mode in ('upstream_lateral_main_course', 'upstream_lateral_nearest_branch'):
         details += ('; <b>área de la celda original:</b> ' + area('original_cell_upstream_area_m2')
                     + '; <b>área del receptor:</b> ' + area('channel_anchor_upstream_area_m2')
@@ -567,7 +581,7 @@ td {vertical-align: top;}
 .method {font-size: 8pt;}
 </style></head><body>
 <h1>''' + title + '''</h1>
-<p><b>HidroCAUMAX v1.2.7 - Parámetros morfológicos e hidrológicos</b></p>
+<p><b>HidroCAUMAX v1.2.8 - Parámetros morfológicos e hidrológicos</b></p>
 <table width="100%" cellspacing="0" cellpadding="3">''' + metadata_rows + '''</table>
 ''' + resolution_html + '''
 ''' + outlet_snap_html + '''
@@ -657,8 +671,8 @@ def _write_document(path, content):
     printer = QPrinter(QPrinter.HighResolution)
     printer.setOutputFormat(QPrinter.PdfFormat)
     printer.setOutputFileName(str(path))
-    printer.setDocName('HidroCAUMAX v1.2.7 - Cuenca hidrográfica')
-    printer.setCreator('HidroCAUMAX v1.2.7')
+    printer.setDocName('HidroCAUMAX v1.2.8 - Cuenca hidrográfica')
+    printer.setCreator('HidroCAUMAX v1.2.8')
     printer.setFontEmbeddingEnabled(True)
     printer.setPaperSize(QPrinter.A4)
     printer.setOrientation(QPrinter.Landscape)

@@ -17,9 +17,9 @@ from osgeo import gdal
 
 os.environ.setdefault('QT_QPA_PLATFORM','offscreen')
 from qgis.PyQt import sip
-from qgis.PyQt.QtCore import QCoreApplication, QEvent, QSettings, Qt
+from qgis.PyQt.QtCore import QCoreApplication, QEvent, QPoint, QSettings, Qt
 from qgis.PyQt.QtTest import QTest
-from qgis.PyQt.QtWidgets import QComboBox, QGridLayout, QLabel
+from qgis.PyQt.QtWidgets import QComboBox, QGridLayout, QLabel, QPushButton
 from qgis.PyQt.QtGui import QFontMetrics
 from qgis.core import QgsApplication, QgsCoordinateReferenceSystem, QgsGeometry, QgsProject
 from qgis.gui import QgsMapCanvas
@@ -204,11 +204,17 @@ class DrainageDialogTests(unittest.TestCase):
 
     def test_direct_prepare_stops_debounce_timer_instead_of_restarting_worker(self):
         self.choose_manual_threshold();dialog=self.dialog
+        self.assertFalse(hasattr(dialog,'drainage_cancel_button'))
+        self.assertNotIn('Cancelar cálculo',[b.text() for b in dialog.drainage_group.findChildren(QPushButton)])
         with patch('caumax_consulta.taudem_engine.probe_taudem',return_value={'available':True}):
-            dialog._prepare_drainage()
+            dialog.drainage_prepare_button.click()
             self.assertFalse(dialog._drainage_timer.isActive())
             QTest.qWait(550)
         self.assertEqual(len(dialog._drainage_controller.calls),1)
+        self.assertTrue(dialog._drainage_controller.busy)
+        self.assertFalse(dialog.drainage_prepare_button.isEnabled())
+        dialog.dispose()
+        self.assertFalse(dialog._drainage_controller.busy)
 
     def test_prepare_uses_default_engine_and_caumax_even_with_old_external_setting(self):
         settings_path=str(self.folder/'isolated-settings.ini')
@@ -287,27 +293,55 @@ class DrainageDialogTests(unittest.TestCase):
 
     def test_exports_share_three_centered_columns_with_complete_compact_buttons(self):
         dialog=self.dialog
-        dialog.resize(650,1100)
         dialog.show()
-        QTest.qWait(30)
         group=dialog.drainage_group
         self.assertEqual(group.title(),'Generación capas resolución mejorada')
-        layout=group.layout()
-        grid=next(layout.itemAt(i).layout() for i in range(layout.count())
-                  if isinstance(layout.itemAt(i).layout(),QGridLayout))
-        labels=['Modelo de Elevaciones','Modelo de Dirección de Flujo D8','Red de drenaje']
+        self.assertEqual(group.layout().itemAt(0).widget().text(),
+            'Genera el MDT elegido, el ráster de Dirección de Flujo y el shape de la Red de Drenaje con el esquema D8 (TauDEM/Esri)')
+        row=group.layout().itemAt(1).layout()
+        controls=[row.itemAt(i).widget() for i in range(5)]
+        self.assertEqual(controls,[dialog.drainage_prepare_button,controls[1],dialog.drainage_threshold,
+                                   dialog.drainage_auto,dialog.drainage_visible])
+        self.assertEqual(controls[1].text(),'Umbral inicio corriente')
+        self.assertFalse(controls[1].wordWrap())
+        self.assertEqual(dialog.drainage_threshold.decimals(),6)
+        grid=dialog._drainage_exports_widget.layout()
+        self.assertIsInstance(grid,QGridLayout)
+        labels=['Modelo Digital Terreno','Direcciones de Drenaje','Red de drenaje']
         texts=['Exportar MDT (TIFF)…','Exportar dirección de drenaje (TIFF)…','Exportar Red de Drenaje (SHP)…']
-        for column,(label,text) in enumerate(zip(labels,texts)):
-            heading=grid.itemAtPosition(0,column).widget()
-            button=grid.itemAtPosition(1,column).widget()
-            self.assertEqual(heading.text(),label)
-            self.assertEqual(button.text(),text)
-            self.assertTrue(heading.alignment() & Qt.AlignHCenter)
-            self.assertTrue(grid.itemAtPosition(1,column).alignment() & Qt.AlignHCenter)
-            self.assertGreaterEqual(button.width(),QFontMetrics(button.font()).horizontalAdvance(text)+12)
-        self.assertEqual(len({grid.itemAtPosition(1,c).widget().y() for c in range(3)}),1)
-        self.assertLessEqual(dialog.body_scroll.widget().width(),dialog.body_scroll.viewport().width())
-        self.assertLessEqual(dialog.width(),650)
+        for width in (520,650,900):
+            with self.subTest(width=width):
+                dialog.resize(width,1100)
+                QTest.qWait(100)
+                dialog._fit_rows()
+                self.app.processEvents()
+                centers=[control.geometry().center().y() for control in controls]
+                self.assertLessEqual(max(centers)-min(centers),1)
+                for previous,current in zip(controls,controls[1:]):
+                    self.assertLess(previous.geometry().right(),current.x())
+                    self.assertLessEqual(current.x()-previous.geometry().right()-1,3)
+                self.assertLess(dialog.drainage_prepare_button.height(),30)
+                self.assertGreaterEqual(controls[1].width(),QFontMetrics(controls[1].font()).horizontalAdvance(controls[1].text()))
+                line=dialog.drainage_threshold.lineEdit()
+                self.assertGreaterEqual(line.width(),QFontMetrics(line.font()).horizontalAdvance(line.text())+2)
+                self.assertLessEqual(controls[-1].mapTo(dialog.body_scroll.viewport(),QPoint()).x()+controls[-1].width(),
+                                     dialog.body_scroll.viewport().width())
+                for column,(label,text) in enumerate(zip(labels,texts)):
+                    heading=grid.itemAtPosition(0,column).widget()
+                    button=grid.itemAtPosition(1,column).widget()
+                    self.assertEqual(heading.text(),label)
+                    self.assertEqual(button.text(),text)
+                    self.assertTrue(heading.alignment() & Qt.AlignHCenter)
+                    self.assertTrue(grid.itemAtPosition(1,column).alignment() & Qt.AlignHCenter)
+                    self.assertGreaterEqual(button.width(),QFontMetrics(button.font()).horizontalAdvance(text)+4)
+                    self.assertGreaterEqual(heading.height(),heading.heightForWidth(heading.width()))
+                    self.assertGreater(dialog.drainage_status.y(),button.mapTo(group,QPoint(0,button.height())).y())
+                    self.assertLessEqual(button.mapTo(dialog.body_scroll.viewport(),QPoint()).x()+button.width(),
+                                         dialog.body_scroll.viewport().width())
+                self.assertEqual(len({grid.itemAtPosition(1,c).widget().y() for c in range(3)}),1)
+                if width>=650:
+                    self.assertLessEqual(dialog.body_scroll.widget().width(),dialog.body_scroll.viewport().width())
+                self.assertLessEqual(dialog.width(),width)
 
 
 if __name__=='__main__':unittest.main()

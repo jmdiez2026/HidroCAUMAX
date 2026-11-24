@@ -102,6 +102,85 @@ class DemHydrologyTests(unittest.TestCase):
                                              reference, .9, radius, directions_path=path)
         return (*result, counts, path)
 
+    def prepared_grid(self, codes, resolution=5):
+        """Real native DEM/D8 pair; skip only the external GRASS generation."""
+        row, col = np.indices(codes.shape)
+        dem = self.raster(np.where(codes == 255, -9999, 1000 - row + abs(col - 5)),
+                          resolution=resolution)
+        source = gdal.Open(str(dem))
+        key = hydro._source_key(source, dem)
+        source = None
+        direction_source = self.raster(codes, resolution=resolution, nodata=255)
+        directions = self.cache / ('d8_' + key[:32] + '.tif')
+        cached = gdal.Translate(str(directions), str(direction_source), outputType=gdal.GDT_Byte)
+        cached.SetMetadata({'SOURCE_KEY': key, 'HYDRO_VERSION': hydro._VERSION})
+        cached = None
+        return dem, directions
+
+    def test_default_outlet_is_containing_cell_centre_at_every_native_resolution(self):
+        codes = self.branching_receiver()
+        for resolution in (500, 25, 5, 2, .5):
+            with self.subTest(resolution=resolution):
+                dem, directions = self.prepared_grid(codes, resolution)
+                centre = tuple(self.point(dem, 14, 5))
+                click = centre[0] + .39 * resolution, centre[1] + .49 * resolution
+                with (patch.object(hydro, '_run_grass', side_effect=AssertionError('D8 cache exists')),
+                      patch.object(hydro, '_nearest_main_channel', side_effect=AssertionError('No channel snap')),
+                      patch.object(hydro, '_accumulation', side_effect=AssertionError('No accumulation needed'))):
+                    result = hydro.analyze_dem(dem, *click, self.cache,
+                        reference_area_m2=389e6, reference_cell_width=500, reference_cell_height=500)
+                self.assertEqual((result.selected_x, result.selected_y), click)
+                self.assertEqual((result.outlet_x, result.outlet_y), centre)
+                self.assertEqual((result.cell_width, result.cell_height), (resolution, resolution))
+                self.assertEqual(result.cell_count, 11)  # Receiver plus all three incoming branches.
+                self.assertEqual(result.area_m2, 11 * resolution ** 2)
+                self.assertAlmostEqual(ogr.CreateGeometryFromWkb(result.geometry_wkb).GetArea(),
+                                       result.area_m2)
+                course = ogr.CreateGeometryFromWkb(result.main_course_wkb)
+                self.assertEqual(course.GetPoint_2D(0), centre)
+                self.assertNotIn('outlet_snap', result.diagnostics)
+                self.assertFalse(result.metadata['outlet_snapped_to_channel'])
+                self.assertIsNone(result.metadata['accumulation_path'])
+                self.assertTrue(result.metadata['cache_reused'])
+                self.assertEqual(result.directions_path, str(directions))
+
+    def test_default_cell_does_not_require_a_nearby_or_concentrated_channel(self):
+        diffuse = np.full((15, 15), 4, dtype=np.uint8)
+        diffuse[-1, :] = 0
+        for codes, row, col, count in ((self.channel_fixture(), 6, 26, 1),
+                                      (diffuse, 7, 7, 8)):
+            with self.subTest(count=count):
+                dem, _ = self.prepared_grid(codes)
+                centre = tuple(self.point(dem, row, col))
+                click = centre[0] + 1.4, centre[1] - 1.7
+                result = hydro.analyze_dem(dem, *click, self.cache)
+                self.assertEqual((result.outlet_x, result.outlet_y), centre)
+                self.assertEqual((result.selected_x, result.selected_y), click)
+                self.assertEqual(result.cell_count, count)
+                self.assertNotIn('outlet_snap', result.diagnostics)
+
+    def test_default_reuses_legacy_d8_cache_without_reusing_the_adjusted_outlet(self):
+        dem, directions = self.prepared_grid(self.channel_fixture())
+        centre = tuple(self.point(dem, 6, 26))
+        click = centre[0] - 1.5, centre[1]
+        legacy = hydro.analyze_dem(dem, *click, self.cache, snap_enabled=True,
+            reference_area_m2=389e6, reference_cell_width=500, reference_cell_height=500)
+        self.assertNotEqual((legacy.outlet_x, legacy.outlet_y), centre)
+        self.assertIn('outlet_snap', legacy.diagnostics)
+        self.assertTrue(Path(legacy.metadata['accumulation_path']).is_file())
+        with (patch.object(hydro, '_run_grass', side_effect=AssertionError('Reuse native D8')),
+              patch.object(hydro, '_nearest_main_channel', side_effect=AssertionError('No inherited snap')),
+              patch.object(hydro, '_accumulation', side_effect=AssertionError('Ignore legacy accumulation'))):
+            current = hydro.analyze_dem(dem, *click, self.cache)
+        self.assertEqual(current.directions_path, str(directions))
+        self.assertTrue(current.metadata['cache_reused'])
+        self.assertEqual((current.outlet_x, current.outlet_y), centre)
+        self.assertEqual((current.selected_x, current.selected_y), click)
+        self.assertEqual(current.cell_count, 1)
+        self.assertNotIn('outlet_snap', current.diagnostics)
+        self.assertNotIn('outlet_snap', current.metadata)
+        self.assertIsNone(current.metadata['accumulation_path'])
+
     def test_lateral_click_crosses_small_hillslope_join_before_associating_the_river(self):
         selected, snap, counts, _ = self.snap_codes(self.channel_fixture(), 6, 26)
         self.assertEqual((selected.row, selected.col), (8, 26))

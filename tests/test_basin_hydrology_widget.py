@@ -19,8 +19,9 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from osgeo import gdal
-from qgis.PyQt.QtGui import QImage, QPalette
-from qgis.PyQt.QtTest import QSignalSpy
+from qgis.PyQt.QtCore import Qt
+from qgis.PyQt.QtGui import QFont, QImage, QPalette
+from qgis.PyQt.QtTest import QSignalSpy, QTest
 from qgis.PyQt.QtWidgets import QLabel
 from qgis.core import QgsApplication
 
@@ -120,6 +121,9 @@ class BasinHydrologyWidgetTests(unittest.TestCase):
             widget.close()
 
     def test_calculation_buttons_emit_once_and_busy_blocks_duplicate_requests(self):
+        self.widget.restore(saved_state())
+        self.assertEqual(self.widget.status_label.text(), "")
+        self.assertTrue(self.widget.status_label.isHidden())
         p0_spy = QSignalSpy(self.widget.calculate_p0)
         rainfall_spy = QSignalSpy(self.widget.calculate_rainfall)
         cancel_spy = QSignalSpy(self.widget.cancel_requested)
@@ -132,6 +136,7 @@ class BasinHydrologyWidgetTests(unittest.TestCase):
         self.assertFalse(self.widget.rainfall_button.isEnabled())
         self.assertFalse(self.widget.cancel_button.isHidden())
         self.assertIn("Calculando cobertura", self.widget.status_label.text())
+        self.assertFalse(self.widget.status_label.isHidden())
         self.widget.p0_button.click()
         self.widget.rainfall_button.click()
         self.assertEqual((len(p0_spy), len(rainfall_spy)), (1, 1))
@@ -142,6 +147,11 @@ class BasinHydrologyWidgetTests(unittest.TestCase):
         self.assertTrue(self.widget.p0_button.isEnabled())
         self.assertTrue(self.widget.rainfall_button.isEnabled())
         self.assertTrue(self.widget.cancel_button.isHidden())
+        self.assertTrue(self.widget.status_label.isHidden())
+        self.widget.set_busy(False, "No se pudo abrir la capa de precipitación.")
+        self.assertFalse(self.widget.status_label.isHidden())
+        self.assertIn("No se pudo abrir", self.widget.status_label.text())
+        self.assertEqual(self.widget.snapshot(), before)
 
     def test_same_basin_preserves_calculated_values_without_resampling(self):
         state = saved_state()
@@ -150,6 +160,7 @@ class BasinHydrologyWidgetTests(unittest.TestCase):
         with patch.object(gdal, "Open", side_effect=AssertionError("unexpected resampling")):
             self.widget.set_analysis(equivalent)
         self.assertEqual(self.widget.snapshot(), state)
+        self.assertTrue(self.widget.coverage_label.isHidden())
 
     def test_different_basin_clears_every_result_and_updates_identity(self):
         self.widget.restore(saved_state())
@@ -273,6 +284,7 @@ class BasinHydrologyWidgetTests(unittest.TestCase):
 
     def test_result_display_distinguishes_zero_missing_and_partial_coverage(self):
         p0 = result(12.5, coverage=0.5, valid=0.25, notes=["Cobertura parcial"])
+        p0['statistics'] = dict(median_mm=12.5, max_mm=20, min_mm=5, stddev_mm=3)
         rainfall = {str(p): result(v) for p, v in zip(PERIODS, (0, None, 20, 30, 40, 50))}
         self.widget.set_result("p0", p0)
         self.widget.set_result("rainfall", rainfall)
@@ -282,6 +294,9 @@ class BasinHydrologyWidgetTests(unittest.TestCase):
         coverage = self.widget.coverage_label.text()
         self.assertRegex(coverage, r"50(?:[,.]0+)?\s*%")
         self.assertRegex(coverage, r"25(?:[,.]0+)?\s*%")
+        self.assertTrue(self.widget.coverage_label.isHidden())
+        self.assertEqual(self.widget.p0_statistics_label.text(),
+            'Mediana: 12,50 mm · Máx: 20,00 mm · Mín: 5,00 mm\nDesv. típ: 3,00 mm')
         table = self.widget.rainfall_table
         self.assertEqual(table.rowCount(), 6)
         self.assertEqual([table.item(row, 0).text() for row in range(6)],
@@ -290,19 +305,24 @@ class BasinHydrologyWidgetTests(unittest.TestCase):
         self.assertNotEqual(table.item(1, 1).text(), table.item(0, 1).text())
         self.assertRegex(table.item(1, 1).text().lower(), r"disponible|sin dato|—|–")
         self.assertFalse(table.alternatingRowColors())
+        self.assertIn("coberturas parciales", self.widget.status_label.text())
+        self.assertFalse(self.widget.status_label.isHidden())
         self.assertTrue("white" in table.styleSheet().lower()
                         or "#fff" in table.styleSheet().lower()
                         or table.palette().color(QPalette.Base).name() == "#ffffff")
 
     def test_precipitation_labels_explain_spatial_quantiles_and_p0_without_beta(self):
-        self.widget.restore(saved_state())
+        state = saved_state()
+        state["rainfall_results"]["5"]["statistics"] = dict(
+            median_mm=10, min_mm=8, max_mm=12, stddev_mm=1)
+        self.widget.restore(state)
         texts = [label.text() for label in self.widget.findChildren(QLabel)]
         texts += [self.widget.rainfall_table.horizontalHeaderItem(i).text()
                   for i in range(self.widget.rainfall_table.columnCount())]
         combined = " ".join(texts)
         self.assertNotRegex(combined, r"\bQ\s*\(|\bQ\s*=|m³/s|[Cc]audal")
         self.assertRegex(combined, r"Pd\(")
-        description = hydrology.describe_precipitation_estimates(saved_state())
+        description = hydrology.describe_precipitation_estimates(state)
         note = description["method_note"].lower()
         self.assertIn("espacial", note)
         self.assertIn("cuantiles", note)
@@ -310,6 +330,69 @@ class BasinHydrologyWidgetTests(unittest.TestCase):
         self.assertIn("areal", note)
         self.assertRegex(combined.lower(), r"β|beta")
         self.assertRegex(combined.lower(), r"no (?:se )?aplic|sin aplicar")
+        for extrapolate in (False, True):
+            self.widget.extrapolate_check.setChecked(extrapolate)
+            note = self.widget.method_label.text()
+            self.assertIn("Promedio espacial de los cuantiles puntuales", note)
+            self.assertIn("Los estadísticos de Pd(T)", note)
+            for removed in ("Interpolación lineal de Pd media", "No equivale",
+                            "P₀ se presenta", "Extrapolación permitida",
+                            "Sin extrapolación fuera"):
+                self.assertNotIn(removed, note)
+            report = hydrology.describe_precipitation_estimates(self.widget.snapshot())
+            self.assertIn("Interpolación lineal de Pd media", report["method_note"])
+            self.assertIn("No equivale", report["method_note"])
+            self.assertIn("P₀ se presenta", report["method_note"])
+            self.assertIn("Extrapolación permitida" if extrapolate else
+                          "Sin extrapolación fuera", report["method_note"])
+        self.assertIn("Máx: 12 mm · Mín: 8 mm", self.widget.forward_label.text())
+        self.assertIn("Desv. típ. espacial: 1 mm", self.widget.forward_label.text())
+        self.assertIn("Máximo: 12 mm · Mínimo: 8 mm", description["forward_text"])
+        self.assertIn("Desviación típica espacial: 1 mm", description["forward_text"])
+
+    def test_precipitation_button_and_six_rows_fit_narrow_width_without_clipping(self):
+        state = saved_state()
+        for item in state["rainfall_results"].values():
+            mean = item["mean_mm"]
+            item["statistics"] = dict(median_mm=mean, min_mm=max(0, mean-2),
+                                      max_mm=mean+2, stddev_mm=1)
+        self.widget.restore(state)
+        # A 520px dialog leaves 464px for this widget after its scroll/body margins.
+        for width in (464, 594):
+            with self.subTest(width=width):
+                self.widget.resize(width, 1700)
+                self.widget.show()
+                QTest.qWait(50)
+                self.assertEqual(self.widget.width(), width)
+                button = self.widget.rainfall_button
+                self.assertEqual(button.text(),
+                    "Calcular Precipitación diaria máxima anual MEDIA (mm)")
+                metrics = button.fontMetrics()
+                self.assertGreaterEqual(button.width(), metrics.horizontalAdvance(button.text())+4)
+                self.assertGreaterEqual(button.height(), metrics.height()+2)
+                self.assertLessEqual(button.geometry().right(), self.widget.rainfall_group.width()-1)
+                table = self.widget.rainfall_table
+                self.assertEqual(table.rowCount(), 6)
+                self.assertEqual([table.horizontalHeaderItem(i).text() for i in range(6)],
+                    ['Periodo T (años)', 'Pd (media)', 'Pd mín', 'Pd máx', 'Desv. típ.', 'Estado'])
+                metrics = table.fontMetrics()
+                minimum = max(metrics.height(), metrics.lineSpacing())+2
+                for row in range(6):
+                    self.assertEqual(table.rowHeight(row), minimum)
+                    for column in range(6):
+                        bounds = metrics.boundingRect(0, 0, table.columnWidth(column)-6, 1000,
+                            Qt.AlignCenter | Qt.TextWordWrap, table.item(row, column).text())
+                        self.assertLessEqual(bounds.height()+2, table.rowHeight(row))
+                        self.assertLessEqual(bounds.width(), table.columnWidth(column)-6)
+                self.assertEqual(table.height(), table.horizontalHeader().height()
+                    + sum(table.rowHeight(i) for i in range(6)) + 2*table.frameWidth())
+        # Under the usual smaller QGIS font, metric-sized rows are shorter than
+        # the former fixed 24px while still retaining the complete text height.
+        font = QFont(self.widget.rainfall_table.font())
+        font.setPointSize(9)
+        self.widget.rainfall_table.setFont(font)
+        self.widget._fit_rainfall_rows()
+        self.assertLess(self.widget.rainfall_table.rowHeight(0), 24)
 
     def test_log_period_interpolation_inverse_and_explicit_extrapolation(self):
         period = math.sqrt(10 * 25)

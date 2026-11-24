@@ -13,7 +13,7 @@ class ParameterSchemaTests(unittest.TestCase):
         self.assertIn('12,5 ha',interpret_value('cell_resolution',(500,250)))
         self.assertEqual(format_value('cell_resolution',(.25,.5)),'0,25mx0,5m')
         for invalid in (None,(0,500),(-500,500),(500,float('nan')),(500,)):
-            self.assertEqual(format_value('cell_resolution',invalid),'No disponible')
+            self.assertEqual(format_value('cell_resolution',invalid),'n.d.')
 
     def test_concentration_time_minutes_keep_integer_trailing_zeroes(self):
         self.assertIn('180 min',interpret_value('tc_h',3))
@@ -27,7 +27,7 @@ class ParameterSchemaTests(unittest.TestCase):
 
     def test_unavailable_values_are_not_interpreted_as_zero(self):
         for metric in METRICS:
-            self.assertEqual(format_value(metric.key,None),'No disponible')
+            self.assertEqual(format_value(metric.key,None),'n.d.')
             self.assertIn('No evaluable',interpret_value(metric.key,None))
         self.assertIn('sin desnivel',interpret_value('hypsometric',None,{'relief_m':0}))
 

@@ -1,6 +1,6 @@
 # HidroCAUMAX
 
-Complemento para **QGIS 3** que amplía **CAUMAX 3.0** con delimitación y análisis de cuencas, selección de MDT, morfología, curva hipsométrica, umbral de escorrentía P₀, precipitación diaria máxima Pd y consultas de cuantiles. Versión actual: **1.2.7**. Repositorio: **jmdiez2026/HidroCAUMAX**.
+Complemento para **QGIS 3** que amplía **CAUMAX 3.0** con delimitación y análisis de cuencas, selección de MDT, morfología, curva hipsométrica, umbral de escorrentía P₀, precipitación diaria máxima Pd y consultas de cuantiles. Versión actual: **1.2.8**. Repositorio: **jmdiez2026/HidroCAUMAX**.
 
 El diálogo integra los estadísticos de cuenca y recalcula los resultados al cambiar la resolución del MDT o el grado de suavizado. Conserva el punto original consultado y los caudales oficiales de CAUMAX: cambiar el MDT modifica la delimitación y los parámetros de la cuenca, sin inventar nuevos caudales de avenida.
 
@@ -13,36 +13,42 @@ El diálogo integra los estadísticos de cuenca y recalcula los resultados al ca
 - Conexión a **Pollinations Classic** para el botón **Análisis IA**, gratuito y sin credenciales. No se requiere una cuenta, una clave ni una biblioteca adicional. La disponibilidad y los límites temporales dependen de ese servicio externo.
 - En **Windows de 64 bits**, TauDEM 5.5.0, MPI y las bibliotecas de GDAL/PROJ están incluidos en el ZIP. No requieren una instalación separada. En Linux/macOS se utiliza una instalación externa de TauDEM y MPI.
 
-La versión 1.2.7 se distribuye en el canal **estable** (`experimental=False`). El código contiene controles de cobertura, NoData y errores; sus resultados deben revisarse con las fuentes y la resolución de cada proyecto.
+La versión 1.2.8 se distribuye en el canal **estable** (`experimental=False`). El código contiene controles de cobertura, NoData y errores; sus resultados deben revisarse con las fuentes y la resolución de cada proyecto.
 
 ## Instalación
 
-1. Descarga el archivo **HidroCAUMAX_v1_2_7.zip** de la versión publicada en GitHub Releases. El ZIP de código fuente que ofrece GitHub no es el instalable de QGIS.
+1. Descarga el archivo **HidroCAUMAX_v1_2_8.zip** de la versión publicada en GitHub Releases. El ZIP de código fuente que ofrece GitHub no es el instalable de QGIS.
 2. En QGIS abre **Complementos → Administrar e instalar complementos → Instalar a partir de ZIP** y selecciona el instalable, sin descomprimirlo.
 3. Si ya utilizas HidroCAUMAX, acepta sustituir el complemento anterior y vuelve a abrir su diálogo. La carpeta interna permanece como **caumax_consulta** para conservar la identidad de instalación.
 4. Activa CAUMAX 3.0, carga sus capas y realiza una consulta válida. Pulsa **Cuenca hidrográfica** para abrir las herramientas ampliadas.
 
 La [guía detallada del complemento](src/caumax_consulta/README.md) describe las funciones, los cálculos y las limitaciones de cada sección.
 
-## Cambios incluidos en 1.2.7
+## Cambios incluidos en 1.2.8
 
-- **Tabla con un máximo de dos decimales:** el redondeo afecta a la presentación de los valores y del informe, sin alterar los cálculos; el número de celdas sigue siendo entero.
-- **El ramal próximo al clic tiene prioridad:** el snap compara la distancia del punto a los segmentos D8 conectados antes de elegir el cierre. Un río situado a un lado no se selecciona por tener un curso más largo. El curso de máxima longitud se calcula después, dentro de la cuenca elegida. La corrección se aplica a la malla de 500 m y a los MDT mejorados.
-- **Confluencias ambiguas:** cuando dos ramales distintos están casi igual de cerca, se solicita una elección. La tolerancia geométrica es el 5 % del menor lado de la celda; es un criterio del complemento. No se utiliza el área ni la longitud total para desempatar entre ríos.
-- **Ajuste repetido con la cuenca abierta:** **Ajustar cierre…** mantiene el selector disponible tras aplicar y recalcular. Permite mover el cierre Norte, Sur, Este u Oeste, con pasos en celdas, y elegirlo directamente mediante **Elegir en el mapa**. Cada aplicación recalcula divisoria, curso y parámetros.
-- **Elección manual en el MDT disponible:** el límite de unos 707 m corresponde al snap automático de la malla original. Una selección manual expresa puede utilizar cualquier celda válida del ráster cargado, también aguas abajo. Se comprueban extensión, NoData, cota y D8, y se conserva la distancia al punto original.
-- **Borrar divisoria:** situado inmediatamente después de **Malla de celdas → Ajustar cierre…**, retira los trazados, marcadores y capas de resultado de esta cuenca, incluidas sus variantes de divisoria y MDT. Conserva las demás capas y los archivos de datos. Un nuevo ajuste puede volver a representar la cuenca.
-- **Generación capas resolución mejorada:** se retiran los selectores de motor y codificación; se utiliza TauDEM predeterminado y la exportación de direcciones CAUMAX/ESRI. Modelo de Elevaciones, Modelo de Dirección de Flujo D8 y Red de drenaje se presentan en tres columnas, con títulos centrados y botones compactos debajo.
-- **Trazabilidad y compatibilidad:** proyectos e informes distinguen el nuevo criterio local del algoritmo de 1.2.6 y de una elección manual. Las sesiones anteriores conservan sus resultados; realiza una consulta nueva o ajusta el cierre para recalcular.
+- **Cierre de la malla de 500 m:** se utiliza el centro de la celda que contiene el punto original, transformado al CRS del MDT. La cuenca se delimita con las direcciones D8 desde esa celda. En los MDT mejorados el punto original sigue siendo la referencia para determinar el cierre y para cualquier ajuste manual posterior.
+- **Refinamiento de 25 m y 5 m:** se contrasta la cuenca de cada cierre candidato con la superficie de la cuenca original, mediante la acumulación D8 de la malla fina. Se conserva la celda del clic cuando corresponde a esa cuenca; de lo contrario, se busca un cierre próximo sobre una única cadena de drenaje compatible. Una pequeña escorrentía lateral no se acepta como sustituto del río original. Las situaciones sin correspondencia inequívoca requieren selección manual.
+- **Validación de las fuentes:** se comprueban cobertura, NoData y dirección D8. Una incidencia debe resolverse con los datos adecuados o mediante una elección manual expresa; las fuentes y el punto original permanecen registrados.
+- **Ajuste manual repetido:** **Ajuste Punto de Cierre** mantiene el selector abierto tras aplicar y recalcular. Permite mover el cierre Norte, Sur, Este u Oeste, con pasos en celdas, y utilizar **Elegir en el mapa**. Puede elegirse cualquier celda válida de la extensión disponible; cada aplicación recalcula divisoria, curso y parámetros.
+- **Borrar Delineado para toda la sesión:** la fila queda **Malla de celdas → Ajuste Punto de Cierre → Borrar Delineado**. El borrado retira los trazados, marcadores y capas generadas de divisoria, curso, MDT y drenaje de todas las consultas de la sesión, incluidas las ya cerradas. Conserva las capas del usuario, las fuentes y los cálculos de las ventanas abiertas. Las tareas pendientes no vuelven a dibujar lo borrado; un ajuste o cambio de resolución explícito permite representarlo de nuevo.
+- **Nuevo punto rojo, mapa limpio:** cada nuevo clic de consulta retira los delineados anteriores y cierra sus ventanas antes de calcular el nuevo punto. Así no se mezclan un curso o una divisoria de una consulta anterior con el resultado nuevo.
+- **MDT y relieve desactivados al crearse:** todas las nuevas capas de terreno, incluida la primera de 500 m, se añaden desmarcadas. Puedes activarlas en el panel de capas; sus elecciones se conservan al reutilizarlas y al abrir un proyecto QGIS que ya las guarda.
+- **Tabla y suavizado compactos:** el tramo central se etiqueta Longitud curso principal 10%-85% (L10-85), la columna Parámetro ocupa menos ancho y los valores ausentes se muestran como n.d. Exportar shape se sitúa a la derecha de Grado; el resumen de suavizado utiliza coma decimal y altura ajustada al contenido.
+- **Cabecera compacta:** Análisis IA, con icono propio a la izquierda del texto, ocupa la esquina superior derecha fija. El MDT activo, punto original, caudal y datos del cierre se agrupan en un recuadro blanco de Resolución MDT, debajo de su mensaje de estado.
+- **Interpretaciones de IA en la tabla:** la columna Interpretación empieza vacía y su encabezado incluye el botón Análisis IA a la derecha. Al completar la consulta, aparecen las 19 interpretaciones del informe. Los cambios de los resultados vacían la columna; las respuestas de un análisis anterior no sustituyen las de la cuenca activa.
+- **Resumen de P₀:** las etiquetas se abrevian a Mín, Máx y Desv. típ, y se retira la línea de cobertura del panel. Los estadísticos y sus datos de cobertura se conservan para el cálculo, los proyectos y el informe.
+- **Panel de precipitación:** botón de cálculo en una sola línea, filas más compactas y etiquetas Mín, Máx y Desv. típ. espacial en la consulta, con los mismos valores calculados.
+- **Generación de capas:** Generar capas D8, Umbral inicio corriente, Automático y Mostrar red comparten una fila compacta. Se retira el botón Cancelar cálculo y los productos se titulan Modelo Digital Terreno, Direcciones de Drenaje y Red de drenaje, centrados sobre sus botones.
+- **Proyectos anteriores:** se restauran los resultados y cierres guardados, incluidos los ajustes automáticos históricos y las elecciones manuales. Una nueva consulta aplica el procedimiento vigente; abrir un archivo anterior no recalcula ni desplaza su cierre.
 
-Se conservan la comprobación de actualizaciones desde QGIS y el control de las capas activas de 1.2.6. El punto original y su caudal CAUMAX permanecen registrados: un cambio manual del cierre no recalcula por sí solo el caudal oficial del punto consultado.
+Se conservan la comprobación de actualizaciones desde QGIS, la tabla con un máximo de dos decimales y los controles compactos de **Generación capas resolución mejorada**, con TauDEM predeterminado y direcciones CAUMAX/ESRI. El punto original y su caudal CAUMAX permanecen registrados: modificar manualmente el cierre no recalcula el caudal oficial del punto consultado.
 
-El snap utiliza centros de celdas y conectividad D8. La geometría y la exactitud siguen limitadas por la resolución del MDT. No se exige alcanzar el 90 % del área de 500 m ni se utiliza un filtro fijo de 9 celdas/4 veces la mediana para decidir el cauce.
+La delimitación utiliza centros de celdas y conectividad D8. Su geometría y detalle dependen de la resolución y calidad del MDT. El curso principal se calcula dentro de la cuenca de la celda seleccionada.
 
 ### Interfaz y funciones conservadas de 1.2.5
 
 - **Interfaz compacta:** resoluciones `500mx500m`, `25mx25m`, `5mx5m`, `2mx2m` y `0,5mx0,5m`, en una fila cuando caben; MDT activo y punto original en la misma línea. Los paneles P₀ y precipitación diaria quedan separados.
-- **Análisis IA:** botón azul oscuro junto a Morfología de la Cuenca. Interpreta los 19 parámetros, P₀, Pd y los cuantiles disponibles, con un enfoque aplicado a la Norma 5.2-IC. Envía únicamente los valores necesarios, sin coordenadas, archivos ni rutas. Se ejecuta sin bloquear QGIS y permite cancelar, reintentar y copiar la respuesta.
+- **Análisis IA:** botón azul oscuro, con icono de IA a la izquierda del texto, en la esquina superior derecha fija del diálogo. Interpreta los 19 parámetros, P₀, Pd y los cuantiles disponibles, con un enfoque aplicado a la Norma 5.2-IC. Envía únicamente los valores necesarios, sin coordenadas, archivos ni rutas. Se ejecuta sin bloquear QGIS y permite cancelar, reintentar y copiar la respuesta.
 - **Gráficos:** HI con título único, casilla adimensional dentro del recuadro blanco, altitudes enteras y ejes adimensionales de 0 a 1 cada 0,10. Títulos, ejes y marcas de los cuantiles aumentan un 10 %. Se retiran textos redundantes y se compacta la consulta Q(T)/T(Q).
 - **Precipitación:** media Pd(T) y periodo obtenido T(Pd) destacados en negrita; aclaración «Desviación típica espacial», sin confundirla con variación entre años o error de la media.
 - **Correcciones de cálculo y guardado:** lectura de escala y desplazamiento GDAL en caudales, aceptación del cierre sobre el borde de una divisoria suavizada y preparación completa de las resoluciones antes de guardar el proyecto.
@@ -51,18 +57,18 @@ El [registro de la revisión](src/caumax_consulta/CHANGELOG.md) explica los camb
 
 ### Funciones conservadas de la 1.2.4
 
-- **Generar capas D8** utiliza el TauDEM real incluido en Windows de 64 bits. Los componentes se preparan automáticamente en una carpeta privada del usuario, sin descargas adicionales ni cambios en las bibliotecas de QGIS. La extracción y el cálculo se ejecutan en segundo plano y admiten cancelación. El motor predeterminado se utiliza directamente, sin selector de carpeta externa.
+- **Generar capas D8** utiliza el TauDEM real incluido en Windows de 64 bits. Los componentes se preparan automáticamente en una carpeta privada del usuario, sin descargas adicionales ni cambios en las bibliotecas de QGIS. La extracción y el cálculo se ejecutan en segundo plano; al cerrar la consulta se cancelan sus tareas pendientes. El motor predeterminado se utiliza directamente, sin selector de carpeta externa.
 - Curva hipsométrica: eje horizontal dimensional con marcas enteras y aproximadamente diez divisiones. Para cuencas menores de 1 km², el eje muestra m². Los valores internos mantienen su precisión.
 
-Esta versión ajusta la representación del MDT con una paleta natural de verdes salvia luminosos, ocres suaves y tonos de roca, y un sombreado más marcado para apreciar el relieve. El cambio es visual; conserva la ventana de referencia cercana al tamaño de la cuenca.
+La representación del MDT conserva una paleta natural de verdes salvia luminosos, ocres suaves y tonos de roca, y un sombreado más marcado para apreciar el relieve. El cambio es visual; conserva la ventana de referencia cercana al tamaño de la cuenca.
 
 - Paleta natural de **verdes salvia luminosos, ocres suaves y tonos de roca**, combinada con **sombreado con luz del noroeste más marcado**. Los ajustes afectan a la representación, sin modificar las cotas del MDT ni los cálculos hidrológicos.
-- Las divisorias original y suavizada permanecen como capas de QGIS al cerrar el diálogo. Se guardan en GeoPackage dentro del perfil, se actualizan al recalcular y se reutilizan al abrir la misma consulta.
+- Las divisorias original y suavizada permanecen como capas de QGIS al cerrar el diálogo, hasta pulsar **Borrar Delineado** o señalar un nuevo punto de consulta. Sus archivos GeoPackage se conservan dentro del perfil; la limpieza del mapa no borra los datos de disco.
 - La ventana de referencia es el rectángulo que encierra la cuenca, ampliado un **10 % por cada lado**. El rango de cotas se obtiene de su intersección con el encuadre visible. Al acercar el mapa, utiliza el área visible dentro de ese entorno.
 - Si el mapa queda completamente fuera del entorno de la cuenca, utiliza una ventana centrada en el lienzo y limitada al tamaño de ese entorno: **1,2 veces la anchura y la altura del rectángulo de la cuenca**. Una vista lejana no incorpora automáticamente las cotas de todo el MDT.
 - Los proyectos antiguos sin este contexto mantienen el ajuste al área visible hasta abrir la consulta o recalcular, que incorpora el entorno de referencia.
 
-Se conservan las cotas y la malla del archivo, el suavizado, las tablas, las consultas y las exportaciones. La visibilidad de los grupos de curso y divisoria sigue ahora la consulta activa; la del terreno y la de las capas oficiales permanecen bajo control del usuario. La interpolación cúbica spline suaviza exclusivamente la representación en pantalla antes de calcular las sombras. La luz del noroeste a 35° y el realce vertical visual ×3 destacan las laderas; no cambian las elevaciones ni las pendientes calculadas.
+Se conservan las cotas y la malla del archivo, el suavizado, las tablas, las consultas y las exportaciones. Dentro de una consulta, la visibilidad de los grupos de curso y divisoria sigue la resolución activa. Los nuevos grupos de terreno nacen desmarcados y conservan después la elección del usuario; las capas oficiales mantienen su visibilidad. Un nuevo punto de consulta retira los resultados generados anteriormente. La interpolación cúbica spline suaviza exclusivamente la representación en pantalla antes de calcular las sombras. La luz del noroeste a 35° y el realce vertical visual ×3 destacan las laderas; no cambian las elevaciones ni las pendientes calculadas.
 
 ## Estructura
 
@@ -80,14 +86,14 @@ No se incluyen capas de proyectos, sesiones guardadas, cachés, credenciales ni 
 El empaquetado utiliza **Python 3.10 o posterior** y su biblioteca estándar; no necesita iniciar QGIS:
 
 ```text
-python scripts/build_release.py --output dist --tag v1.2.7
+python scripts/build_release.py --output dist --tag v1.2.8
 ```
 
 Genera el ZIP instalable, sus sumas SHA-256 y el índice XML de distribución. Los archivos resultantes quedan fuera del control de versiones mediante `.gitignore`.
 
 ## Pruebas
 
-La validación de esta revisión incluye los casos de confluencia, conexión lateral, elección manual en todas las orientaciones, coherencia de las capas, guardado y actualizaciones. El resultado consolidado se registra en el [historial de la versión](src/caumax_consulta/CHANGELOG.md).
+La validación de esta revisión incluye ajustes manuales repetidos, limpieza global con callbacks tardíos, preservación de capas ajenas, visibilidad del MDT y recuperación de proyectos anteriores. El resultado consolidado se registra en el [historial de la versión](src/caumax_consulta/CHANGELOG.md).
 
 Para verificar el empaquetado, desde la raíz del repositorio:
 
@@ -103,7 +109,7 @@ python -m unittest test_flow_quantiles test_basin_hydrology_widget test_reports 
 
 En Windows puede usarse el lanzador `python-qgis-ltr.bat` o el equivalente de la instalación en lugar de `python`. No se fija una ruta de instalación personal. `tests/check_qgis_env.py` permite comprobar las versiones de QGIS y GDAL del intérprete seleccionado.
 
-La revisión añade regresiones para el cierre respecto a la sección original, la geometría suavizada, la lectura GDAL, el guardado completo por resolución, la distribución de controles y la conexión IA. Las pruebas de la red utilizan respuestas simuladas controladas; la conexión anónima también se comprueba por separado con datos sintéticos. Las capas originales del caso de la captura no se distribuyen con el repositorio.
+Se conservan las regresiones de geometría suavizada, lectura GDAL, guardado completo por resolución, distribución de controles y conexión IA. Las pruebas de red utilizan respuestas simuladas controladas; esta revisión no atribuye una nueva validación del servicio externo de IA. Las capas originales del caso de la captura no se distribuyen con el repositorio.
 
 ## Publicación y actualizaciones desde QGIS
 

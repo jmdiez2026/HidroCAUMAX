@@ -12,8 +12,9 @@ import math
 import re
 import time
 import unicodedata
+import weakref
 
-from qgis.PyQt.QtCore import QByteArray, QTimer, QUrl, Qt
+from qgis.PyQt.QtCore import QByteArray, QTimer, QUrl, Qt, pyqtSignal
 from qgis.PyQt.QtNetwork import QNetworkRequest
 from qgis.PyQt.QtWidgets import (
     QApplication, QDialog, QHBoxLayout, QLabel, QPushButton, QTextBrowser,
@@ -195,13 +196,16 @@ def build_context(analysis, query, smoothing_state=None):
                    'association_incoming_area_m2', 'association_other_inflow_area_m2',
                    'branch_distance_m', 'branch_runner_up_distance_m',
                    'branch_ambiguity_tolerance_m', 'branch_click_station_m',
-                   'branch_selected_station_m', 'branch_path_length_m')
+                   'branch_selected_station_m', 'branch_path_length_m',
+                   'reference_geometry_area_m2', 'reference_raster_area_m2',
+                   'intersection_area_m2', 'reference_coverage_fraction',
+                   'candidate_overlap_fraction', 'intersection_over_union')
         context['outlet_adjustment'] = {key: _number(snap.get(key)) for key in numeric if key in snap}
         mode = snap.get('selection_mode')
         if mode in ('nearest_main_channel', 'upstream', 'original',
                     'upstream_local', 'upstream_section', 'section_upstream', 'upstream_only',
                     'upstream_main_course', 'upstream_lateral_main_course', 'user_selected_cell',
-                    'upstream_nearest_branch', 'upstream_lateral_nearest_branch'):
+                    'upstream_nearest_branch', 'upstream_lateral_nearest_branch', 'reference_basin_overlap'):
             context['outlet_adjustment']['selection_mode'] = mode
         if snap.get('explicit_user_choice') is True:
             context['outlet_adjustment']['explicit_user_choice'] = True
@@ -305,8 +309,8 @@ def review_findings(result):
     return findings
 
 
-def render_structured_analysis(content, context):
-    """Require complete AI interpretations; numeric tables come only from QGIS."""
+def _structured_analysis(content, context):
+    """Validate once and build the report and its reviewed parameter texts."""
     sections = ('overview', 'p0', 'daily_precipitation', 'caumax_flows',
                 'decisions_52ic', 'priority_checks')
     try:
@@ -337,6 +341,10 @@ def render_structured_analysis(content, context):
         if key not in findings:return text
         return REVIEW_PREFIX+' '+' '.join(findings[key])+'\n\n**Texto recibido de IA:**\n\n'+text
 
+    # These same reviewed strings feed both consumers. Keep Markdown table
+    # escaping local to the report so a plain-text UI receives literal pipes.
+    parameter_texts = {metric.key: reviewed(metric.key, interpretations[metric.key]).replace('\n', ' ').strip()
+                       for metric in METRICS}
     area=next(record['value'] for record in context['parameters'] if record['key']=='area_km2')
     area_check=('No hay área válida para aplicar el criterio de selección del apartado 2.1.' if area is None else
                 'Para A ≥ 50 km², el apartado 2.1 exige aforos representativos o un método hidrológico adecuado y contrastado.' if area>=50 else
@@ -357,7 +365,7 @@ def render_structured_analysis(content, context):
         record = by_key[metric.key]
         output.append('| '+ ' | '.join((cell(metric.label),
             cell(format_value(metric.key,record['value'])), cell(metric.unit or '—'),
-            cell(reviewed(metric.key,interpretations[metric.key])))) + ' |')
+            cell(parameter_texts[metric.key]))) + ' |')
 
     output += ['', '## Umbral de escorrentía inicial, sin β']
     p0 = context.get('p0_initial_without_beta')
@@ -416,7 +424,12 @@ def render_structured_analysis(content, context):
     output += ['', reviewed('caumax_flows',result['caumax_flows']), '## Decisiones para la Norma 5.2-IC',
                reviewed('decisions_52ic',result['decisions_52ic']), '## Comprobaciones prioritarias',
                reviewed('priority_checks',result['priority_checks']), '## Referencia', '[Norma 5.2-IC oficial]('+NORM_URL+')']
-    return '\n'.join(output)
+    return '\n'.join(output), parameter_texts
+
+
+def render_structured_analysis(content, context):
+    """Require complete AI interpretations; numeric tables come only from QGIS."""
+    return _structured_analysis(content, context)[0]
 
 
 def network_request():
@@ -427,7 +440,7 @@ def network_request():
     request = QNetworkRequest(url)
     request.setHeader(QNetworkRequest.ContentTypeHeader, 'application/json')
     request.setRawHeader(b'Accept', b'application/json')
-    request.setRawHeader(b'User-Agent', b'HidroCAUMAX/1.2.7')
+    request.setRawHeader(b'User-Agent', b'HidroCAUMAX/1.2.8')
     request.setRawHeader(b'Cache-Control', b'no-store')
     request.setAttribute(QNetworkRequest.CacheLoadControlAttribute, QNetworkRequest.AlwaysNetwork)
     request.setAttribute(QNetworkRequest.CacheSaveControlAttribute, False)
@@ -444,7 +457,21 @@ class _ResultBrowser(QTextBrowser):
         return None
 
 
+def _dialog_destroyed(reference):
+    """Forget a Qt-owned dialog without touching its destroyed C++ objects."""
+    global _ACTIVE_DIALOG
+    dialog = reference()
+    if dialog is None:
+        return
+    dialog._closed = True
+    dialog.reply = None
+    if _ACTIVE_DIALOG is dialog:
+        _ACTIVE_DIALOG = None
+
+
 class AnalysisDialog(QDialog):
+    interpretations_ready = pyqtSignal(dict)
+
     def __init__(self, parent, context):
         super().__init__(parent)
         self.setWindowTitle('Análisis IA · HidroCAUMAX · Norma 5.2-IC')
@@ -456,8 +483,10 @@ class AnalysisDialog(QDialog):
         self.reply = None
         self.raw = bytearray()
         self.result_text = ''
+        self.interpretations = {}
         self._error = ''
         self._closed = False
+        self.destroyed.connect(lambda _=None, reference=weakref.ref(self): _dialog_destroyed(reference))
         self.timer = QTimer(self)
         self.timer.setSingleShot(True)
         self.timer.timeout.connect(self._timeout)
@@ -507,9 +536,11 @@ class AnalysisDialog(QDialog):
         if self.key in _CACHE:
             self.cooldown.stop()
             _CACHE.move_to_end(self.key)
-            self._display(_CACHE[self.key])
+            rendered, interpretations = _CACHE[self.key]
+            self._display(rendered)
             self.status.setText('Análisis recuperado de esta sesión para estos mismos resultados.')
             self.retry_button.setEnabled(False)
+            self._publish_interpretations(interpretations)
             return
         if time.monotonic() < _NEXT_REQUEST_AT:
             self.cooldown.start()
@@ -519,6 +550,7 @@ class AnalysisDialog(QDialog):
         self.cooldown.stop()
         self.raw.clear()
         self.result_text = ''
+        self.interpretations = {}
         self.copy_button.setEnabled(False)
         self.browser.setPlainText('Preparando la interpretación de los resultados de la cuenca…')
         self.retry_button.setEnabled(False)
@@ -591,20 +623,22 @@ class AnalysisDialog(QDialog):
                 content, truncated = decode_response(bytes(self.raw))
                 if truncated:
                     raise ValueError('Respuesta incompleta: el servicio alcanzó su límite de texto. Puedes reintentar.')
-                rendered = render_structured_analysis(content,self.context)
+                rendered, interpretations = _structured_analysis(content, self.context)
                 self._display(rendered)
                 if REVIEW_PREFIX in rendered:
                     self.status.setText('Interpretación recibida con apartados que requieren revisión. '
                                         'Las contradicciones detectadas se han marcado junto al texto de IA.')
                     self.cooldown.start()
                     self._refresh_retry()
+                    self._publish_interpretations(interpretations)
                     return
-                _CACHE[self.key] = rendered
+                _CACHE[self.key] = (rendered, dict(interpretations))
                 while len(_CACHE) > 8:
                     _CACHE.popitem(last=False)
                 self.status.setText('Interpretación completada · Pollinations Classic · acceso anónimo.')
                 self.cooldown.stop()
                 self.retry_button.setEnabled(False)
+                self._publish_interpretations(interpretations)
                 return
             except ValueError as exception:
                 error = str(exception)
@@ -616,6 +650,7 @@ class AnalysisDialog(QDialog):
 
     def _show_error(self, error):
         self.result_text = ''
+        self.interpretations = {}
         self.copy_button.setEnabled(False)
         self.status.setText(error)
         self.browser.setPlainText('No se ha generado el análisis de IA. '+error)
@@ -627,6 +662,14 @@ class AnalysisDialog(QDialog):
         # Escape HTML before Markdown parsing. Remote resources remain disabled.
         self.browser.setMarkdown(html.escape(text, quote=False))
         self.copy_button.setEnabled(True)
+
+    def _publish_interpretations(self, interpretations):
+        if self._closed:
+            return
+        self.interpretations = dict(interpretations)
+        # A consumer may edit its dictionary or close the dialog. Publish last
+        # and never expose the cache's or the dialog's mutable dictionary.
+        self.interpretations_ready.emit(dict(interpretations))
 
     def _refresh_retry(self):
         remaining = max(0, math.ceil(_NEXT_REQUEST_AT-time.monotonic()))
@@ -657,13 +700,15 @@ class AnalysisDialog(QDialog):
         super().closeEvent(event)
 
 
-def show_analysis(parent, analysis, query, smoothing_state=None):
+def show_analysis(parent, analysis, query, smoothing_state=None, *, on_interpretations=None):
     """Open an independent snapshot; never hold live raster or geometry objects."""
     global _ACTIVE_DIALOG
     context = build_context(analysis, query, smoothing_state)
     if _ACTIVE_DIALOG is not None:
         _ACTIVE_DIALOG.close()
     dialog = AnalysisDialog(parent, context)
+    if on_interpretations is not None:
+        dialog.interpretations_ready.connect(on_interpretations)
     _ACTIVE_DIALOG = dialog
     dialog.show()
     dialog.raise_()

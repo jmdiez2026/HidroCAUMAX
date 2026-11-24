@@ -64,8 +64,9 @@ class SurfaceRecalculationTests(unittest.TestCase):
         button = dialog.export_button
         self.assertLess(button.height(), 30)
         self.assertLess(button.width(), 160)
-        layout = button.parentWidget().layout()
-        self.assertTrue(layout.itemAt(layout.indexOf(button)).alignment() & Qt.AlignLeft)
+        degree = dialog.smoothing_degree
+        self.assertGreater(button.geometry().left(), degree.geometry().right())
+        self.assertLessEqual(abs(button.geometry().center().y()-degree.geometry().center().y()), 1)
 
     def test_fractional_dem_area_and_weights_are_exact(self):
         f = self.fixture

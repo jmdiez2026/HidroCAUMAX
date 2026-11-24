@@ -15,7 +15,8 @@ import struct
 import tempfile
 import zlib
 
-from osgeo import ogr, osr
+import numpy as np
+from osgeo import gdal, ogr, osr
 from qgis.core import QgsCoordinateReferenceSystem
 
 from .basin import BasinResult
@@ -34,6 +35,10 @@ MAX_WKB_BYTES = 8 * 1024 * 1024
 MAX_PNG_BYTES = 5 * 1024 * 1024
 MAX_GEOMETRY_POINTS = 500_000
 MAX_METADATA_ITEMS = 50_000
+# Same maximum as the fine-resolution engine; never allocate this many
+# pixels together when verifying a portable refinement proof.
+MAX_REFERENCE_CELLS = 60_000_000
+REFERENCE_BLOCK_CELLS = 1_048_576
 _VALUE_KEYS = {item.key for item in METRICS} | {
     'zmean_m', 'basin_length_km', 'main_slope_10_85',
     'tc_path_length_km', 'tc_path_slope',
@@ -121,7 +126,7 @@ def _point_close(actual, expected, label):
         _fail(label, 'coordenadas incompatibles con el punto guardado')
 
 
-def _outlet_snap(diagnostics, basin, selected_x, selected_y, boundary):
+def _outlet_snap(diagnostics, basin, selected_x, selected_y, boundary, budget=None):
     """A moved outlet is accepted only with a complete, coherent audit record."""
     snap = diagnostics.get('outlet_snap')
     tolerance = max(basin.cell_width, basin.cell_height) * 1e-7
@@ -157,10 +162,33 @@ def _outlet_snap(diagnostics, basin, selected_x, selected_y, boundary):
                 'branch_click_station_m', 'branch_selected_station_m',
                 'branch_path_length_m', 'branch_path_cells', 'branch_distance_m',
                 'branch_runner_up_distance_m', 'branch_ambiguity_tolerance_m'}
-    _keys(snap, required, 'ajuste del cierre', optional)
+    refinement = isinstance(snap, dict) and snap.get('method') == 'reference_basin_d8'
+    if refinement:
+        # The spatial proof has its own schema. Its fields must not become
+        # optional, unchecked additions to the older snapping methods.
+        extra = {'selection_mode', 'original_row', 'original_col', 'snapped_row',
+                 'snapped_col', 'candidate_count', 'original_cell_upstream_area_m2',
+                 'candidate_touches_boundary', 'tie_break', 'policy',
+                 'area_change_vs_reference_pct', 'area_change_vs_original_cell_m2',
+                 'reference_geometry_wkb_hex', 'reference_crs_wkt',
+                 'reference_geometry_area_m2', 'reference_raster_area_m2',
+                 'reference_grid_bounds', 'reference_grid_size',
+                 'intersection_area_m2', 'reference_coverage_fraction',
+                 'candidate_overlap_fraction', 'intersection_over_union',
+                 'minimum_reference_coverage', 'minimum_candidate_overlap',
+                 'reference_policy_version', 'projection_kind',
+                 'reference_course_wkb_hex', 'branch_distance_m',
+                 'branch_runner_up_distance_m', 'branch_ambiguity_tolerance_m'}
+        refinement_optional = {'reference',
+                               'section_source_cell', 'section_target_cell',
+                               'section_projection_x', 'section_projection_y',
+                               'section_offset_m', 'coarse_upstream_distance_m'}
+        _keys(snap, required | extra, 'ajuste por cuenca de referencia', refinement_optional)
+    else:
+        _keys(snap, required, 'ajuste del cierre', optional)
     upstream = snap['method'] == 'upstream_section_d8'
     manual = snap['method'] == 'manual_cell_d8'
-    if snap['method'] not in ('nearest_main_channel_d8', 'upstream_section_d8', 'manual_cell_d8') or snap['status'] not in ('snapped', 'unchanged'):
+    if snap['method'] not in ('nearest_main_channel_d8', 'upstream_section_d8', 'manual_cell_d8', 'reference_basin_d8') or snap['status'] not in ('snapped', 'unchanged'):
         _fail('ajuste del cierre', 'método o estado desconocido')
     for key in required - {'method', 'status'}:
         _float(snap[key], 'ajuste ' + key)
@@ -181,7 +209,7 @@ def _outlet_snap(diagnostics, basin, selected_x, selected_y, boundary):
     minimum = _float(snap['minimum_upstream_area_m2'], 'área mínima de cauce', positive=True)
     candidate = _float(snap['candidate_upstream_area_m2'], 'área acumulada del cierre', positive=True)
     _close(candidate, basin.area_m2, 'área acumulada de la cuenca ajustada')
-    if (not upstream and not manual and minimum > reference) or candidate + max(1e-5, candidate * 1e-7) < minimum:
+    if (not upstream and not manual and not refinement and minimum > reference) or candidate + max(1e-5, candidate * 1e-7) < minimum:
         _fail('ajuste del cierre', 'áreas de selección incompatibles')
     if 'minimum_fraction' in snap:
         fraction = _float(snap['minimum_fraction'], 'fracción mínima de cauce', positive=True)
@@ -218,7 +246,8 @@ def _outlet_snap(diagnostics, basin, selected_x, selected_y, boundary):
     if 'candidate_touches_boundary' in snap:
         if _bool(snap['candidate_touches_boundary'], 'borde del cierre ajustado') != basin.touches_boundary:
             _fail('ajuste del cierre', 'el indicador de borde no corresponde a la cuenca')
-    expected_tie = ('nearest_branch_geometry' if snap.get('selection_mode') in
+    expected_tie = ('nearest_reference_section' if refinement else
+                    'nearest_branch_geometry' if snap.get('selection_mode') in
                     ('upstream_nearest_branch', 'upstream_lateral_nearest_branch') else
                     'main_course_d8_order' if snap.get('selection_mode') in
                     ('upstream_main_course', 'upstream_lateral_main_course') else 'row_col')
@@ -231,7 +260,258 @@ def _outlet_snap(diagnostics, basin, selected_x, selected_y, boundary):
         _upstream_section_record(snap, basin, selected_x, selected_y)
     elif manual:
         _manual_outlet_record(snap, basin, selected_x, selected_y)
+    elif refinement:
+        _reference_basin_record(snap, basin, selected_x, selected_y,
+                                [0] if budget is None else budget)
     return True
+
+
+def _reference_wkb(value, label, allowed_types, budget, allow_empty=False):
+    text = _text(value, label, MAX_WKB_BYTES * 2)
+    try:
+        raw = bytes.fromhex(text)
+    except ValueError:
+        _fail(label, 'codificación hexadecimal no válida')
+    if not raw or len(raw) * 2 != len(text):
+        _fail(label, 'WKB vacío o codificación hexadecimal no canónica')
+    return _wkb(raw, label, allowed_types, budget, allow_empty=allow_empty)
+
+
+def _reference_mask_counts(reference, candidate, bounds, size, crs_wkt):
+    """Rebuild the two centre-rasterized masks without opening source rasters.
+
+    Strips contain at most REFERENCE_BLOCK_CELLS pixels even for a highly
+    elongated grid. Total work is bounded by MAX_REFERENCE_CELLS, and the
+    native geometries, rather than a smoothed display contour, define C/I.
+    """
+    cols, rows = size
+    xmin, ymin, xmax, ymax = bounds
+    width, height = (xmax - xmin) / cols, (ymax - ymin) / rows
+    envelopes = (reference.GetEnvelope(), candidate.GetEnvelope())
+    west, east = min(e[0] for e in envelopes), max(e[1] for e in envelopes)
+    south, north = min(e[2] for e in envelopes), max(e[3] for e in envelopes)
+    first_col = max(0, math.floor((west - xmin) / width) - 1)
+    last_col = min(cols, math.ceil((east - xmin) / width) + 1)
+    first_row = max(0, math.floor((ymax - north) / height) - 1)
+    last_row = min(rows, math.ceil((ymax - south) / height) + 1)
+    block_cols = min(last_col - first_col, REFERENCE_BLOCK_CELLS)
+    block_rows = max(1, REFERENCE_BLOCK_CELLS // block_cols)
+    srs = osr.SpatialReference()
+    srs.ImportFromWkt(crs_wkt)
+    source = ogr.GetDriverByName('Memory').CreateDataSource('')
+    layers = []
+    for name, geometry in (('reference', reference), ('candidate', candidate)):
+        layer = source.CreateLayer(name, srs=srs, geom_type=ogr.wkbUnknown)
+        feature = ogr.Feature(layer.GetLayerDefn())
+        feature.SetGeometry(geometry)
+        if layer.CreateFeature(feature) != 0:
+            _fail('referencia espacial', 'no se puede reconstruir la geometría')
+        feature = None
+        layers.append(layer)
+    totals = [0, 0, 0]
+    raster = None
+    try:
+        for row in range(first_row, last_row, block_rows):
+            for col in range(first_col, last_col, block_cols):
+                nx, ny = min(block_cols, last_col - col), min(block_rows, last_row - row)
+                raster = gdal.GetDriverByName('MEM').Create('', nx, ny, 2, gdal.GDT_Byte)
+                if raster is None:
+                    _fail('referencia espacial', 'no se puede reservar un bloque de comprobación')
+                raster.SetGeoTransform((xmin + col * width, width, 0,
+                                        ymax - row * height, 0, -height))
+                raster.SetProjection(crs_wkt)
+                for band, layer in enumerate(layers, 1):
+                    layer.ResetReading()
+                    if gdal.RasterizeLayer(raster, [band], layer, burn_values=[1],
+                                           options=['ALL_TOUCHED=FALSE']) != 0:
+                        _fail('referencia espacial', 'no se puede rasterizar la comprobación')
+                ref = raster.GetRasterBand(1).ReadAsArray()
+                chosen = raster.GetRasterBand(2).ReadAsArray()
+                totals[0] += int(np.count_nonzero(ref))
+                totals[1] += int(np.count_nonzero(chosen))
+                totals[2] += int(np.count_nonzero(ref & chosen))
+                ref = chosen = raster = None
+    except RuntimeError as error:
+        _fail('referencia espacial', str(error))
+    finally:
+        raster = layers = source = None
+    return tuple(totals)
+
+
+def _reference_basin_record(snap, basin, selected_x, selected_y, budget):
+    """Validate a self-contained snapshot of the coarse reference and its grid."""
+    from .grid import cell_at_point
+
+    if (snap['selection_mode'] != 'reference_basin_overlap'
+            or _int(snap['reference_policy_version'], 'versión de referencia', 1, 1) != 1):
+        _fail('referencia espacial', 'método o versión desconocidos')
+    for key in ('minimum_reference_coverage', 'minimum_candidate_overlap'):
+        if _float(snap[key], 'referencia ' + key) != 0.5:
+            _fail('referencia espacial', 'la política requiere mayoría espacial estricta')
+    bounds, size = snap['reference_grid_bounds'], snap['reference_grid_size']
+    if (not isinstance(bounds, list) or len(bounds) != 4
+            or not isinstance(size, list) or len(size) != 2):
+        _fail('malla de referencia', 'extensión o dimensiones incompletas')
+    bounds = [_float(value, 'extensión de referencia') for value in bounds]
+    cols, rows = (_int(value, 'dimensión de referencia', 1, MAX_REFERENCE_CELLS) for value in size)
+    if (cols * rows > MAX_REFERENCE_CELLS
+            or bounds[0] >= bounds[2] or bounds[1] >= bounds[3]):
+        _fail('malla de referencia', 'extensión inválida o demasiadas celdas')
+    _point_close(bounds[2] - bounds[0], cols * basin.cell_width, 'ancho de malla de referencia')
+    _point_close(bounds[3] - bounds[1], rows * basin.cell_height, 'alto de malla de referencia')
+    _int(snap['candidate_count'], 'candidatos de refinamiento', 1, cols * rows)
+    try:
+        original = cell_at_point(selected_x, selected_y, *bounds, cols, rows)
+        chosen = cell_at_point(basin.outlet_x, basin.outlet_y, *bounds, cols, rows)
+    except ValueError:
+        _fail('malla de referencia', 'el clic o el cierre queda fuera del MDT')
+    if ((original.row, original.col) != (snap['original_row'], snap['original_col'])
+            or (chosen.row, chosen.col) != (snap['snapped_row'], snap['snapped_col'])):
+        _fail('malla de referencia', 'los índices no corresponden a la malla declarada')
+    _point_close(chosen.x, basin.outlet_x, 'centro de referencia X')
+    _point_close(chosen.y, basin.outlet_y, 'centro de referencia Y')
+    reference_crs = _crs(snap['reference_crs_wkt'], 'CRS de referencia espacial', metre_projection=True)
+    expected_crs = QgsCoordinateReferenceSystem.fromWkt(basin.crs_wkt)
+    if reference_crs != expected_crs:
+        source, expected = osr.SpatialReference(), osr.SpatialReference()
+        source.ImportFromWkt(snap['reference_crs_wkt'])
+        expected.ImportFromWkt(basin.crs_wkt)
+        if not source.IsSame(expected):
+            _fail('referencia espacial', 'la geometría no usa el CRS de la cuenca')
+    reference = _reference_wkb(snap['reference_geometry_wkb_hex'], 'divisoria de referencia', {3, 6}, budget)
+    candidate = ogr.CreateGeometryFromWkb(basin.geometry_wkb)
+    _close(_float(snap['reference_geometry_area_m2'], 'área geométrica de referencia', positive=True),
+           reference.GetArea(), 'área geométrica de referencia')
+    for geometry in (reference, candidate):
+        envelope = geometry.GetEnvelope()
+        if (envelope[0] < bounds[0] - 1e-5 or envelope[1] > bounds[2] + 1e-5
+                or envelope[2] < bounds[1] - 1e-5 or envelope[3] > bounds[3] + 1e-5):
+            _fail('referencia espacial', 'la divisoria rebasa la malla declarada')
+    cell_area = basin.cell_width * basin.cell_height
+    _close(snap['minimum_upstream_area_m2'], cell_area, 'celda mínima de refinamiento')
+    counts = []
+    for key in ('reference_raster_area_m2', 'candidate_upstream_area_m2', 'intersection_area_m2'):
+        area = _float(snap[key], 'referencia ' + key, positive=True)
+        count = area / cell_area
+        if not math.isclose(count, round(count), rel_tol=0, abs_tol=1e-6):
+            _fail('referencia espacial', 'las áreas discretas deben corresponder a celdas completas')
+        counts.append(int(round(count)))
+    ref_count, candidate_count, intersection_count = counts
+    if (not 0 < intersection_count <= min(ref_count, candidate_count)
+            or max(ref_count, candidate_count) > cols * rows or candidate_count != basin.cell_count):
+        _fail('referencia espacial', 'recuentos de celdas incompatibles')
+    expected = (intersection_count / ref_count, intersection_count / candidate_count,
+                intersection_count / (ref_count + candidate_count - intersection_count))
+    for key, fraction in zip(('reference_coverage_fraction', 'candidate_overlap_fraction',
+                              'intersection_over_union'), expected):
+        value = _float(snap[key], 'referencia ' + key, positive=True)
+        if value > 1 or not math.isclose(value, fraction, rel_tol=1e-9, abs_tol=1e-12):
+            _fail('referencia espacial', 'fracción de coincidencia incompatible con las áreas')
+    if expected[0] <= 0.5 or expected[1] <= 0.5:
+        _fail('referencia espacial', 'no existe mayoría espacial en ambas cuencas')
+    _close(snap['area_change_vs_original_cell_m2'],
+           snap['candidate_upstream_area_m2'] - snap['original_cell_upstream_area_m2'],
+           'variación de área tras refinamiento')
+    _close(snap['area_change_vs_reference_pct'],
+           100 * (snap['candidate_upstream_area_m2'] / snap['reference_area_m2'] - 1),
+           'variación de área de referencia histórica')
+    _reference_section_record(snap, basin, reference, bounds, (cols, rows), budget)
+    # Recompute the proof, not merely its reported ratios. A valid older
+    # reference snapshot remains valid after a later manual 500m choice.
+    actual = _reference_mask_counts(reference, candidate, bounds, (cols, rows), snap['reference_crs_wkt'])
+    if actual != tuple(counts):
+        _fail('referencia espacial', 'la coincidencia declarada no corresponde a las geometrías rasterizadas')
+
+
+def _reference_section_record(snap, basin, reference, bounds, size, budget):
+    """Check a local D8 segment and its orthogonal/upstream section proof."""
+    from .basin import DIRECTIONS
+
+    course = None
+    raw = snap['reference_course_wkb_hex']
+    if raw != '':
+        course = _reference_wkb(raw, 'curso de referencia', {2}, budget)
+        point = ogr.Geometry(ogr.wkbPoint)
+        point.AddPoint_2D(*course.GetPoint_2D(0))
+        if not reference.Intersects(point):
+            _fail('sección de referencia', 'el inicio del curso queda fuera de su cuenca')
+    tolerance = max(1e-6, 0.05 * min(basin.cell_width, basin.cell_height))
+    _point_close(snap['branch_ambiguity_tolerance_m'], tolerance, 'tolerancia de sección de referencia')
+    distance = _float(snap['branch_distance_m'], 'distancia lateral de referencia')
+    if distance < 0:
+        _fail('sección de referencia', 'distancia lateral negativa')
+    runner = _float(snap['branch_runner_up_distance_m'], 'segunda distancia de referencia', nullable=True)
+    if runner is not None and (runner - distance <= tolerance or snap['candidate_count'] < 2):
+        _fail('sección de referencia', 'las secciones guardadas son ambiguas')
+    fields = {'section_source_cell', 'section_target_cell', 'section_projection_x',
+              'section_projection_y', 'section_offset_m', 'coarse_upstream_distance_m'}
+    if snap['projection_kind'] == 'containing_cell':
+        if snap['status'] != 'unchanged' or fields & set(snap) or runner is not None:
+            _fail('sección de referencia', 'la celda original no corresponde a este ajuste')
+        _close(distance, snap['distance_m'], 'distancia a la celda original de referencia')
+        return
+    if (snap['projection_kind'] != 'orthogonal' or snap['status'] != 'snapped'
+            or not fields.issubset(snap) or course is None):
+        _fail('sección de referencia', 'falta una proyección del cierre movido')
+    cols, rows = size
+    offsets = {code: (-dy, -dx) for dx, dy, code in DIRECTIONS}
+    points = []
+    for key in ('section_source_cell', 'section_target_cell'):
+        cell = snap[key]
+        if not isinstance(cell, list) or len(cell) != 3:
+            _fail('sección de referencia', 'celda D8 incompleta')
+        row = _int(cell[0], 'fila de sección', 0, rows - 1)
+        col = _int(cell[1], 'columna de sección', 0, cols - 1)
+        if type(cell[2]) is not int or cell[2] not in set(offsets) | {0}:
+            _fail('sección de referencia', 'dirección D8 desconocida')
+        points.append((bounds[0] + (col + .5) * basin.cell_width,
+                       bounds[3] - (row + .5) * basin.cell_height))
+    source, target = snap['section_source_cell'], snap['section_target_cell']
+    if source[2] not in offsets:
+        _fail('sección de referencia', 'el tramo no tiene salida D8')
+    dy, dx = offsets[source[2]]
+    if (source[0] + dy, source[1] + dx) != tuple(target[:2]):
+        _fail('sección de referencia', 'las celdas no están conectadas por la dirección D8')
+    if target[2] in offsets:
+        dy, dx = offsets[target[2]]
+        if (target[0] + dy, target[1] + dx) == tuple(source[:2]):
+            _fail('sección de referencia', 'el tramo contiene un ciclo D8')
+    (sx, sy), (tx, ty) = points
+    vx, vy = sx - tx, sy - ty
+    length = math.hypot(vx, vy)
+    x, y = snap['original_x'], snap['original_y']
+    epsilon = max(basin.cell_width, basin.cell_height) * 1e-7
+    fraction = ((x - tx) * vx + (y - ty) * vy) / length ** 2
+    if not -epsilon / length <= fraction <= 1 + epsilon / length:
+        _fail('sección de referencia', 'la proyección cae fuera del segmento D8')
+    fraction = min(1., max(0., fraction))
+    chosen = target if fraction * length <= epsilon else source
+    if tuple(chosen[:2]) != (snap['snapped_row'], snap['snapped_col']):
+        _fail('sección de referencia', 'el cierre no es el primer centro aguas arriba')
+    px, py = tx + fraction * vx, ty + fraction * vy
+    _point_close(snap['section_projection_x'], px, 'proyección de referencia X')
+    _point_close(snap['section_projection_y'], py, 'proyección de referencia Y')
+    _close(distance, math.hypot(x - px, y - py), 'distancia lateral a la sección')
+    offset = -((basin.outlet_x - x) * vx + (basin.outlet_y - y) * vy) / length
+    _close(snap['section_offset_m'], offset, 'posición respecto a la sección')
+    if offset > epsilon or any(math.hypot(cx - x, cy - y) > snap['search_radius_m'] + epsilon
+                               for cx, cy in points):
+        _fail('sección de referencia', 'tramo aguas abajo o fuera del radio permitido')
+    start = course.GetPoint_2D(0)
+    axis = None
+    for index in range(1, course.GetPointCount()):
+        end = course.GetPoint_2D(index)
+        dx, dy = end[0] - start[0], end[1] - start[1]
+        norm = math.hypot(dx, dy)
+        if norm > 0:
+            axis = dx / norm, dy / norm
+            break
+    if axis is None:
+        _fail('sección de referencia', 'el curso original no define una dirección')
+    upstream = (basin.outlet_x - x) * axis[0] + (basin.outlet_y - y) * axis[1]
+    _close(snap['coarse_upstream_distance_m'], upstream, 'posición respecto al curso original')
+    if upstream < -epsilon:
+        _fail('sección de referencia', 'el cierre queda aguas abajo del curso original')
 
 
 def _manual_outlet_record(snap, basin, selected_x, selected_y):
@@ -768,20 +1048,32 @@ def _png(raw):
     _fail('captura GIS', 'falta el final PNG')
 
 
-def _metadata(value, encode=False, depth=0, budget=None):
+def _reference_text_limit(parent, key):
+    # Large WKB strings are permitted only in the explicit spatial-proof
+    # record. Ordinary diagnostics/provider strings keep their original cap.
+    if (parent.get('method') == 'reference_basin_d8'
+            and parent.get('selection_mode') == 'reference_basin_overlap'):
+        if key in ('reference_geometry_wkb_hex', 'reference_course_wkb_hex'):
+            return MAX_WKB_BYTES * 2
+        if key == 'reference_crs_wkt':
+            return 100_000
+    return 16_384
+
+
+def _metadata(value, encode=False, depth=0, budget=None, text_limit=16_384):
     """Bounded JSON metadata; preserve tuple/list distinctions declaratively."""
     budget = [0] if budget is None else budget
     budget[0] += 1
     if depth > 12 or budget[0] > MAX_METADATA_ITEMS:
         _fail('metadatos', 'demasiados elementos o niveles')
-    recurse = lambda item: _metadata(item, encode, depth + 1, budget)
+    recurse = lambda item, limit=16_384: _metadata(item, encode, depth + 1, budget, limit)
     if value is None or type(value) is bool:
         return value
     if isinstance(value, (int, float)):
         _float(value, 'metadatos numéricos')
         return value
     if isinstance(value, str):
-        return _text(value, 'metadatos')
+        return _text(value, 'metadatos', text_limit)
     if encode and isinstance(value, tuple):
         return {'__tuple__': [recurse(item) for item in value]}
     if isinstance(value, list):
@@ -793,7 +1085,8 @@ def _metadata(value, encode=False, depth=0, budget=None):
             return tuple(recurse(item) for item in value['__tuple__'])
         if '__tuple__' in value:
             _fail('metadatos', 'clave reservada')
-        return {_text(key, 'clave de metadatos', 128): recurse(item) for key, item in value.items()}
+        return {_text(key, 'clave de metadatos', 128): recurse(item, _reference_text_limit(value, key))
+                for key, item in value.items()}
     _fail('metadatos', 'tipo no permitido')
 
 
@@ -873,6 +1166,7 @@ def _decode_single(document):
         _fail('diagnósticos', 'se esperaba un objeto')
     surface = diagnostics.get('analysis_surface')
     native_polygon = polygon
+    native_raw = bdata['geometry_wkb']
     native_area, native_perimeter = bdata['area_m2'], bdata['perimeter_m']
     native_count = bdata['cell_count']
     if surface is not None:
@@ -966,8 +1260,9 @@ def _decode_single(document):
     selected_x = _float(data['selected_x'], 'punto seleccionado X')
     selected_y = _float(data['selected_y'], 'punto seleccionado Y')
     snap_basin = replace(basin, area_m2=native_area, perimeter_m=native_perimeter,
-                         cell_count=native_count)
-    has_snap = _outlet_snap(diagnostics, snap_basin, selected_x, selected_y, native_polygon.GetEnvelope())
+                         cell_count=native_count, geometry_wkb=native_raw)
+    has_snap = _outlet_snap(diagnostics, snap_basin, selected_x, selected_y,
+                           native_polygon.GetEnvelope(), budget)
     analysis = Analysis(basin, values, notes, diagnostics, main_raw, grid_raw, selected_x, selected_y)
 
     query_fields = {field.name for field in fields(NativeQuery)} - {'crs'} | {'crs_wkt'}
@@ -1348,24 +1643,25 @@ def _flow_quantiles(value, query):
                 method=value['method'])
 
 
-def _simple_metadata(value, depth=0, budget=None):
+def _simple_metadata(value, depth=0, budget=None, text_limit=16_384):
     """Extra provider/download metadata stays ordinary, bounded JSON data."""
     budget = [0] if budget is None else budget
     budget[0] += 1
     if depth > 12 or budget[0] > MAX_METADATA_ITEMS:
         _fail('opciones de resolución', 'metadatos excesivos')
-    recurse = lambda item: _simple_metadata(item, depth + 1, budget)
+    recurse = lambda item, limit=16_384: _simple_metadata(item, depth + 1, budget, limit)
     if value is None or type(value) is bool:
         return value
     if isinstance(value, (int, float)):
         _float(value, 'metadato de resolución')
         return value
     if isinstance(value, str):
-        return _text(value, 'metadato de resolución')
+        return _text(value, 'metadato de resolución', text_limit)
     if isinstance(value, list):
         return [recurse(item) for item in value]
     if isinstance(value, dict):
-        return {_text(key, 'clave de resolución', 128): recurse(item) for key, item in value.items()}
+        return {_text(key, 'clave de resolución', 128): recurse(item, _reference_text_limit(value, key))
+                for key, item in value.items()}
     _fail('opciones de resolución', 'solo se admiten metadatos JSON simples')
 
 

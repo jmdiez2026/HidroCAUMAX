@@ -114,6 +114,7 @@ class OutletSelectionTests(unittest.TestCase):
 
     def test_nonmodal_native_preview_and_all_arrows_use_cell_steps(self):
         dialog = self.make_dialog()
+        self.assertEqual(dialog.windowTitle(),'HidroCAUMAX · Ajuste Punto de Cierre')
         self.assertFalse(dialog.isModal())
         self.assertEqual(dialog.windowModality(), Qt.NonModal)
         self.assert_preview(dialog, 4, 4)
