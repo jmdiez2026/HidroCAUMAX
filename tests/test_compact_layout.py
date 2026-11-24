@@ -95,32 +95,36 @@ class CompactLayoutTests(unittest.TestCase):
                 self.assertLess(dialog.resolution_status.geometry().bottom(),dialog.context_frame.geometry().top())
                 self.assertLessEqual(dialog.context.geometry().bottom(),dialog.context_frame.height()-6)
 
-    def test_ai_button_is_fixed_at_top_right_with_icon_and_disabled_during_work(self):
+    def test_ai_button_shares_resolution_title_row_and_is_disabled_during_work(self):
         dialog = self.dialog
         button=dialog.analysis_ai_button
         self.assertEqual(button.text(),'Análisis IA')
         self.assertIn('#174D78',button.styleSheet())
-        self.assertIs(button.parentWidget(),dialog.analysis_toolbar)
-        self.assertIs(dialog.analysis_toolbar.parentWidget(),dialog)
-        self.assertIs(dialog.layout().itemAt(0).widget(),dialog.analysis_toolbar)
-        self.assertIs(dialog.layout().itemAt(1).widget(),dialog.body_scroll)
+        self.assertIs(button.parentWidget(),dialog.resolution_group)
+        self.assertIs(dialog.layout().itemAt(0).widget(),dialog.body_scroll)
         self.assertFalse(button.icon().isNull())
         self.assertFalse(button.icon().pixmap(button.iconSize()).isNull())
         self.assertEqual(button.iconSize().width(),18)
         self.assertEqual(button.layoutDirection(),Qt.LeftToRight)
-        for width in (520,650):
+        for width in (520,650,900):
             with self.subTest(width=width):
                 self.resize(width)
-                self.assertEqual(button.geometry().right(),dialog.analysis_toolbar.width()-1)
-                self.assertLess(dialog.analysis_toolbar.geometry().bottom(),dialog.body_scroll.y())
+                group=dialog.resolution_group
+                title=group.title_rect()
+                self.assertLessEqual(abs(button.geometry().center().y()-title.center().y()),1)
+                self.assertGreater(button.geometry().left(),title.right())
+                self.assertEqual(button.geometry().right(),group.width()-group.layout().contentsMargins().right()-1)
+                self.assertLess(button.geometry().bottom(),dialog.resolution_help.geometry().top())
                 text_width=QFontMetrics(button.font()).horizontalAdvance(button.text())
                 self.assertGreaterEqual(button.width(),text_width+button.iconSize().width()+4)
-                position=button.mapTo(dialog,QPoint(0,0))
                 scrollbar=dialog.body_scroll.verticalScrollBar()
+                scrollbar.setValue(0)
+                self.fixture.app.processEvents()
+                position=button.mapTo(dialog,QPoint(0,0))
                 self.assertGreater(scrollbar.maximum(),0)
                 scrollbar.setValue(scrollbar.maximum())
                 self.fixture.app.processEvents()
-                self.assertEqual(button.mapTo(dialog,QPoint(0,0)),position)
+                self.assertLess(button.mapTo(dialog,QPoint(0,0)).y(),position.y())
                 self.assertTrue(button.isVisible())
         self.assertTrue(dialog.analysis_ai_button.isEnabled())
         for flag in ('_surface_pending','_resolution_pending','_saving_project'):
@@ -145,19 +149,20 @@ class CompactLayoutTests(unittest.TestCase):
         from caumax_consulta.ai_analysis import build_context
         module = ModuleType('caumax_consulta.ai_analysis')
         module.build_context = build_context
-        module.show_analysis = Mock(return_value='opened')
+        job = Mock()
+        module.request_interpretations = Mock(return_value=job)
         with patch.dict(sys.modules,{'caumax_consulta.ai_analysis':module}):
-            self.assertEqual(dialog._show_ai_analysis(),'opened')
-            args = module.show_analysis.call_args.args
+            self.assertIs(dialog._show_ai_analysis(),job)
+            args = module.request_interpretations.call_args.args
             self.assertIs(args[0],dialog)
             self.assertIs(args[1],dialog.analysis)
             self.assertIs(args[2],dialog.query)
             self.assertEqual(args[3],dialog.get_smoothing_state())
-            self.assertTrue(callable(module.show_analysis.call_args.kwargs['on_interpretations']))
-            module.show_analysis.reset_mock()
+            self.assertTrue(callable(module.request_interpretations.call_args.kwargs['on_interpretations']))
+            module.request_interpretations.reset_mock()
             dialog._surface_pending = True
             self.assertIsNone(dialog._show_ai_analysis())
-            module.show_analysis.assert_not_called()
+            module.request_interpretations.assert_not_called()
             dialog._surface_pending = False
 
     def test_hydrology_uses_its_own_groups_without_combined_outer_frame(self):

@@ -6,7 +6,6 @@ The Classic Pollinations endpoint is deliberately separate from its paid API.
 """
 from collections import OrderedDict
 import hashlib
-import html
 import json
 import math
 import re
@@ -14,12 +13,8 @@ import time
 import unicodedata
 import weakref
 
-from qgis.PyQt.QtCore import QByteArray, QTimer, QUrl, Qt, pyqtSignal
+from qgis.PyQt.QtCore import QByteArray, QObject, QTimer, QUrl, pyqtSignal
 from qgis.PyQt.QtNetwork import QNetworkRequest
-from qgis.PyQt.QtWidgets import (
-    QApplication, QDialog, QHBoxLayout, QLabel, QPushButton, QTextBrowser,
-    QVBoxLayout,
-)
 from qgis.core import QgsNetworkAccessManager
 
 from .parameter_schema import METRICS, format_value
@@ -34,7 +29,6 @@ MAX_RESPONSE_BYTES = 256 * 1024
 TIMEOUT_MS = 120000
 _CACHE = OrderedDict()
 _NEXT_REQUEST_AT = 0.0
-_ACTIVE_DIALOG = None
 REVIEW_PREFIX = '**Revisión necesaria (comprobación del programa):**'
 PARAMETER_LIMITATIONS = {
     'area_km2': 'El área por sí sola no acredita la aplicabilidad del método racional ni la conformidad con 5.2-IC.',
@@ -440,7 +434,7 @@ def network_request():
     request = QNetworkRequest(url)
     request.setHeader(QNetworkRequest.ContentTypeHeader, 'application/json')
     request.setRawHeader(b'Accept', b'application/json')
-    request.setRawHeader(b'User-Agent', b'HidroCAUMAX/1.2.8')
+    request.setRawHeader(b'User-Agent', b'HidroCAUMAX/1.2.9')
     request.setRawHeader(b'Cache-Control', b'no-store')
     request.setAttribute(QNetworkRequest.CacheLoadControlAttribute, QNetworkRequest.AlwaysNetwork)
     request.setAttribute(QNetworkRequest.CacheSaveControlAttribute, False)
@@ -451,32 +445,28 @@ def network_request():
     return request
 
 
-class _ResultBrowser(QTextBrowser):
-    def loadResource(self, resource_type, name):
-        # Generated Markdown cannot load remote images, local files or styles.
-        return None
+def _request_destroyed(reference):
+    """Invalidate queued Python callbacks without touching deleted Qt children."""
+    request = reference()
+    if request is not None:
+        request._closed = True
+        request.is_finished = True
+        request.reply = None
 
 
-def _dialog_destroyed(reference):
-    """Forget a Qt-owned dialog without touching its destroyed C++ objects."""
-    global _ACTIVE_DIALOG
-    dialog = reference()
-    if dialog is None:
-        return
-    dialog._closed = True
-    dialog.reply = None
-    if _ACTIVE_DIALOG is dialog:
-        _ACTIVE_DIALOG = None
+class InterpretationRequest(QObject):
+    """One asynchronous interpretation request, with no window or widget.
 
-
-class AnalysisDialog(QDialog):
+    The parent owns the request, its timeout and the network reply. Consumers
+    receive reviewed plain-text rows and may cancel or delete their parent from
+    either signal. Every live request emits ``finished`` at most once.
+    """
     interpretations_ready = pyqtSignal(dict)
+    status_changed = pyqtSignal(str)
+    finished = pyqtSignal()
 
     def __init__(self, parent, context):
         super().__init__(parent)
-        self.setWindowTitle('Análisis IA · HidroCAUMAX · Norma 5.2-IC')
-        self.resize(900, 740)
-        self.setAttribute(Qt.WA_DeleteOnClose)
         self.context = context
         self.key = hashlib.sha256(json.dumps(context, sort_keys=True, ensure_ascii=False,
                                              allow_nan=False).encode('utf-8')).hexdigest()
@@ -484,88 +474,53 @@ class AnalysisDialog(QDialog):
         self.raw = bytearray()
         self.result_text = ''
         self.interpretations = {}
+        self.status_text = ''
         self._error = ''
         self._closed = False
-        self.destroyed.connect(lambda _=None, reference=weakref.ref(self): _dialog_destroyed(reference))
+        self._started = False
+        self.is_finished = False
+        self.destroyed.connect(lambda _=None, reference=weakref.ref(self): _request_destroyed(reference))
         self.timer = QTimer(self)
         self.timer.setSingleShot(True)
         self.timer.timeout.connect(self._timeout)
-        self.cooldown = QTimer(self)
-        self.cooldown.setInterval(1000)
-        self.cooldown.timeout.connect(self._refresh_retry)
-        layout = QVBoxLayout(self)
-        note = QLabel('IA gratuita sin cuenta ni clave · Pollinations Classic. Se envían los '
-                      'valores del análisis; no se envían coordenadas, archivos ni rutas locales. '
-                      'La disponibilidad depende del servicio.', self)
-        note.setWordWrap(True)
-        layout.addWidget(note)
-        self.browser = _ResultBrowser(self)
-        self.browser.setOpenLinks(False)
-        self.browser.setOpenExternalLinks(False)
-        self.browser.setStyleSheet('QTextBrowser { background:white; color:#172b45; padding:12px; }')
-        self.browser.setPlainText('Preparando la interpretación de los resultados de la cuenca…')
-        layout.addWidget(self.browser, 1)
-        self.status = QLabel(self)
-        self.status.setWordWrap(True)
-        layout.addWidget(self.status)
-        actions = QHBoxLayout()
-        self.retry_button = QPushButton('Reintentar', self)
-        self.retry_button.clicked.connect(self.start)
-        self.copy_button = QPushButton('Copiar análisis', self)
-        self.copy_button.setEnabled(False)
-        self.copy_button.clicked.connect(lambda: QApplication.clipboard().setText(self.result_text))
-        self.close_button = QPushButton('Cerrar', self)
-        self.close_button.clicked.connect(self.close)
-        actions.addWidget(self.retry_button)
-        actions.addWidget(self.copy_button)
-        actions.addStretch(1)
-        actions.addWidget(self.close_button)
-        layout.addLayout(actions)
-        footer = QLabel('Interpretación generada por IA: contrasta sus conclusiones con los datos '
-                        'y la norma antes de incorporarlas al proyecto. '
-                        '<a href="'+html.escape(NORM_URL)+'">Norma 5.2-IC oficial</a>', self)
-        footer.setWordWrap(True)
-        footer.setOpenExternalLinks(True)
-        layout.addWidget(footer)
         QTimer.singleShot(0, self.start)
+
+    def _set_status(self, text):
+        if self._closed or self.is_finished:
+            return
+        self.status_text = text
+        self.status_changed.emit(text)
 
     def start(self):
         global _NEXT_REQUEST_AT
-        if self._closed or self.reply is not None:
+        if self._closed or self._started or self.is_finished:
             return
+        self._started = True
         if self.key in _CACHE:
-            self.cooldown.stop()
             _CACHE.move_to_end(self.key)
             rendered, interpretations = _CACHE[self.key]
-            self._display(rendered)
-            self.status.setText('Análisis recuperado de esta sesión para estos mismos resultados.')
-            self.retry_button.setEnabled(False)
-            self._publish_interpretations(interpretations)
+            self._accept(rendered, interpretations,
+                         'Análisis recuperado de esta sesión para estos mismos resultados.')
             return
-        if time.monotonic() < _NEXT_REQUEST_AT:
-            self.cooldown.start()
-            self._refresh_retry()
+        remaining = max(0, math.ceil(_NEXT_REQUEST_AT-time.monotonic()))
+        if remaining:
+            self._show_error(f'Espera {remaining} s antes de reintentar el análisis gratuito.')
             return
-        self._error = ''
-        self.cooldown.stop()
-        self.raw.clear()
-        self.result_text = ''
-        self.interpretations = {}
-        self.copy_button.setEnabled(False)
-        self.browser.setPlainText('Preparando la interpretación de los resultados de la cuenca…')
-        self.retry_button.setEnabled(False)
-        self.status.setText('Interpretando los parámetros con IA… Puedes cerrar para cancelar.')
+        self._set_status('Interpretando los parámetros con IA…')
+        # A status consumer can close the basin before the network post.
+        if self._closed or self.is_finished:
+            return
         _NEXT_REQUEST_AT = time.monotonic() + 45
         try:
             data = json.dumps(build_payload(self.context), ensure_ascii=False, allow_nan=False).encode('utf-8')
             self.reply = QgsNetworkAccessManager.instance().post(network_request(), QByteArray(data))
-            # The reply also dies if its parent dialog is destroyed directly.
+            # Qt destroys the reply and aborts its connection with this request.
             self.reply.setParent(self)
             self.reply.readyRead.connect(self._read)
             self.reply.finished.connect(self._finished)
             self.timer.start(TIMEOUT_MS)
         except Exception:
-            reply,self.reply = self.reply,None
+            reply, self.reply = self.reply, None
             if reply is not None:
                 reply.abort()
                 reply.deleteLater()
@@ -583,24 +538,23 @@ class AnalysisDialog(QDialog):
         return True
 
     def _read(self):
-        if self.reply is None:
+        if self._closed or self.reply is None:
             return
         if not self._consume(self.reply):
             self.reply.abort()
 
     def _timeout(self):
-        if self.reply is not None:
+        if not self._closed and self.reply is not None:
             self._error = 'El servicio gratuito ha agotado el tiempo de espera. Puedes reintentar.'
             self.reply.abort()
 
     def _finished(self):
         global _NEXT_REQUEST_AT
-        if self.reply is None:
+        if self._closed or self.is_finished or self.reply is None:
             return
         reply, self.reply = self.reply, None
         self.timer.stop()
-        # Already finished: consuming a final large chunk must not abort and
-        # synchronously enter this slot a second time.
+        # Consuming a large final chunk must not abort and re-enter this slot.
         self._consume(reply)
         status = reply.attribute(QNetworkRequest.HttpStatusCodeAttribute)
         try:
@@ -624,93 +578,69 @@ class AnalysisDialog(QDialog):
                 if truncated:
                     raise ValueError('Respuesta incompleta: el servicio alcanzó su límite de texto. Puedes reintentar.')
                 rendered, interpretations = _structured_analysis(content, self.context)
-                self._display(rendered)
                 if REVIEW_PREFIX in rendered:
-                    self.status.setText('Interpretación recibida con apartados que requieren revisión. '
-                                        'Las contradicciones detectadas se han marcado junto al texto de IA.')
-                    self.cooldown.start()
-                    self._refresh_retry()
-                    self._publish_interpretations(interpretations)
+                    self._accept(rendered, interpretations,
+                                 'Interpretación recibida con apartados que requieren revisión. '
+                                 'Las contradicciones detectadas se han marcado junto al texto de IA.')
                     return
                 _CACHE[self.key] = (rendered, dict(interpretations))
                 while len(_CACHE) > 8:
                     _CACHE.popitem(last=False)
-                self.status.setText('Interpretación completada · Pollinations Classic · acceso anónimo.')
-                self.cooldown.stop()
-                self.retry_button.setEnabled(False)
-                self._publish_interpretations(interpretations)
+                self._accept(rendered, interpretations,
+                             'Interpretación completada · Pollinations Classic · acceso anónimo.')
                 return
             except ValueError as exception:
                 error = str(exception)
-        if error:
-            self._show_error(error)
-            return
-        self.cooldown.start()
-        self._refresh_retry()
+        self._show_error(error)
 
     def _show_error(self, error):
+        if self._closed or self.is_finished:
+            return
         self.result_text = ''
         self.interpretations = {}
-        self.copy_button.setEnabled(False)
-        self.status.setText(error)
-        self.browser.setPlainText('No se ha generado el análisis de IA. '+error)
-        self.cooldown.start()
-        self._refresh_retry()
+        self._set_status(error)
+        self._finish()
 
-    def _display(self, text):
-        self.result_text = text
-        # Escape HTML before Markdown parsing. Remote resources remain disabled.
-        self.browser.setMarkdown(html.escape(text, quote=False))
-        self.copy_button.setEnabled(True)
-
-    def _publish_interpretations(self, interpretations):
-        if self._closed:
+    def _accept(self, text, interpretations, status):
+        if self._closed or self.is_finished:
             return
+        self.result_text = text
         self.interpretations = dict(interpretations)
-        # A consumer may edit its dictionary or close the dialog. Publish last
-        # and never expose the cache's or the dialog's mutable dictionary.
+        self._set_status(status)
+        if self._closed or self.is_finished:
+            return
+        # The recipient may mutate its dictionary or cancel/delete the request.
         self.interpretations_ready.emit(dict(interpretations))
+        self._finish()
 
-    def _refresh_retry(self):
-        remaining = max(0, math.ceil(_NEXT_REQUEST_AT-time.monotonic()))
-        self.retry_button.setText(f'Reintentar ({remaining} s)' if remaining else 'Reintentar')
-        self.retry_button.setEnabled(not remaining and self.reply is None)
-        if remaining == 0:
-            self.cooldown.stop()
+    def _finish(self):
+        if self.is_finished:
+            return
+        self.is_finished = True
+        self.timer.stop()
+        self.finished.emit()
 
-    def _cancel_request(self):
-        global _ACTIVE_DIALOG
+    def cancel(self):
+        if self._closed or self.is_finished:
+            return
         self._closed = True
         self.timer.stop()
-        self.cooldown.stop()
         if self.reply is not None:
             reply, self.reply = self.reply, None
+            # Clear before abort: some replies emit finished synchronously.
             reply.abort()
             reply.deleteLater()
-        if _ACTIVE_DIALOG is self:
-            _ACTIVE_DIALOG = None
-
-    def done(self, result):
-        # Escape, reject() and accept() do not necessarily call closeEvent.
-        self._cancel_request()
-        super().done(result)
-
-    def closeEvent(self, event):
-        self._cancel_request()
-        super().closeEvent(event)
+        self._finish()
 
 
-def show_analysis(parent, analysis, query, smoothing_state=None, *, on_interpretations=None):
-    """Open an independent snapshot; never hold live raster or geometry objects."""
-    global _ACTIVE_DIALOG
-    context = build_context(analysis, query, smoothing_state)
-    if _ACTIVE_DIALOG is not None:
-        _ACTIVE_DIALOG.close()
-    dialog = AnalysisDialog(parent, context)
+def request_interpretations(parent, analysis, query, smoothing_state=None, *,
+                            on_interpretations=None, on_status=None, on_finished=None):
+    """Return a queued, windowless request for an immutable numeric snapshot."""
+    request = InterpretationRequest(parent, build_context(analysis, query, smoothing_state))
     if on_interpretations is not None:
-        dialog.interpretations_ready.connect(on_interpretations)
-    _ACTIVE_DIALOG = dialog
-    dialog.show()
-    dialog.raise_()
-    dialog.activateWindow()
-    return dialog
+        request.interpretations_ready.connect(on_interpretations)
+    if on_status is not None:
+        request.status_changed.connect(on_status)
+    if on_finished is not None:
+        request.finished.connect(on_finished)
+    return request

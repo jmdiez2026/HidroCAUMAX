@@ -1,3 +1,23 @@
+# HidroCAUMAX 1.2.9
+
+## Análisis IA sin ventana adicional
+
+- Los dos botones Análisis IA rellenan directamente la columna Interpretación, sin abrir el informe en otro diálogo.
+- La petición se ejecuta de forma asíncrona mediante un objeto sin widgets. Se mantienen el servicio gratuito sin credenciales, el contexto numérico permitido, la revisión de las 19 interpretaciones, la caché y los límites de respuesta.
+- Ambos botones se desactivan durante la petición y vuelven a activarse al terminar. El texto de ayuda comunica el estado o error y permite conocer la espera antes de reintentar; no aparecen ventanas emergentes.
+- Cambiar el cierre, resolución o resultados cancela la petición y deja la columna vacía hasta solicitar una nueva interpretación. Cerrar el diálogo cancela la conexión y sus temporizadores.
+
+## Botones integrados en sus encabezados
+
+- El botón del encabezado Interpretación incorpora el mismo icono blanco de IA y diseño azul oscuro. Su altura coincide con la fila y su anchura incluye icono y texto.
+- El botón superior se alinea a la derecha del título Resolución MDT. Se elimina la fila exterior adicional.
+
+## Verificación
+
+- Pruebas con Qt/QGIS real y respuestas de red simuladas: generación sin widgets, actualización de tabla desde ambos botones, caché, cancelación, destrucción del padre, respuestas tardías, tiempo de espera, límites del servicio y respuestas incompletas.
+- Comprobación visual y de geometría a 520, 650 y 900 píxeles, con adaptación del icono a la altura del encabezado.
+- Se conservan los cálculos hidrológicos, el delineado, las exportaciones y los formatos de proyecto de la 1.2.8.
+
 # HidroCAUMAX 1.2.8
 
 ## Punto original y cierre de la malla de 500 m

@@ -13,7 +13,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 
 from qgis.PyQt.QtCore import QByteArray, QCoreApplication, QEvent, QObject, pyqtSignal
 from qgis.PyQt.QtNetwork import QNetworkRequest
-from qgis.PyQt.QtWidgets import QWidget
+from qgis.PyQt.QtWidgets import QApplication, QDialog, QWidget
+from qgis.PyQt import sip
 from qgis.core import QgsApplication
 from caumax_consulta import ai_analysis as ai
 from caumax_consulta.parameter_schema import METRICS
@@ -275,57 +276,83 @@ class FakeManager:
         return self.reply
 
 
-class DialogTests(unittest.TestCase):
+class RequestTests(unittest.TestCase):
     @classmethod
-    def setUpClass(cls):cls.app=QgsApplication.instance() or QgsApplication([],False)
+    def setUpClass(cls):
+        cls.app=QgsApplication.instance() or QgsApplication([],False)
 
     def setUp(self):
-        ai._CACHE.clear();ai._NEXT_REQUEST_AT=0.;ai._ACTIVE_DIALOG=None
+        ai._CACHE.clear();ai._NEXT_REQUEST_AT=0.
         self.reply=FakeReply();self.manager=FakeManager(self.reply)
-        self.autostart=patch.object(ai.QTimer,'singleShot');self.autostart.start()
+        self.autostart=patch.object(ai.QTimer,'singleShot');self.autostart_mock=self.autostart.start()
         self.network=patch.object(ai,'QgsNetworkAccessManager',
                                  SimpleNamespace(instance=lambda:self.manager));self.network.start()
-        self.dialog=ai.AnalysisDialog(None,ai.build_context(*sample_state()))
+        self.requests=[]
         self.received=[]
-        self.dialog.interpretations_ready.connect(lambda values:self.received.append(dict(values)))
+        self.statuses=[]
+        self.finished=[]
+        self.new_request()
+
+    def new_request(self, parent=None, consumer=None):
+        self.request=ai.request_interpretations(parent,*sample_state(),
+            on_interpretations=consumer or (lambda values:self.received.append(dict(values))),
+            on_status=self.statuses.append,on_finished=lambda:self.finished.append(True))
+        self.requests.append(self.request)
+        return self.request
 
     def tearDown(self):
-        self.dialog.close();self.autostart.stop();self.network.stop()
-        ai._CACHE.clear();ai._NEXT_REQUEST_AT=0.;ai._ACTIVE_DIALOG=None
+        for request in self.requests:
+            if not sip.isdeleted(request):
+                request.cancel()
+                request.deleteLater()
+        self.autostart.stop();self.network.stop()
+        ai._CACHE.clear();ai._NEXT_REQUEST_AT=0.
+        QCoreApplication.sendPostedEvents(None,QEvent.DeferredDelete)
 
     def complete(self,raw=None,status=200):
         self.reply.status=status
         self.reply.buffer.extend(response(structured()) if raw is None else raw)
         self.reply.finished.emit()
 
-    def test_request_is_nonblocking_and_duplicate_start_does_not_post_twice(self):
-        self.dialog.start();self.dialog.start()
-        self.assertEqual(len(self.manager.requests),1)
-        self.assertTrue(self.dialog.timer.isActive())
-        self.assertTrue(self.dialog.close_button.isEnabled())
-        self.assertFalse(self.dialog.copy_button.isEnabled())
-        self.assertIs(self.reply.parent(),self.dialog)
+    def test_entry_point_never_creates_a_widget_and_starts_after_return(self):
+        before=set(QApplication.allWidgets())
+        request=self.new_request()
+        self.assertFalse(isinstance(request,QWidget))
+        self.assertFalse(isinstance(request,QDialog))
+        self.assertEqual(set(QApplication.allWidgets()),before)
+        self.assertFalse(self.manager.requests)
+        self.assertEqual(self.autostart_mock.call_args.args,(0,request.start))
+        request.start();self.complete()
+        self.assertEqual(set(QApplication.allWidgets()),before)
+        self.assertEqual(len(self.received),1)
+        self.assertEqual(len(self.finished),1)
 
-    def test_complete_response_is_displayed_cached_and_reopened_without_network(self):
-        self.dialog.start();self.complete()
-        self.assertIn('Interpretación sintética',self.dialog.browser.toPlainText())
-        self.assertTrue(self.dialog.copy_button.isEnabled())
-        self.assertIn(self.dialog.key,ai._CACHE)
-        self.dialog.start()
+    def test_request_is_nonblocking_and_duplicate_start_does_not_post_twice(self):
+        self.request.start();self.request.start()
         self.assertEqual(len(self.manager.requests),1)
-        self.assertIn('recuperado',self.dialog.status.text())
-        self.assertFalse(self.dialog.cooldown.isActive())
-        self.assertEqual(len(self.received),2)
-        self.assertEqual(self.received[0],self.received[1])
+        self.assertTrue(self.request.timer.isActive())
+        self.assertFalse(self.request.is_finished)
+        self.assertEqual(self.statuses,['Interpretando los parámetros con IA…'])
+        self.assertIs(self.reply.parent(),self.request)
+
+    def test_complete_response_is_cached_and_finished_exactly_once(self):
+        self.request.start();self.complete()
+        self.assertIn('Interpretación sintética',self.request.result_text)
+        self.assertIn(self.request.key,ai._CACHE)
+        self.assertTrue(self.request.is_finished)
+        self.assertFalse(self.request.timer.isActive())
+        self.request.start();self.request.cancel();self.request._finished()
+        self.assertEqual(len(self.manager.requests),1)
+        self.assertEqual(len(self.received),1)
+        self.assertEqual(len(self.finished),1)
         self.assertEqual(set(self.received[0]),{metric.key for metric in METRICS})
 
-    def test_flagged_interpretation_is_visible_for_review_but_not_cached_as_complete(self):
+    def test_flagged_interpretation_is_delivered_for_review_but_not_cached(self):
         result=json.loads(structured())
         result['parameter_interpretations']['zmin_m']='La altitud mínima indica el cierre.'
-        self.dialog.start();self.complete(response(json.dumps(result)))
-        self.assertIn('requieren revisión',self.dialog.status.text())
-        self.assertIn(ai.REVIEW_PREFIX,self.dialog.result_text)
-        self.assertTrue(self.dialog.copy_button.isEnabled())
+        self.request.start();self.complete(response(json.dumps(result)))
+        self.assertIn('requieren revisión',self.request.status_text)
+        self.assertIn(ai.REVIEW_PREFIX,self.request.result_text)
         self.assertFalse(ai._CACHE)
         self.assertEqual(len(self.received),1)
         text=self.received[0]['zmin_m']
@@ -333,98 +360,115 @@ class DialogTests(unittest.TestCase):
         self.assertIn('Hmín no identifica necesariamente el cierre de la cuenca.',text)
         self.assertIn('**Texto recibido de IA:**',text)
         self.assertNotEqual(text,result['parameter_interpretations']['zmin_m'])
-        self.assertIn(text.replace('|','\\|'),self.dialog.result_text)
+        self.assertIn(text.replace('|','\\|'),self.request.result_text)
+        self.assertEqual(len(self.finished),1)
 
-    def test_reject_cancels_like_close_and_ignores_late_results(self):
-        self.dialog.start();ai._ACTIVE_DIALOG=self.dialog
-        self.dialog.reject()
+    def test_cancel_aborts_and_ignores_late_results(self):
+        self.request.start();self.request.cancel()
         self.assertTrue(self.reply.aborted)
-        self.assertIsNone(self.dialog.reply)
-        self.assertIsNone(ai._ACTIVE_DIALOG)
-        self.complete()
-        self.dialog.start()
+        self.assertIsNone(self.request.reply)
+        self.complete();self.request.start();self.request.cancel()
         self.assertEqual(len(self.manager.requests),1)
         self.assertFalse(ai._CACHE)
-        self.assertFalse(self.dialog.timer.isActive())
+        self.assertFalse(self.request.timer.isActive())
         self.assertFalse(self.received)
+        self.assertEqual(len(self.finished),1)
 
     def test_timeout_aborts_and_never_invents_or_caches_analysis(self):
-        self.dialog.start();self.dialog._timeout()
+        self.request.start();self.request._timeout()
         self.assertTrue(self.reply.aborted)
-        self.assertIn('tiempo de espera',self.dialog.status.text())
-        self.assertFalse(self.dialog.result_text)
+        self.assertIn('tiempo de espera',self.request.status_text)
+        self.assertFalse(self.request.result_text)
         self.assertFalse(ai._CACHE)
         self.assertFalse(self.received)
+        self.assertEqual(len(self.finished),1)
 
     def test_oversize_final_chunk_is_bounded_and_finished_is_not_reentrant(self):
-        self.dialog.start()
+        self.request.start()
         self.complete(b'x'*(ai.MAX_RESPONSE_BYTES*2))
-        self.assertEqual(len(self.dialog.raw),ai.MAX_RESPONSE_BYTES+1)
-        self.assertIn('tamaño',self.dialog.status.text())
+        self.assertEqual(len(self.request.raw),ai.MAX_RESPONSE_BYTES+1)
+        self.assertIn('tamaño',self.request.status_text)
         self.assertEqual(self.reply.deleted,1)
         self.assertFalse(self.reply.aborted)
+        self.assertEqual(len(self.finished),1)
 
-    def test_oversize_ready_read_aborts_safely_even_when_finished_is_synchronous(self):
-        self.dialog.start();self.reply.buffer.extend(b'x'*(ai.MAX_RESPONSE_BYTES*2))
+    def test_oversize_ready_read_aborts_safely_when_finished_is_synchronous(self):
+        self.request.start();self.reply.buffer.extend(b'x'*(ai.MAX_RESPONSE_BYTES*2))
         self.reply.readyRead.emit()
         self.assertTrue(self.reply.aborted)
         self.assertEqual(self.reply.deleted,1)
-        self.assertIsNone(self.dialog.reply)
+        self.assertIsNone(self.request.reply)
         self.assertFalse(ai._CACHE)
+        self.assertEqual(len(self.finished),1)
 
-    def test_http_429_honors_bounded_retry_after_without_requesting_credentials(self):
+    def test_http_429_honors_bounded_retry_after_without_credentials(self):
         with patch.object(ai.time,'monotonic',return_value=100.):
-            self.dialog.start();self.reply.retry_after=b'120';self.complete(b'',429)
+            self.request.start();self.reply.retry_after=b'120';self.complete(b'',429)
             self.assertEqual(ai._NEXT_REQUEST_AT,220.)
-            self.assertIn('No se necesita una clave',self.dialog.status.text())
-            self.assertIn('120 s',self.dialog.retry_button.text())
-            self.assertFalse(self.dialog.retry_button.isEnabled())
-            self.assertFalse(self.dialog.result_text)
+            self.assertIn('No se necesita una clave',self.request.status_text)
+            self.assertFalse(self.request.result_text)
+            self.new_request().start()
+            self.assertIn('120 s',self.request.status_text)
+            self.assertEqual(len(self.manager.requests),1)
+            self.assertEqual(len(self.finished),2)
 
-    def test_connection_failure_with_none_read_is_shown_without_a_crash(self):
-        self.dialog.start();self.reply.empty_read_is_none=True;self.complete(b'',None)
-        self.assertIn('conexión',self.dialog.status.text())
-        self.assertFalse(self.dialog.copy_button.isEnabled())
+    def test_rate_limit_does_not_post_automatically_and_new_attempt_can_retry(self):
+        with patch.object(ai.time,'monotonic',return_value=100.):
+            ai._NEXT_REQUEST_AT=145.
+            self.request.start()
+            self.assertIn('45 s',self.request.status_text)
+            self.assertTrue(self.request.is_finished)
+            self.assertFalse(self.manager.requests)
+        with patch.object(ai.time,'monotonic',return_value=146.):
+            self.new_request().start();self.complete()
+            self.assertEqual(len(self.manager.requests),1)
+            self.assertEqual(len(self.received),1)
+            self.assertEqual(len(self.finished),2)
+
+    def test_connection_failure_with_none_read_is_reported_without_crash(self):
+        self.request.start();self.reply.empty_read_is_none=True;self.complete(b'',None)
+        self.assertIn('conexión',self.request.status_text)
+        self.assertFalse(self.request.interpretations)
+        self.assertEqual(len(self.finished),1)
 
     def test_truncated_response_is_marked_and_not_cached(self):
-        self.dialog.start();self.complete(response('Respuesta parcial','length'))
-        self.assertIn('incompleta',self.dialog.status.text())
-        self.assertFalse(self.dialog.copy_button.isEnabled())
+        self.request.start();self.complete(response('Respuesta parcial','length'))
+        self.assertIn('incompleta',self.request.status_text)
+        self.assertFalse(self.request.interpretations)
         self.assertFalse(ai._CACHE)
         self.assertFalse(self.received)
+        self.assertEqual(len(self.finished),1)
 
-    def test_public_callback_receives_all_reviewed_report_rows_without_markdown_parsing(self):
-        self.dialog.close()
-        self.dialog=ai.show_analysis(None,*sample_state(),on_interpretations=self.received.append)
+    def test_callback_receives_all_reviewed_rows_without_markdown_parsing(self):
         result=json.loads(structured())
         result['parameter_interpretations']={metric.key:'Lectura específica de '+metric.key+'.'
                                               for metric in METRICS}
         result['parameter_interpretations']['area_km2']=' Primera línea | alternativa.\nSegunda línea. '
-        self.dialog.start();self.complete(response(json.dumps(result)))
+        self.request.start();self.complete(response(json.dumps(result)))
         self.assertEqual(len(self.received),1)
         delivered=self.received[0]
         self.assertEqual(list(delivered),[metric.key for metric in METRICS])
         for metric in METRICS:
             expected=result['parameter_interpretations'][metric.key].replace('\n',' ').strip()
             self.assertEqual(delivered[metric.key],expected)
-            self.assertIn(' | '+expected.replace('|','\\|')+' |',self.dialog.result_text)
+            self.assertIn(' | '+expected.replace('|','\\|')+' |',self.request.result_text)
         self.assertEqual(delivered['area_km2'],'Primera línea | alternativa. Segunda línea.')
 
-    def test_reopened_cache_delivers_fresh_dictionary_without_a_network_request(self):
-        self.dialog.start();self.complete()
+    def test_cached_request_delivers_fresh_dictionary_without_network(self):
+        self.request.start();self.complete()
         expected=dict(self.received[0])
-        cached_text=self.dialog.result_text
-        self.dialog.close()
+        cached_text=self.request.result_text
         def consumer(values):
             self.received.append(dict(values))
             values['area_km2']='Consumer-local edit'
-        self.dialog=ai.show_analysis(None,*sample_state(),on_interpretations=consumer)
-        self.dialog.start();self.dialog.start()
+        self.new_request(consumer=consumer).start();self.request.start()
         self.assertEqual(len(self.manager.requests),1)
-        self.assertEqual(self.received,[expected,expected,expected])
-        self.assertEqual(self.dialog.interpretations,expected)
-        self.assertEqual(self.dialog.result_text,cached_text)
-        self.assertNotIn('Consumer-local edit',self.dialog.result_text)
+        self.assertEqual(self.received,[expected,expected])
+        self.assertEqual(self.request.interpretations,expected)
+        self.assertEqual(self.request.result_text,cached_text)
+        self.assertNotIn('Consumer-local edit',self.request.result_text)
+        self.assertIn('recuperado',self.request.status_text)
+        self.assertEqual(len(self.finished),2)
 
     def test_invalid_or_incomplete_response_never_publishes_parameter_rows(self):
         missing=json.loads(structured())
@@ -435,76 +479,77 @@ class DialogTests(unittest.TestCase):
                (response(structured()),503))
         for raw,status in cases:
             with self.subTest(status=status,raw=raw[:60]):
-                self.dialog.close()
+                self.request.cancel()
                 ai._NEXT_REQUEST_AT=0.
                 self.reply=FakeReply();self.manager.reply=self.reply
-                self.dialog=ai.show_analysis(None,*sample_state(),on_interpretations=self.received.append)
-                self.dialog.start();self.complete(raw,status)
+                self.new_request().start();self.complete(raw,status)
                 self.assertFalse(self.received)
-                self.assertFalse(self.dialog.interpretations)
+                self.assertFalse(self.request.interpretations)
+                self.assertTrue(self.request.is_finished)
                 self.assertFalse(ai._CACHE)
 
-    def test_closed_dialog_does_not_publish_a_ready_cached_result(self):
-        self.dialog.start();self.complete()
+    def test_cancel_before_start_does_not_publish_a_ready_cached_result(self):
+        self.request.start();self.complete()
         self.assertEqual(len(self.received),1)
-        self.dialog.close()
-        self.dialog=ai.show_analysis(None,*sample_state(),on_interpretations=self.received.append)
-        self.dialog.reject()
-        self.dialog.start()
+        self.new_request().cancel();self.request.start()
         self.assertEqual(len(self.received),1)
         self.assertEqual(len(self.manager.requests),1)
+        self.assertEqual(len(self.finished),2)
 
-    def test_consumer_can_close_the_dialog_after_receiving_the_result(self):
-        self.dialog.interpretations_ready.connect(lambda values:self.dialog.close())
-        self.dialog.start();self.complete()
+    def test_consumer_can_cancel_after_receiving_result(self):
+        self.request.interpretations_ready.connect(lambda values:self.request.cancel())
+        self.request.start();self.complete()
         self.assertEqual(len(self.received),1)
-        self.assertTrue(self.dialog._closed)
-        self.assertIsNone(self.dialog.reply)
+        self.assertTrue(self.request._closed)
+        self.assertIsNone(self.request.reply)
         self.assertEqual(self.reply.deleted,1)
+        self.assertEqual(len(self.finished),1)
 
-    def test_destroyed_parent_drops_active_dialog_and_allows_a_new_analysis(self):
-        self.dialog.close()
+    def test_status_consumer_can_cancel_before_network_post(self):
+        self.request.status_changed.connect(lambda text:self.request.cancel())
+        self.request.start()
+        self.assertFalse(self.manager.requests)
+        self.assertFalse(self.received)
+        self.assertEqual(len(self.finished),1)
+
+    def test_destroyed_parent_invalidates_request_and_its_qt_children(self):
+        self.request.cancel()
         parent=QWidget()
-        self.dialog=ai.show_analysis(parent,*sample_state(),on_interpretations=self.received.append)
-        self.dialog.start()
-        previous=self.dialog
+        previous=self.new_request(parent)
+        previous.start()
+        reply,timer=self.reply,previous.timer
         parent.deleteLater()
         QCoreApplication.sendPostedEvents(parent,QEvent.DeferredDelete)
-        # These can also be pending Python callbacks when Qt removes a parent.
-        previous.start()
-        previous._finished()
-        self.assertIsNone(ai._ACTIVE_DIALOG)
+        previous.start();previous._finished();previous.cancel()
+        self.assertTrue(previous._closed)
+        self.assertTrue(previous.is_finished)
+        self.assertIsNone(previous.reply)
+        self.assertTrue(sip.isdeleted(reply))
+        self.assertTrue(sip.isdeleted(timer))
         self.assertFalse(self.received)
         self.assertEqual(len(self.manager.requests),1)
         self.reply=FakeReply();self.manager.reply=self.reply
         ai._NEXT_REQUEST_AT=0.
-        self.dialog=ai.show_analysis(None,*sample_state(),on_interpretations=self.received.append)
-        self.dialog.start();self.complete()
-        self.assertIs(ai._ACTIVE_DIALOG,self.dialog)
+        self.new_request().start();self.complete()
         self.assertEqual(len(self.manager.requests),2)
         self.assertEqual(len(self.received),1)
 
-    def test_failed_retry_does_not_copy_stale_partial_text(self):
-        self.dialog.start();self.complete(response('Texto previo','length'))
-        self.dialog._display('Texto previo en pantalla')
+    def test_failed_new_request_does_not_reuse_previous_text(self):
+        self.request.start();self.complete(response('Texto previo','length'))
         ai._NEXT_REQUEST_AT=0.
         self.reply=FakeReply();self.manager.reply=self.reply
-        self.dialog.start();self.complete(b'',503)
-        self.assertFalse(self.dialog.copy_button.isEnabled())
-        self.assertEqual(self.dialog.result_text,'')
-        self.assertIn('No se ha generado',self.dialog.browser.toPlainText())
+        self.new_request().start();self.complete(b'',503)
+        self.assertFalse(self.request.interpretations)
+        self.assertEqual(self.request.result_text,'')
+        self.assertIn('conectar',self.request.status_text)
 
-    def test_start_network_exception_is_reported_in_the_dialog(self):
+    def test_start_network_exception_reports_status_and_finishes(self):
         with patch.object(self.manager,'post',side_effect=RuntimeError('network unavailable')):
-            self.dialog.start()
-        self.assertIn('iniciar la conexión',self.dialog.status.text())
-        self.assertFalse(self.dialog.copy_button.isEnabled())
+            self.request.start()
+        self.assertIn('iniciar la conexión',self.request.status_text)
+        self.assertFalse(self.request.interpretations)
         self.assertFalse(ai._CACHE)
-
-    def test_remote_markdown_resources_are_disabled(self):
-        self.assertIsNone(self.dialog.browser.loadResource(2,ai.QUrl('https://example.org/a.png')))
-        self.assertFalse(self.dialog.browser.openLinks())
-        self.assertFalse(self.dialog.browser.openExternalLinks())
+        self.assertEqual(len(self.finished),1)
 
 
 if __name__=='__main__':unittest.main()

@@ -1,6 +1,6 @@
 """AI table updates use real QGIS results and a held, reviewed-response callback.
 
-Only the AI window/network entry is simulated. The dialog, raster analyses,
+Only the asynchronous AI/network entry is simulated. The dialog, raster analyses,
 surface recalculation, table, widget signals and output snapshot are real.
 """
 from copy import deepcopy
@@ -31,8 +31,9 @@ class AITableIntegrationTests(unittest.TestCase):
                            + 'Conclusión que requiere comprobación. '*20)
 
     def request(self):
-        with patch('caumax_consulta.ai_analysis.show_analysis',return_value='opened') as show:
-            self.assertEqual(self.dialog._show_ai_analysis(),'opened')
+        job = Mock()
+        with patch('caumax_consulta.ai_analysis.request_interpretations',return_value=job) as show:
+            self.assertIs(self.dialog._show_ai_analysis(),job)
         return show.call_args.kwargs['on_interpretations']
 
     def assert_empty(self):
@@ -62,9 +63,10 @@ class AITableIntegrationTests(unittest.TestCase):
         self.assertIs(dialog.analysis_header_button,dialog.table.horizontalHeader().analysis_button)
         def complete(*args,**kwargs):
             self.assertTrue(kwargs['on_interpretations'](self.rows))
-            return 'opened'
+            kwargs['on_finished']()
+            return Mock()
         for button in (dialog.analysis_header_button,dialog.analysis_ai_button):
-            with patch('caumax_consulta.ai_analysis.show_analysis',side_effect=complete) as show:
+            with patch('caumax_consulta.ai_analysis.request_interpretations',side_effect=complete) as show:
                 button.click()
             show.assert_called_once()
             self.assert_generated()
@@ -76,6 +78,64 @@ class AITableIntegrationTests(unittest.TestCase):
         dialog._refresh_ai_button()
         for button in (dialog.analysis_header_button,dialog.analysis_ai_button):
             self.assertTrue(button.isEnabled())
+
+    def test_real_request_updates_only_table_and_cleans_up_without_opening_a_window(self):
+        from qgis.PyQt.QtWidgets import QApplication, QDialog
+        from caumax_consulta import ai_analysis as ai
+        from test_ai_analysis import FakeReply, FakeManager, response, structured
+        dialog = self.dialog
+        ai._CACHE.clear()
+        ai._NEXT_REQUEST_AT = 0.
+        self.addCleanup(ai._CACHE.clear)
+        self.addCleanup(setattr,ai,'_NEXT_REQUEST_AT',0.)
+        reply = FakeReply()
+        manager = FakeManager(reply)
+        windows = {id(widget) for widget in QApplication.topLevelWidgets()}
+        measurements = [[dialog.table.item(row,col).text() for col in range(3)]
+                        for row in range(len(METRICS))]
+        with patch.object(ai.QTimer,'singleShot'), patch.object(ai,'QgsNetworkAccessManager',
+                SimpleNamespace(instance=lambda:manager)):
+            dialog.analysis_header_button.click()
+            request = dialog._ai_request
+            self.assertIsInstance(request,ai.InterpretationRequest)
+            self.assertNotIsInstance(request,QDialog)
+            self.assertFalse(dialog.analysis_header_button.isEnabled())
+            self.assertFalse(dialog.analysis_ai_button.isEnabled())
+            self.assertEqual({id(widget) for widget in QApplication.topLevelWidgets()},windows)
+            request.start()
+            self.assertEqual(len(manager.requests),1)
+            reply.buffer.extend(response(structured()))
+            reply.finished.emit()
+            self.assertIsNone(dialog._ai_request)
+            self.assertTrue(dialog.analysis_header_button.isEnabled())
+            self.assertTrue(dialog.analysis_ai_button.isEnabled())
+            self.assertTrue(all(dialog.table.item(row,3).text() for row in range(len(METRICS))))
+            self.assertEqual({id(widget) for widget in QApplication.topLevelWidgets()},windows)
+            # The upper button uses the same silent flow and a completed cache.
+            dialog.analysis_ai_button.click()
+            cached = dialog._ai_request
+            cached.start()
+            self.assertIsNone(dialog._ai_request)
+            self.assertEqual(len(manager.requests),1)
+        self.assertEqual(measurements,[[dialog.table.item(row,col).text() for col in range(3)]
+                                      for row in range(len(METRICS))])
+        self.helper.errors.assert_not_called()
+
+    def test_data_change_cancels_pending_network_and_ignores_late_status_and_rows(self):
+        dialog = self.dialog
+        with patch('caumax_consulta.ai_analysis.request_interpretations',return_value=Mock()) as factory:
+            request = dialog._show_ai_analysis()
+        callbacks = factory.call_args.kwargs
+        self.assertFalse(dialog.analysis_header_button.isEnabled())
+        dialog.quantiles_widget.period_spin.setValue(dialog.quantiles_widget.period_spin.value()+100)
+        request.cancel.assert_called_once()
+        request.deleteLater.assert_called_once()
+        self.assertIsNone(dialog._ai_request)
+        self.assertFalse(callbacks['on_interpretations'](self.rows))
+        callbacks['on_status']('Obsoleto')
+        callbacks['on_finished']()
+        self.assertNotEqual(dialog.analysis_header_button.toolTip(),'Obsoleto')
+        self.assert_empty()
 
     def test_initial_and_failed_analysis_leave_interpretation_cells_empty(self):
         from caumax_consulta.basin_dialog import BasinDialog
@@ -198,20 +258,24 @@ class AITableIntegrationTests(unittest.TestCase):
 
     def test_cache_callback_is_synchronous_and_error_or_partial_output_keeps_previous_text(self):
         dialog = self.dialog
+        cached_job = Mock()
         def cached(*args,**kwargs):
             self.assertTrue(kwargs['on_interpretations'](self.rows))
-            return 'cached'
-        with patch('caumax_consulta.ai_analysis.show_analysis',side_effect=cached):
-            self.assertEqual(dialog._show_ai_analysis(),'cached')
+            kwargs['on_finished']()
+            return cached_job
+        with patch('caumax_consulta.ai_analysis.request_interpretations',side_effect=cached):
+            self.assertIs(dialog._show_ai_analysis(),cached_job)
         self.assert_generated()
         callback = self.request()
         self.assert_generated()  # No callback on cancellation or network failure.
         for invalid in ({},dict(self.rows,kc=''),{key:value for key,value in self.rows.items() if key!='ic'}):
             self.assertFalse(callback(invalid))
             self.assert_generated()
-        with patch('caumax_consulta.ai_analysis.show_analysis',side_effect=RuntimeError('Sin respuesta')):
+        with patch('caumax_consulta.ai_analysis.request_interpretations',side_effect=RuntimeError('Sin respuesta')):
             dialog._show_ai_analysis()
-        self.helper.errors.assert_called_once()
+        self.helper.errors.assert_not_called()
+        self.assertIn('Sin respuesta',dialog.analysis_header_button.toolTip())
+        self.assertTrue(dialog.analysis_header_button.isEnabled())
         self.assert_generated()
 
     def test_loading_same_basin_with_other_saved_results_resets_ai(self):

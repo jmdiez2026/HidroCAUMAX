@@ -64,6 +64,10 @@ class MorphologyHeaderTests(unittest.TestCase):
                 right = left + self.header.sectionSize(3) - 1
                 self.assertTrue(button.isVisible())
                 self.assertEqual(button.text(), 'Análisis IA')
+                self.assertFalse(button.icon().isNull())
+                self.assertEqual(button.layoutDirection(), Qt.LeftToRight)
+                self.assertEqual(button.iconSize().width(), button.iconSize().height())
+                self.assertLessEqual(button.iconSize().height(), geometry.height() - 4)
                 self.assertIn('#174D78', button.styleSheet())
                 self.assertIs(button.parentWidget(), self.header.viewport())
                 self.assertEqual(geometry.top(), 0)
@@ -75,10 +79,20 @@ class MorphologyHeaderTests(unittest.TestCase):
                 title_metrics = QFontMetrics(self.header._title_font)
                 self.assertLessEqual(title_metrics.horizontalAdvance('Interpretación'), self.header._title_rect.width())
                 metrics = QFontMetrics(button.font())
-                self.assertGreaterEqual(geometry.width(), metrics.horizontalAdvance(button.text()) + 10)
+                self.assertGreaterEqual(geometry.width(), metrics.horizontalAdvance(button.text()) + 10 + button.iconSize().width() + 4)
                 self.assertGreaterEqual(geometry.height(), metrics.height() + 2)
                 self.assertEqual(self.header.font(), self.original_font)
                 self.assertEqual(self.table.font(), self.original_font)
+
+    def test_icon_resizes_with_compact_header_without_increasing_row_height(self):
+        self.header.setFixedHeight(20)
+        self.app.processEvents()
+        button = self.header.analysis_button
+        self.assertEqual(self.header.height(), 20)
+        self.assertEqual(button.height(), 20)
+        self.assertEqual(button.iconSize().height(), 16)
+        self.assertEqual(self.header._title_text, 'Interpretación')
+        self.assertLess(self.header._title_rect.right(), button.geometry().left())
 
     def test_button_emits_only_when_enabled_and_never_changes_table_values(self):
         spy = QSignalSpy(self.header.analysis_requested)
