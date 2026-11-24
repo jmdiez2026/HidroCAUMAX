@@ -2,6 +2,8 @@ name: Publicar complemento y repositorio QGIS
 
 on:
   push:
+    branches:
+      - 'release/v1.2.10'
     tags:
       - 'v*'
   workflow_dispatch:
@@ -32,7 +34,7 @@ jobs:
       - name: Obtener exactamente la etiqueta solicitada
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          ref: ${{ github.event_name == 'push' && github.ref == 'refs/heads/release/v1.2.10' && '876cea3d4d9656aca224b5aa45392ab3cf5f6e0f' || github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-python@v7
@@ -46,9 +48,52 @@ jobs:
         run: python scripts/prepare_taudem_bundle.py --verify src/caumax_consulta/vendor/taudem-5.5.0-win64.zip
       - name: Construir publicación
         env:
-          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ github.event_name == 'push' && github.ref == 'refs/heads/release/v1.2.10' && 'v1.2.10' || github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
           RELEASE_REPOSITORY: ${{ github.repository }}
         run: python scripts/build_release.py --output dist --tag "$RELEASE_TAG" --repository "$RELEASE_REPOSITORY"
+      - name: Crear o verificar la etiqueta de la versión preparada
+        if: github.event_name == 'push' && github.ref == 'refs/heads/release/v1.2.10'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          PUBLISHER_COMMIT: ${{ github.workflow_sha }}
+        run: |
+          PYTHONPATH="$GITHUB_WORKSPACE/scripts" python - <<'PY'
+          import os
+          from pathlib import Path
+          from publish_release import api, run, validate_bundle
+
+          repository = os.environ['RELEASE_REPOSITORY']
+          expected_commit = '876cea3d4d9656aca224b5aa45392ab3cf5f6e0f'
+          expected_tag = 'v1.2.10'
+          expected_digest = 'a2d2cf32566d14f919696920270bff6b99d5c2382fd765258effc96b0fd3ba96'
+          if repository != 'jmdiez2026/HidroCAUMAX':
+              raise RuntimeError('La publicación preparada pertenece a otro repositorio.')
+          if run(['git', 'rev-parse', 'HEAD']).stdout.strip() != expected_commit:
+              raise RuntimeError('El checkout no coincide con el código verificado.')
+          workflow_commit = os.environ['PUBLISHER_COMMIT']
+          run(['git', 'merge-base', '--is-ancestor', expected_commit, workflow_commit])
+          changed = run(['git', 'diff', '--name-only', expected_commit, workflow_commit]).stdout.splitlines()
+          if changed != ['.github/workflows/release.yml']:
+              raise RuntimeError('La preparación de publicación modifica archivos fuera del workflow.')
+          manifest, _ = validate_bundle(Path('dist'), repository)
+          if manifest['tag'] != expected_tag or manifest['version'] != '1.2.10':
+              raise RuntimeError('La versión no coincide con la publicación preparada.')
+          if manifest['sha256'] != expected_digest:
+              raise RuntimeError('El instalable no coincide con el ZIP verificado.')
+          endpoint = f'repos/{repository}/git/ref/tags/{expected_tag}'
+          reference = api(endpoint, missing_ok=True)
+          if reference is None:
+              run(['gh', 'api', '--method', 'POST', f'repos/{repository}/git/refs',
+                   '-f', f'ref=refs/tags/{expected_tag}', '-f', f'sha={expected_commit}'])
+              reference = api(endpoint)
+          target = reference['object']
+          while target['type'] == 'tag':
+              target = api(f'repos/{repository}/git/tags/{target["sha"]}')['object']
+          if target['type'] != 'commit' or target['sha'] != expected_commit:
+              raise RuntimeError('La etiqueta existente apunta a otro commit; no se sustituye.')
+          print('Etiqueta y paquete verificados para HidroCAUMAX 1.2.10.')
+          PY
       - name: Preparar publicador de la revisión del workflow
         env:
           PUBLISHER_COMMIT: ${{ github.workflow_sha }}
