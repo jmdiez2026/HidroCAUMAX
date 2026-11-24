@@ -1,3 +1,66 @@
+# HidroCAUMAX 1.2.10
+
+## CAUMAX como único complemento previo
+
+El delineado y las operaciones espaciales no dependen de Processing, SAGA, Whitebox ni de otro complemento. Se utilizan las bibliotecas propias de QGIS. En Windows de 64 bits, si la instalación de QGIS no incluye ejecutables GRASS, se utiliza automáticamente el **TauDEM integrado en HidroCAUMAX** para calcular las direcciones D8. No se requiere instalar ni activar otro plugin o motor por separado.
+
+La ruta de delineado utiliza únicamente **PitRemove y D8FlowDir**; no necesita preparar una red ni un umbral para delimitar la cuenca. Mantiene el análisis sobre el MDT original y la misma verificación del cierre y de la correspondencia espacial. GRASS sigue disponible cuando ya forma parte de QGIS, y una caché GRASS válida conserva su procedencia aunque su ejecutable original ya no esté presente. Las cachés y metadatos diferencian los motores. El bundle distribuido es para Windows de 64 bits; en Linux/macOS se usan los motores ya disponibles en esas instalaciones.
+
+La ruta alternativa se ha comprobado con el MDT25 oficial de la ubicación comunicada, bloqueando GRASS y las importaciones de Processing: **54,98375 km² y 87.974 celdas**, ejecutando sólo PitRemove y D8FlowDir. Un segundo cálculo reutiliza las direcciones; el SHA-256 del MDT original permanece idéntico. La prueba del motor se realizó en Linux con TauDEM real; el runtime Windows incluido se verifica por su manifiesto y no ha cambiado.
+
+## Borrar Delineado limpia el lienzo y las capas
+
+La limpieza elimina las divisorias, cursos y puntos roja y azul creados por HidroCAUMAX, incluidos los objetos gráficos temporales que permanecían visibles cuando sus capas ya habían desaparecido del listado. Los objetos se identifican por pertenencia explícita al complemento; se conservan las capas y objetos ajenos, incluida SeccionCierreCaumaxGIS. Se detiene el render anterior, se vacía su caché y se actualiza el lienzo.
+
+El borrado cancela cálculos y temporizadores pendientes antes de retirar la representación. Las respuestas tardías no vuelven a dibujar el resultado. El diálogo permanece abierto, conserva sus cálculos terminados y permite generar o ajustar de nuevo. El panel de Método racional participa en la misma limpieza sin cerrarse ni reanudar automáticamente el trabajo por un sondeo periódico.
+
+Reinicia QGIS después de actualizar para cargar todos los módulos de esta revisión y retirar también los objetos huérfanos de versiones antiguas que ya no tengan ninguna referencia identificable.
+
+## Correspondencia de las cuencas de 25 m y 5 m
+
+Al abrir un proyecto se conservan sus resultados guardados. Al volver a seleccionar explícitamente una resolución fina, incluso la que ya aparece activa, un resultado automático antiguo se comprueba contra la cuenca de referencia antes de reutilizarse. Se aprovechan el MDT y las direcciones almacenadas cuando son válidos. Si no están disponibles las fuentes necesarias, se comunica la incidencia y no se presenta una minicuenca histórica como cálculo comprobado. Las elecciones manuales explícitas mantienen su cierre.
+
+La verificación con el MDT25 oficial de IGN/CNIG en la ubicación comunicada reproduce exactamente las **17 celdas y 0,010625 km²** de la captura cuando se usa directamente la celda del clic. La selección de la cuenca correspondiente obtiene **55,206875 km² y 88.331 celdas**, frente a **53,50 km²** en la referencia CAUMAX de 500 m, sin alcanzar el borde del ráster. El resultado se ha comprobado desde la casilla de resolución del diálogo, tanto en un cálculo nuevo como después de guardar y reabrir el resultado antiguo de 17 celdas. La tabla muestra **55,21 km²** y el curso termina en el cierre utilizado.
+
+La ejecución con el **MDT5 oficial** en el mismo punto obtiene **54,7848 km² y 2.191.392 celdas**, también sin alcanzar el borde del ráster. La celda literal del clic aportaba sólo cuatro celdas (**0,0001 km²**). Ambos ensayos usan datos oficiales descargados y direcciones generadas por GRASS; no son terrenos sintéticos.
+
+El área de referencia no es un objetivo numérico: la superficie fina se calcula a partir de sus propias direcciones D8. La comprobación exige correspondencia espacial de las cuencas y una sección de drenaje compatible; no se copia ni se suaviza la geometría de 500 m para fabricar el resultado fino.
+
+## TauDEM conserva la correspondencia al cambiar de motor
+
+La generación ya no repite la asociación local antigua que podía elegir otra rama. En automático se verifica la sección desde el punto original usando las direcciones propias de TauDEM y se exige correspondencia tanto con la cuenca de referencia como con la cuenca fina aceptada. Esto permite resolver una diferencia de celda entre motores conservando la cuenca. Un cierre elegido manualmente permanece fijo. Si la correspondencia no se acredita, no se sustituye la cuenca ni se publica una red de otro punto.
+
+La caché diferencia las geometrías, el cierre aceptado, el CRS, la resolución y el modo manual. Cambiar manualmente el cierre sin cambiar el punto rojo no recupera productos del cierre anterior. Los metadatos registran la procedencia y las comprobaciones del cambio de motor; la cuenca se recalcula con las D8 resultantes.
+
+La ejecución completa con el MDT25 oficial y **TauDEM 5.5.0** produce **54,98375 km² y 87.974 celdas**, con 33 tramos de red. Se comprobaron las exportaciones de MDT, direcciones CAUMAX/ESRI y red SHP, y el guardado y reapertura de la sesión sin leer los rásteres. La cuenca TauDEM cubre el 98,63 % de la cuenca fina de GRASS y el 99,03 % de su propia superficie coincide con ella. Estos resultados documentan la diferencia entre motores manteniendo la correspondencia del drenaje.
+
+## Generación de capas dentro de Método racional
+
+El botón inferior **Generar capas resolución mejorada**, en **CAUMAX → Método Racional → Método racional**, despliega la sección completa debajo del diálogo. La sección deja de ocupar espacio en Cuenca hidrográfica y funciona sin abrir esa ventana. Incluye un selector propio de resolución MDT y utiliza el punto y las fuentes actuales del diálogo nativo, sin depender de un calculador anterior ni modificar los rásteres configurados de CAUMAX.
+
+La sección ocupa la anchura disponible; los tres productos tienen títulos centrados sobre sus botones. Los cuatro botones azules de generación/exportación aumentan al **110 % en anchura y altura**, sin crecer acumulativamente al redimensionar. En pantallas pequeñas, el cuerpo nativo y el panel permiten desplazamiento, manteniendo los botones nativos accesibles. Al recoger la sección se restituye la disposición original.
+
+Se mantienen el TauDEM real predeterminado, el umbral editable, Automático, Mostrar red y las exportaciones separadas de MDT TIFF, direcciones CAUMAX/ESRI TIFF y red SHP. Cambiar el punto invalida tareas y productos anteriores. Borrar Delineado retira las capas generadas y permite volver a generar explícitamente.
+
+## Ajustes de presentación
+
+- Gráficos Qci/T y Pd/T: altura al **90 %**, manteniendo etiquetas, graduaciones y fuentes. No se altera el tamaño de las figuras exportadas al informe.
+- Botón de precipitación: anchura al **110 %**, con el texto en una línea y la misma altura.
+- Resultado Pd(T): media y mediana en la primera línea; Máx, Mín y Desv. típ. espacial en la segunda.
+- P₀: media y nota de β en la primera línea; mediana, máximo, mínimo y desviación típica en la segunda, a la derecha del botón.
+- Tabla de caudales: filas ajustadas al alto del texto sin reducir su fuente.
+- Se retira el recuadro de observaciones bajo la tabla morfológica. Las observaciones y los datos de cálculo se conservan para el informe.
+- Se incluyen los cambios de IA de la 1.2.9: relleno directo de Interpretación sin abrir otro diálogo, icono blanco sobre azul y botón superior alineado con el título Resolución MDT.
+
+## Verificación
+
+**790 pruebas: 782 correctas, 8 omitidas, sin fallos ni errores.** Se ejecutaron con QGIS 3.40.6, GDAL 3.10.3, GRASS 8.4.1 y TauDEM 5.5.0 en Linux. Las fuentes permanecieron idénticas durante la ejecución y QGIS cerró sin tareas pendientes. Las omisiones son siete pruebas antiguas que requieren CAUMAX en un perfil de usuario y una reproducción con datos climáticos no disponibles. Las pruebas nuevas del diálogo nativo y las comprobaciones reales de los MDT sí se ejecutaron. Se verificó también la integridad de los **240 archivos** del runtime Windows incluido.
+
+El progreso del recálculo de superficie convierte correctamente el número de celdas recorridas a porcentajes entre 0 y 100; no cambia las métricas.
+
+Pruebas con Qt/QGIS real, GDAL, GRASS y TauDEM. Incluyen limpieza de tres generaciones de objetos del lienzo con el árbol de capas ya vacío, conservación de objetos ajenos, tareas tardías, recalculado de una cuenca histórica, selección manual, cambio de CRS, exportación, persistencia y redimensionamiento del diálogo nativo. La integración de IA utiliza respuestas simuladas; no se atribuye una nueva comprobación del servicio externo. Los datos geográficos descargados y los registros locales de las pruebas no se incorporan al complemento.
+
+
 # HidroCAUMAX 1.2.9
 
 ## Análisis IA sin ventana adicional

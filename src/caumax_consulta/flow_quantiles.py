@@ -304,30 +304,31 @@ def sample_quantiles(query, paths=None):
         input_flow=_finite(query.flow,0),extrapolate=True,method=METHOD)
 
 
-def render_quantile_plots(snapshot,width=1100,height=500,font_family=None):
+def render_quantile_plots(snapshot,width=1100,height=500,font_family=None,*,fit_height=False):
     """Render the same responsive, integer-labelled Qci/T plots for screen and PDF."""
     from .quantile_graphics import render
     state=_normalise(snapshot)
     return render(state,_known(state['flows']),
                   estimate_flow(state['input_period'],state['flows'],state['extrapolate']),
                   estimate_period(state['input_flow'],state['flows'],state['extrapolate']),
-                  width,height,font_family)
+                  width,height,font_family,fit_height=fit_height)
 
 
 class _Plots(QWidget):
     def __init__(self,parent):
-        super().__init__(parent);self.state=None;self.setMinimumHeight(360)
+        super().__init__(parent);self.state=None;self.setMinimumHeight(324)
         policy=QSizePolicy(QSizePolicy.Expanding,QSizePolicy.Preferred)
         policy.setHeightForWidth(True);self.setSizePolicy(policy)
-    def sizeHint(self):return QSize(640,360)
+    def sizeHint(self):return QSize(640,324)
     def heightForWidth(self,width):
         base=680 if width<580 else 360
-        if self.state is None:return base
+        if self.state is None:return round(base*.9)
         from .quantile_graphics import geometry
         state=self.state
-        return geometry(state,_known(state['flows']),
+        height=geometry(state,_known(state['flows']),
             estimate_flow(state['input_period'],state['flows'],state['extrapolate']),
             estimate_period(state['input_flow'],state['flows'],state['extrapolate']),width,base)['height']
+        return round(height*.9)
     def resizeEvent(self,event):
         super().resizeEvent(event)
         height=self.heightForWidth(self.width())
@@ -336,7 +337,7 @@ class _Plots(QWidget):
     def paintEvent(self,event):
         painter=QPainter(self)
         if self.state is not None:
-            png=render_quantile_plots(self.state,max(320,self.width()),max(self.heightForWidth(self.width()),self.height()))
+            png=render_quantile_plots(self.state,max(320,self.width()),max(self.heightForWidth(self.width()),self.height()),fit_height=True)
             painter.drawImage(self.rect(),QImage.fromData(png))
         else:painter.fillRect(self.rect(),QColor('white'))
         painter.end()
@@ -353,10 +354,13 @@ class FlowQuantileWidget(QWidget):
         self.table.setHorizontalHeader(CompactTableHeader(self.table))
         self.table.setHorizontalHeaderLabels(['Periodo de retorno T (años)','Caudal máximo instantáneo (Qci) [m3/s]'])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Fixed)
-        self.table.verticalHeader().setDefaultSectionSize(24)
+        row_height=max(self.table.fontMetrics().height(),self.table.fontMetrics().lineSpacing())+2
+        self.table.verticalHeader().setMinimumSectionSize(row_height)
+        self.table.verticalHeader().setDefaultSectionSize(row_height)
+        self.table.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
         self.table.verticalHeader().setVisible(False);self.table.setAlternatingRowColors(False)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.table.setFixedHeight(self.table.horizontalHeader().sizeHint().height()+6*24+2*self.table.frameWidth())
+        self.table.setFixedHeight(self.table.horizontalHeader().sizeHint().height()+6*row_height+2*self.table.frameWidth())
         self.table.setStyleSheet('QTableWidget { background-color:white; alternate-background-color:white; }')
         self._table_timer=QTimer(self);self._table_timer.setSingleShot(True)
         self._table_timer.timeout.connect(self._fit_table_columns)
@@ -403,6 +407,20 @@ class FlowQuantileWidget(QWidget):
         width=self.table.viewport().width()
         self.table.setColumnWidth(0,round(width*.40))
         self.table.setColumnWidth(1,width-self.table.columnWidth(0))
+        metrics=self.table.fontMetrics()
+        minimum=max(metrics.height(),metrics.lineSpacing())+2
+        self.table.verticalHeader().setMinimumSectionSize(minimum)
+        self.table.verticalHeader().setDefaultSectionSize(minimum)
+        for row in range(self.table.rowCount()):
+            height=minimum
+            for column in range(self.table.columnCount()):
+                item=self.table.item(row,column)
+                if item is not None:
+                    bounds=metrics.boundingRect(0,0,max(1,self.table.columnWidth(column)-6),1000,
+                                                Qt.AlignCenter|Qt.TextWordWrap,item.text())
+                    height=max(height,bounds.height()+2)
+            self.table.setRowHeight(row,height)
+        self.table.horizontalHeader()._fit_height()
 
     def restore(self,snapshot):
         state=_normalise(snapshot)

@@ -233,8 +233,9 @@ class ResolutionController(QObject):
         self.engine={}
         self.requested_key=None
         self.outlet_selection_context=None
-        # Only current-run automatic variants are invalidated when the coarse
-        # outlet changes. Portable snapshots and explicit manual choices stay put.
+        # Restoring a snapshot never recalculates it. A later explicit selection
+        # verifies automatic fine variants against the current coarse reference;
+        # only explicit manual choices may bypass that automatic correspondence.
         self._automatic_references={}
         self._set_base(base_analysis,base_query)
         self.active_key=self._base_key
@@ -363,8 +364,20 @@ class ResolutionController(QObject):
             variant=self.variants[key]
             self._on_result(key,variant['analysis'],variant['query'])
             return True
+        if (key in self.variants and self._needs_reference_rebuild(key)
+                and key not in self._option_objects and self._cached_sources_available(key)):
+            self.cancel()
+            self.requested_key=key
+            self._start_cached_refinement(key,'select')
+            return True
         if option is None or not option['available'] or key not in self._option_objects:
-            self._on_error('MDT '+key+' m: '+(option['status'] if option else 'resolución desconocida'))
+            if key in self.variants and self._needs_reference_rebuild(key):
+                message=('Los resultados guardados necesitan comprobarse con la cuenca de referencia. '
+                         'Sus rásteres no están disponibles; consulta las resoluciones para recalcularlos. '
+                         'No se valida automáticamente la divisoria guardada.')
+            else:
+                message=option['status'] if option else 'resolución desconocida'
+            self._on_error('MDT '+key+' m: '+message)
             return False
         self.cancel()
         self.requested_key=key
@@ -449,9 +462,65 @@ class ResolutionController(QObject):
         raw=bytes(geometry or b'')+bytes(analysis.main_course_wkb or b'')+str(analysis.crs_wkt).encode('utf-8')
         return hashlib.sha256(raw).hexdigest()
 
+    def needs_reference_check(self,key):
+        """Whether an explicit selection must verify a saved automatic variant."""
+        return self._needs_reference_rebuild(str(key))
+
     def _needs_reference_rebuild(self,key):
-        signature=self._automatic_references.get(key)
-        return signature is not None and signature!=self._reference_signature()
+        variant=self.variants.get(key)
+        if variant is None:return False
+        reference,_=self._current_reference()
+        if float(key)>=min(reference.cell_width,reference.cell_height):return False
+        snap=(variant['analysis'].diagnostics or {}).get('outlet_snap') or {}
+        manual=bool((variant.get('metadata') or {}).get('manual_outlet_selected') is True
+                    or (snap.get('method')=='manual_cell_d8'
+                        and snap.get('explicit_user_choice') is True))
+        if manual:return False
+        # An absent signature is an unverified restored/legacy result, not a
+        # successful reference check. Restore itself still displays it verbatim.
+        return self._automatic_references.get(key)!=self._reference_signature()
+
+    def _cached_sources_available(self,key):
+        query=self.variants[key]['query']
+        return Path(query.dem_path).is_file() and Path(query.directions_path).is_file()
+
+    def _start_cached_refinement(self,key,kind):
+        """Recheck an explicitly selected saved fine variant on its native DEM.
+
+        The existing DEM engine validates/reuses the actual D8 grid and always
+        reruns outlet correspondence. Cached files never certify a prior outlet.
+        No network/engine work happens merely because a project was opened.
+        """
+        variant=self.variants[key]
+        query=variant['query']
+        reference_analysis,reference_geometry=self._current_reference()
+        reference=dict(geometry_wkb=reference_geometry,
+            main_course_wkb=reference_analysis.main_course_wkb,
+            crs_wkt=reference_analysis.crs_wkt,cell_width=reference_analysis.cell_width,
+            cell_height=reference_analysis.cell_height)
+        source_wkt,x,y=self._query_crs,self._query_x,self._query_y
+        snap_options=dict(reference_area_m2=self.reference_area_m2,
+            reference_cell_width=float(reference_analysis.cell_width),
+            reference_cell_height=float(reference_analysis.cell_height),
+            snap_enabled=False,refinement_reference=reference,
+            snap_radius_m=float(self.snap_radius_m),
+            snap_minimum_fraction=float(self.snap_minimum_fraction))
+        def operation(cancelled,publish):
+            path=Path(query.dem_path)
+            native_x,native_y=_dem_point(path,source_wkt,x,y)
+            result=_analyze_dem(path,native_x,native_y,Path(query.directions_path).parent,
+                cancelled,lambda p:publish('Comprobando la cuenca guardada de '+key+' m',p),
+                **snap_options)
+            _check(cancelled)
+            metadata=dict(getattr(result,'metadata',{}) or {})
+            metadata.update(native_resolution=float(key),saved_variant_reference_rechecked=True)
+            snap=(result.analysis.diagnostics or {}).get('outlet_snap')
+            if snap:metadata['outlet_snap']=deepcopy(snap)
+            return dict(analysis=result.analysis,dem_path=str(result.dem_path),
+                directions_path=str(result.directions_path),metadata=metadata)
+        self._on_status('Comprobando la correspondencia de la cuenca guardada de '+key+' m…')
+        self._start('CAUMAX: verificar cuenca guardada de '+key+' m',operation,kind,key)
+        self._task.reference_signature=self._reference_signature()
 
     def ensure_all(self,on_ready):
         if self._disposed:return False
@@ -472,7 +541,11 @@ class ResolutionController(QObject):
             return
         key=self._ensure_queue.pop(0)
         if key not in self._option_objects:
-            self._failed_key(key,'No se conservan metadatos de descarga para esta resolución.')
+            if (key in self.variants and self._needs_reference_rebuild(key)
+                    and self._cached_sources_available(key)):
+                self._start_cached_refinement(key,'ensure')
+                return
+            self._failed_key(key,'No se conservan rásteres verificables ni metadatos de descarga para esta resolución.')
             self._next_bulk()
             return
         self._start_build(key,'ensure')

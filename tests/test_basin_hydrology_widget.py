@@ -296,7 +296,7 @@ class BasinHydrologyWidgetTests(unittest.TestCase):
         self.assertRegex(coverage, r"25(?:[,.]0+)?\s*%")
         self.assertTrue(self.widget.coverage_label.isHidden())
         self.assertEqual(self.widget.p0_statistics_label.text(),
-            'Mediana: 12,50 mm · Máx: 20,00 mm · Mín: 5,00 mm\nDesv. típ: 3,00 mm')
+            'Mediana: 12,50 mm · Máx: 20,00 mm · Mín: 5,00 mm · Desv. típ: 3,00 mm')
         table = self.widget.rainfall_table
         self.assertEqual(table.rowCount(), 6)
         self.assertEqual([table.item(row, 0).text() for row in range(6)],
@@ -345,8 +345,8 @@ class BasinHydrologyWidgetTests(unittest.TestCase):
             self.assertIn("P₀ se presenta", report["method_note"])
             self.assertIn("Extrapolación permitida" if extrapolate else
                           "Sin extrapolación fuera", report["method_note"])
-        self.assertIn("Máx: 12 mm · Mín: 8 mm", self.widget.forward_label.text())
-        self.assertIn("Desv. típ. espacial: 1 mm", self.widget.forward_label.text())
+        self.assertIn("Máx: 12 mm · Mín: 8 mm · Desv. típ. espacial: 1 mm", self.widget.forward_label.text())
+        self.assertEqual(self.widget.forward_label.text().count('<br/>'),1)
         self.assertIn("Máximo: 12 mm · Mínimo: 8 mm", description["forward_text"])
         self.assertIn("Desviación típica espacial: 1 mm", description["forward_text"])
 
@@ -363,13 +363,13 @@ class BasinHydrologyWidgetTests(unittest.TestCase):
                 self.widget.resize(width, 1700)
                 self.widget.show()
                 QTest.qWait(50)
-                self.assertEqual(self.widget.width(), width)
+                self.assertGreaterEqual(self.widget.width(), width)
                 button = self.widget.rainfall_button
                 self.assertEqual(button.text(),
                     "Calcular Precipitación diaria máxima anual MEDIA (mm)")
                 metrics = button.fontMetrics()
-                self.assertGreaterEqual(button.width(), metrics.horizontalAdvance(button.text())+4)
-                self.assertGreaterEqual(button.height(), metrics.height()+2)
+                self.assertEqual(button.width(), round((metrics.horizontalAdvance(button.text())+4)*1.10))
+                self.assertEqual(button.height(), max(26,max(metrics.height(),metrics.lineSpacing())+6))
                 self.assertLessEqual(button.geometry().right(), self.widget.rainfall_group.width()-1)
                 table = self.widget.rainfall_table
                 self.assertEqual(table.rowCount(), 6)

@@ -266,7 +266,8 @@ class OutletSelectionDialog(QDialog):
             transform = QgsCoordinateTransform(self.crs,self.canvas.mapSettings().destinationCrs(),QgsProject.instance())
             point = transform.transform(QgsPointXY(*self._candidate))
             if self._marker is None:
-                self._marker = QgsVertexMarker(self.canvas)
+                from .delineation_cleanup import register_overlay
+                self._marker = register_overlay(self.canvas, QgsVertexMarker(self.canvas))
                 self._marker.setColor(QColor(0,70,180))
                 self._marker.setIconType(QgsVertexMarker.ICON_CROSS)
                 self._marker.setIconSize(14)
@@ -309,13 +310,9 @@ class OutletSelectionDialog(QDialog):
                 self.reject()
 
     def _remove_marker(self):
+        from .delineation_cleanup import remove_overlay
         marker,self._marker = self._marker,None
-        if marker is not None:
-            try:
-                self.canvas.scene().removeItem(marker)
-                sip.delete(marker)
-            except RuntimeError:
-                pass
+        remove_overlay(marker)
 
     def _stop_picking(self, restore=True):
         self._picking = False

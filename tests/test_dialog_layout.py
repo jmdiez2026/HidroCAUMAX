@@ -29,11 +29,15 @@ class DialogLayoutTests(unittest.TestCase):
         self.dialog.show()
         self.fixture.app.processEvents()
 
-    def test_notes_are_below_morphology_and_compact_export_is_immediately_after_degree(self):
+    def test_diagnostic_notes_stay_out_of_layout_and_export_is_immediately_after_degree(self):
         dialog = self.dialog
         body = dialog.body_scroll.widget().layout()
-        self.assertEqual(body.indexOf(dialog.status), body.indexOf(dialog.morphology_group) + 1)
-        self.assertLess(body.indexOf(dialog.status), body.indexOf(dialog.hypsometry_widget))
+        # Diagnostics remain available to reports and saved results; the user
+        # removed their separate notes box from the visible dialog.
+        self.assertEqual(body.indexOf(dialog.status), -1)
+        self.assertTrue(dialog.status.isHidden())
+        self.assertTrue(dialog.status.text())
+        self.assertLess(body.indexOf(dialog.morphology_group), body.indexOf(dialog.hypsometry_widget))
         self.assertTrue(dialog.status.isReadOnly())
         button = dialog.export_button
         row = button.parentWidget().layout().itemAt(0).layout()

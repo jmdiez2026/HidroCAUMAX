@@ -32,6 +32,25 @@ class SurfaceTask(QgsTask):
             self.setProgress(percent)
             self.update.emit(self.generation, text, float(percent))
 
+    def _publish_terrain_progress(self, value):
+        """Convert the terrain callback's units into the first work phase.
+
+        Native delineation reports visited CELL COUNTS. When returning from
+        a smoothed surface, its recorded original count is the denominator,
+        not the number of cells intersecting that smaller/larger polygon.
+        A supplied surface instead reports its row scan on a 0--40 scale
+        (terrain_surface.surface_window). Both scans occupy 0--20% here;
+        the remaining morphology/hipsometry work completes the phase at 30%.
+        """
+        if self.surface_wkb is None:
+            original = self.base.diagnostics.get('analysis_surface') or {}
+            total = original.get('original_cell_count', self.base.cell_count)
+            fraction = float(value) / max(1, total)
+        else:
+            fraction = float(value) / 40.0
+        self.publish('Recalculando morfología e hipsometría…',
+                     20.0 * max(0.0, min(1.0, fraction)))
+
     def run(self):
         try:
             from .terrain import analyze_basin
@@ -41,7 +60,7 @@ class SurfaceTask(QgsTask):
             analysis = analyze_basin(self.query.directions_path, self.query.dem_path,
                 self.base.outlet_x, self.base.outlet_y, surface_wkb=self.surface_wkb,
                 cancelled=self.isCanceled,
-                progress=lambda p: self.publish('Recalculando morfología e hipsometría…', p*.3))
+                progress=self._publish_terrain_progress)
             diagnostics = dict(self.base.diagnostics)
             for key in ('analysis_surface', 'terrain_valid_area_m2', 'terrain_weighting'):
                 diagnostics.pop(key, None)
@@ -56,6 +75,7 @@ class SurfaceTask(QgsTask):
             notes = tuple(dict.fromkeys((*analysis.notes,review))) if review else analysis.notes
             analysis = replace(analysis, selected_x=self.base.selected_x, selected_y=self.base.selected_y,
                                diagnostics=diagnostics, notes=notes)
+            self.publish('Recalculando morfología e hipsometría…', 30)
             p0 = basin_raster_mean(analysis, self.sources.get('p0', ''), statistics=True,
                 cancelled=self.isCanceled, progress=lambda p: self.publish('Recalculando P₀…', 30+p*.1))
             rainfall = {}

@@ -7,6 +7,7 @@ from .caumax_bridge import CaumaxBridge
 from .basin_dialog import BasinDialog
 from .rational_export import RationalExportBridge
 from .rational_inputs import RationalInputsBridge
+from .rational_layers_bridge import RationalLayersBridge
 from .visible_dem import VisibleDemController
 from .update_ui import UpdateNotifier
 from .delineation_cleanup import clear_delineations
@@ -24,6 +25,7 @@ class NativeCaumaxPlugin(QObject):
         self._bridge = CaumaxBridge(iface, self._open_basin, self._new_query_started)
         self._rational = RationalExportBridge(iface)
         self._rational_inputs = RationalInputsBridge(iface)
+        self._rational_layers = RationalLayersBridge(iface)
         self._visible_dem = VisibleDemController(iface, self)
         self._updates = UpdateNotifier(iface, self)
 
@@ -75,6 +77,7 @@ class NativeCaumaxPlugin(QObject):
             self._bridge.start()
             self._rational.start()
             self._rational_inputs.start()
+            self._rational_layers.start()
             self._visible_dem.start()
             self._updates.check()
         else:
@@ -83,6 +86,7 @@ class NativeCaumaxPlugin(QObject):
             self._bridge.stop()
             self._rational.stop()
             self._rational_inputs.stop()
+            self._rational_layers.stop()
             self._visible_dem.stop()
 
     @staticmethod
@@ -141,6 +145,7 @@ class NativeCaumaxPlugin(QObject):
         self._bridge.stop()
         self._rational.stop()
         self._rational_inputs.stop()
+        self._rational_layers.stop()
         self._visible_dem.stop()
         if hasattr(self, 'action'):
             try:

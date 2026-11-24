@@ -554,7 +554,7 @@ class DemHydrologyTests(unittest.TestCase):
             self.analyze(path, 1, 1, cancelled=lambda: True)
         self.assertEqual(list(self.cache.iterdir()), [])
 
-    @unittest.skipUnless(hydro.availability_engine()["available"], "GRASS no instalado")
+    @unittest.skipUnless(hydro._grass_availability()["available"], "GRASS no instalado")
     def test_long_host_temp_path_and_hash_exclamation_use_short_isolated_job(self):
         row, col = np.indices((7, 9))
         path = self.raster(200 - col * 2 + np.abs(row - 3) * 4, resolution=25)
@@ -617,7 +617,7 @@ class DemHydrologyTests(unittest.TestCase):
         self.assertTrue(result["worst_case"])
         self.assertEqual(list(self.cache.iterdir()), [])
 
-    @unittest.skipUnless(hydro.availability_engine()["available"], "GRASS no instalado")
+    @unittest.skipUnless(hydro._grass_availability()["available"], "GRASS no instalado")
     def test_real_grass_native_2m_grid_analysis_and_cache_reuse(self):
         row, col = np.indices((7, 9))
         data = 200 - col * 2 + np.abs(row - 3) * 4
@@ -652,33 +652,34 @@ class DemHydrologyTests(unittest.TestCase):
         self.assertEqual((again.selected_x, again.selected_y), (x + 0.9, y - 0.9))
         self.assertEqual((again.outlet_x, again.outlet_y), (x, y))
 
-    @unittest.skipUnless(hydro.availability_engine()["available"], "GRASS no instalado")
-    def test_snapped_analysis_retains_original_point_and_reuses_accumulation(self):
+    @unittest.skipUnless(hydro._grass_availability()["available"], "GRASS no instalado")
+    def test_conflicting_legacy_snap_retains_original_point_and_reuses_accumulation(self):
         row, col = np.indices((7, 9))
         path = self.raster(200 - col * 2 + np.abs(row - 3) * 4, resolution=2)
         x, y = self.point(path, 2, 5)
         progress = []
-        result = self.analyze(path, 2, 5, reference_area_m2=80,
-                              reference_cell_width=500, reference_cell_height=500,
-                              snap_enabled=True, progress=progress.append)
-        snap = result.diagnostics["outlet_snap"]
-        self.assertEqual((result.selected_x, result.selected_y), (x, y))
-        self.assertEqual((result.outlet_x, result.outlet_y), (snap["snapped_x"], snap["snapped_y"]))
-        self.assertEqual(snap["candidate_upstream_area_m2"], result.area_m2)
-        self.assertGreaterEqual(result.area_m2, 72)
-        self.assertEqual(snap["method"], "upstream_section_d8")
-        self.assertEqual(snap["status"], "snapped")
-        self.assertEqual(snap["candidate_touches_boundary"], result.touches_boundary)
+        # This click has an incoming D8 branch. The current branch protection
+        # requires an explicit choice instead of the historical lateral snap.
+        with self.assertRaises(hydro.OutletSelectionRequired) as caught:
+            self.analyze(path, 2, 5, reference_area_m2=80,
+                         reference_cell_width=500, reference_cell_height=500,
+                         snap_enabled=True, progress=progress.append)
+        context = caught.exception.selection_context
+        self.assertIn('ramal', str(caught.exception))
+        self.assertEqual((context['original_x'], context['original_y']), (x, y))
+        self.assertTrue(Path(context['directions_path']).is_file())
         self.assertEqual(progress, sorted(progress))
-        self.assertEqual(progress[-1], 100)
-        self.assertTrue(Path(result.metadata["accumulation_path"]).is_file())
+        self.assertTrue(Path(context['metadata']['accumulation_path']).is_file())
         with patch.object(hydro, "_flow_accumulation", side_effect=AssertionError("Accumulation must be cached")):
-            again = self.analyze(path, 2, 5, reference_area_m2=80,
-                                  reference_cell_width=500, reference_cell_height=500, snap_enabled=True)
-        self.assertTrue(again.metadata["accumulation_cache_reused"])
-        self.assertEqual(again.diagnostics["outlet_snap"], snap)
+            with self.assertRaises(hydro.OutletSelectionRequired) as repeated:
+                self.analyze(path, 2, 5, reference_area_m2=80,
+                             reference_cell_width=500, reference_cell_height=500, snap_enabled=True)
+        again = repeated.exception.selection_context
+        self.assertTrue(again['metadata']['accumulation_cache_reused'])
+        self.assertEqual(again['directions_path'], context['directions_path'])
+        self.assertEqual((again['original_x'], again['original_y']), (x, y))
 
-    @unittest.skipUnless(hydro.availability_engine()["available"], "GRASS no instalado")
+    @unittest.skipUnless(hydro._grass_availability()["available"], "GRASS no instalado")
     def test_cancelling_running_grass_kills_private_session_and_publishes_no_cache(self):
         path = self.raster(np.ones((3, 3)))
         started = time.monotonic()
@@ -690,7 +691,7 @@ class DemHydrologyTests(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 10)
         self.assertEqual(list(self.cache.iterdir()), [])
 
-    @unittest.skipUnless(hydro.availability_engine()["available"], "GRASS no instalado")
+    @unittest.skipUnless(hydro._grass_availability()["available"], "GRASS no instalado")
     def test_real_grass_depression_routes_out_without_replacing_original_low_elevation(self):
         values = np.full((9, 9), 100.0)
         values[1:-1, 1:-1] = 20
@@ -717,7 +718,7 @@ class DemHydrologyTests(unittest.TestCase):
         self.assertIn("original DEM", result.metadata["elevation_source"])
         self.assertEqual(result.selected_x, self.point(path, 4, 8)[0])
 
-    @unittest.skipUnless(hydro.availability_engine()["available"], "GRASS no instalado")
+    @unittest.skipUnless(hydro._grass_availability()["available"], "GRASS no instalado")
     def test_real_grass_flat_has_finite_acyclic_drainage_and_no_invented_tc(self):
         values = np.full((7, 7), 100.0)
         values[3, 6] = 99

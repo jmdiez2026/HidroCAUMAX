@@ -15,9 +15,12 @@ import numpy as np
 from osgeo import gdal
 from qgis.PyQt import sip
 from qgis.PyQt.QtCore import QTimer
-from qgis.PyQt.QtWidgets import QDialog
+from qgis.PyQt.QtGui import QColor
+from qgis.PyQt.QtTest import QTest
+from qgis.PyQt.QtWidgets import QDialog, QWidget
 from qgis.core import (QgsApplication, QgsCoordinateReferenceSystem, QgsGeometry,
-                       QgsProject, QgsRasterLayer, QgsRectangle, QgsVectorLayer)
+                       QgsPointXY, QgsProject, QgsRasterLayer, QgsRectangle, QgsVectorLayer, QgsWkbTypes)
+from qgis.gui import QgsRubberBand, QgsVertexMarker
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from caumax_consulta import delineation_cleanup as cleanup
@@ -313,12 +316,126 @@ class DelineationCleanupDialogTests(unittest.TestCase):
         self.dialog._task = task
         cleanup.clear_delineations()
         self.assertFalse(self.dialog._disposed)
+        self.assertTrue(task.isCanceled())
+        self.assertIsNone(self.dialog._task)
         with patch.object(self.dialog, '_setup_resolutions'):
             self.dialog._completed(task, True)
         self.assertIs(self.dialog.analysis, task.result)
         self.assertTrue(self.dialog._delineation_cleared)
         self.assertIsNone(self.dialog._marker)
         self.assertFalse(owned_ids(self.fixture.project))
+
+    def test_real_canvas_sweeps_all_owned_generations_and_keeps_foreign_objects(self):
+        canvas = self.fixture.canvas
+        canvas.setExtent(QgsRectangle(499950, 4699800, 500250, 4700100))
+        canvas.resize(400, 400)
+        canvas.show()
+        self.dialog._preview()
+        current = [getattr(self.dialog, name, None) for name in cleanup.PREVIEW_ATTRIBUTES]
+        current = [item for item in current if item is not None]
+        self.assertTrue(current)
+        previous = []
+        for generation in range(3):
+            polygon = QgsRubberBand(canvas, QgsWkbTypes.PolygonGeometry)
+            polygon.setColor(QColor('red'))
+            polygon.setToGeometry(QgsGeometry.fromRect(QgsRectangle(500000, 4699900, 500100, 4700000)), None)
+            course = QgsRubberBand(canvas, QgsWkbTypes.LineGeometry)
+            course.setColor(QColor('blue'))
+            course.setToGeometry(QgsGeometry.fromWkt('LINESTRING(500025 4699925,500075 4699975)'), None)
+            marker = QgsVertexMarker(canvas)
+            marker.setCenter(QgsPointXY(500025, 4699925))
+            marker.setColor(QColor('red'))
+            for item in (polygon, course, marker):
+                cleanup.register_overlay(canvas, item)
+                previous.append(item)
+        foreign_rubber = QgsRubberBand(canvas, QgsWkbTypes.LineGeometry)
+        foreign_rubber.setColor(QColor('blue'))
+        foreign_rubber.setToGeometry(QgsGeometry.fromWkt('LINESTRING(500005 4699905,500095 4699995)'), None)
+        foreign_marker = QgsVertexMarker(canvas)
+        foreign_marker.setColor(QColor('red'))
+        foreign_marker.setCenter(QgsPointXY(500050, 4699950))
+        user_layer = QgsVectorLayer('LineString?crs=EPSG:25830', 'SeccionCierreCaumaxGIS', 'memory')
+        self.fixture.project.addMapLayer(user_layer)
+        canvas.setLayers([user_layer] + list(self.fixture.project.mapLayers().values()))
+        canvas.refresh()
+        QTest.qWait(50)
+        # Reproduce the reported screen: the layer tree is already clean,
+        # while red/blue canvas objects remain independently of those layers.
+        cleanup.clear_delineation_layers()
+        self.assertFalse(owned_ids(self.fixture.project))
+        self.assertTrue(any(item.isVisible() for item in current + previous))
+        with patch.object(canvas, 'stopRendering', wraps=canvas.stopRendering) as stop, \
+                patch.object(canvas, 'clearCache', wraps=canvas.clearCache) as clear_cache, \
+                patch.object(canvas, 'refresh', wraps=canvas.refresh) as refresh:
+            self.dialog.clear_delineation_button.click()
+        stop.assert_called()
+        clear_cache.assert_called()
+        refresh.assert_called()
+        self.fixture.app.processEvents()
+        self.assertFalse(self.dialog._disposed)
+        self.assertFalse(owned_ids(self.fixture.project))
+        for item in current + previous:
+            self.assertTrue(sip.isdeleted(item))
+        self.assertIs(self.fixture.project.mapLayer(user_layer.id()), user_layer)
+        for item in (foreign_rubber, foreign_marker):
+            self.assertFalse(sip.isdeleted(item))
+            self.assertIs(item.scene(), canvas.scene())
+        self.dialog._preview()
+        self.dialog._display_analysis()
+        self.fixture.app.processEvents()
+        self.assertFalse(any(item.data(cleanup.OVERLAY_OWNER_ROLE) == cleanup.OVERLAY_OWNER
+                             for item in canvas.scene().items()))
+        cleanup.remove_overlay(foreign_rubber)
+        cleanup.remove_overlay(foreign_marker)
+
+    def test_current_native_query_marker_is_removed_without_touching_another_query(self):
+        class MaxFlowDialog(QDialog):
+            pass
+        MaxFlowDialog.__module__ = '_cleanup_native.maxflowdialog'
+        parent = MaxFlowDialog()
+        other = MaxFlowDialog()
+        self.addCleanup(parent.deleteLater)
+        self.addCleanup(other.deleteLater)
+        parent.marker = QgsVertexMarker(self.fixture.canvas)
+        parent.marker.setCenter(QgsPointXY(500062.5, 4699937.5))
+        other.marker = QgsVertexMarker(self.fixture.canvas)
+        other.marker.setCenter(QgsPointXY(500080, 4699980))
+        original, foreign = parent.marker, other.marker
+        self.dialog.setParent(parent)
+        cleanup.register_dialog(self.dialog)
+        self.dialog.clear_delineation_button.click()
+        self.assertIsNone(parent.marker)
+        self.assertTrue(sip.isdeleted(original))
+        self.assertIs(other.marker, foreign)
+        self.assertFalse(sip.isdeleted(foreign))
+        # Native updatePoint can now create another marker without a deleted
+        # wrapper remaining in its attribute.
+        parent.marker = QgsVertexMarker(self.fixture.canvas)
+        self.assertFalse(sip.isdeleted(parent.marker))
+        cleanup.remove_overlay(parent.marker)
+        cleanup.remove_overlay(other.marker)
+        parent.marker = other.marker = None
+        self.dialog.setParent(None)
+
+    def test_reusable_participant_is_cleared_without_close_or_dispose_on_new_point(self):
+        class Participant(QWidget):
+            def __init__(self, iface):
+                super().__init__()
+                self.iface = iface
+                self._disposed = False
+                self.cleared = 0
+            def _clear_local_delineation(self):
+                self.cleared += 1
+        participant = Participant(self.fixture.iface)
+        participant.show()
+        self.addCleanup(participant.deleteLater)
+        self.addCleanup(cleanup.unregister_participant, participant)
+        cleanup.register_participant(participant)
+        cleanup.register_participant(participant)
+        cleanup.clear_delineations(close_dialogs=True)
+        self.assertEqual(participant.cleared, 1)
+        self.assertFalse(participant._disposed)
+        self.assertTrue(participant.isVisible())
 
 
 if __name__ == '__main__':

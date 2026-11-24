@@ -1,9 +1,43 @@
 """Cancelable TauDEM products, isolated from the GUI and native CAUMAX settings."""
+import hashlib
 import time
 from pathlib import Path
 
 from qgis.PyQt.QtCore import QObject, pyqtSignal
 from qgis.core import QgsApplication, QgsTask
+
+
+def _refinement_reference(analysis, reference):
+    """Use the actual footprint that certified this fine outlet, when present."""
+    snap = (analysis.diagnostics or {}).get('outlet_snap') or {}
+    if snap.get('method') == 'reference_basin_d8' and snap.get('reference_geometry_wkb_hex'):
+        return dict(geometry_wkb=bytes.fromhex(snap['reference_geometry_wkb_hex']),
+            main_course_wkb=bytes.fromhex(snap.get('reference_course_wkb_hex') or ''),
+            crs_wkt=snap['reference_crs_wkt'], cell_width=float(reference.cell_width),
+            cell_height=float(reference.cell_height))
+    return dict(geometry_wkb=bytes(reference.geometry_wkb),
+        main_course_wkb=bytes(reference.main_course_wkb or b''), crs_wkt=str(reference.crs_wkt),
+        cell_width=float(reference.cell_width), cell_height=float(reference.cell_height))
+
+
+def _signature(source, analysis, reference, footprint, bin_dir):
+    """A red query point does not identify a later manual/validated closure."""
+    stat = source.stat()
+    snap = (analysis.diagnostics or {}).get('outlet_snap') or {}
+    digest = hashlib.sha256()
+    for value in (analysis.geometry_wkb, analysis.main_course_wkb,
+                  footprint['geometry_wkb'], footprint['main_course_wkb']):
+        raw = bytes(value or b'')
+        digest.update(len(raw).to_bytes(8, 'big'))
+        digest.update(raw)
+    digest.update(str(footprint['crs_wkt']).encode('utf-8'))
+    return (str(source.resolve()), stat.st_size, stat.st_mtime_ns,
+        float(analysis.selected_x), float(analysis.selected_y),
+        float(analysis.outlet_x), float(analysis.outlet_y), str(analysis.crs_wkt),
+        float(analysis.cell_width), float(analysis.cell_height),
+        snap.get('method') == 'manual_cell_d8' and snap.get('explicit_user_choice') is True,
+        float(reference.area_m2), float(reference.cell_width), float(reference.cell_height),
+        digest.hexdigest(), str(bin_dir) if bin_dir is not None else None)
 
 
 def _state(products, automatic, encoding):
@@ -86,9 +120,8 @@ class DrainageController(QObject):
         path = str(query.dem_path)
         original_x,original_y = float(analysis.selected_x),float(analysis.selected_y)
         source = Path(path)
-        stat = source.stat()
-        signature = (str(source.resolve()),stat.st_size,stat.st_mtime_ns,
-                     original_x,original_y,float(reference.area_m2))
+        footprint = _refinement_reference(analysis,reference)
+        signature = _signature(source,analysis,reference,footprint,bin_dir)
         previous = self.products.get(key) if self._signatures.get(key) == signature else None
 
         def operation(cancelled,publish):
@@ -102,6 +135,7 @@ class DrainageController(QObject):
                     reference_area_m2=float(reference.area_m2),
                     reference_cell_width=float(reference.cell_width),
                     reference_cell_height=float(reference.cell_height),
+                    outlet_analysis=analysis,refinement_reference=footprint,
                     threshold_area_m2=None if automatic else threshold_area_m2,
                     bin_dir=bin_dir,cancelled=cancelled,progress=publish)
             if cancelled(): raise InterruptedError('Preparación de capas cancelada.')

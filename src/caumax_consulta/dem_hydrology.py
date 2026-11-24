@@ -1,8 +1,10 @@
-"""Generate native-resolution D8 from a local metric DEM using bundled GRASS.
+"""Generate native-resolution D8 with GRASS or the included TauDEM runtime.
 
 GRASS r.watershed's least-cost drainage resolves flats and depressions without
 replacing the source elevations. ``-s -m`` selects single-flow D8 and disk-backed
 processing. Analysis always reads the ORIGINAL DEM, never a filled/resampled DEM.
+When GRASS executables are absent, TauDEM PitRemove/D8FlowDir prepare D8 only;
+both routes share the same outlet correspondence and original-DEM analysis.
 No QGIS project, provider registry, environment or user profile is modified.
 
 References: https://grass.osgeo.org/grass-stable/manuals/r.watershed.html
@@ -56,7 +58,7 @@ class DemResult:
         return getattr(object.__getattribute__(self, "analysis"), name)
 
 
-def availability_engine():
+def _grass_availability():
     """Return available/name/path/reason plus isolated-launch configuration.
 
     Probing is read-only and does not load a Processing provider or start GRASS.
@@ -105,6 +107,28 @@ def availability_engine():
                 "reason": ""}
     return {"available": False, "name": "GRASS r.watershed D8 (-s -m)",
             "path": "", "reason": "No se encuentra GRASS con r.watershed en esta instalación de QGIS."}
+
+
+def availability_engine():
+    """Prefer existing GRASS; otherwise use TauDEM without a QGIS provider.
+
+    Windows x64 ships the private TauDEM runtime. Other operating systems may
+    use compatible executables already present in their QGIS/system install.
+    No Processing provider, extra plugin or global installation is activated.
+    """
+    grass = dict(_grass_availability(), kind='grass')
+    if grass['available']:
+        return grass
+    from .taudem_engine import probe_taudem
+    tau = probe_taudem(required_tools=('pitremove', 'd8flowdir'))
+    if tau['available']:
+        bundled = tau.get('runtime', {}).get('kind') == 'bundled'
+        return dict(available=True, kind='taudem',
+            name='TauDEM PitRemove + D8FlowDir' + (' (incluido)' if bundled else ''),
+            path=str(tau.get('bin_dir') or Path(tau['executables']['d8flowdir']).parent),
+            reason='', runtime_kind='bundled' if bundled else 'external')
+    return dict(grass, reason=grass['reason'] + ' ' + tau.get('reason',
+        'Tampoco se encuentra un runtime TauDEM compatible con esta plataforma.'))
 
 
 def _check(cancelled):
@@ -1047,8 +1071,22 @@ def analyze_dem(dem_path, outlet_x, outlet_y, cache_dir,
         directions = cache / ("d8_" + key[:32] + ".tif")
         reused = _valid_cache(directions, dataset, key)
         engine = availability_engine()
+        routing = {'engine': 'GRASS r.watershed', 'engine_flags': '-s -m',
+                   'engine_path': engine.get('path', '') if engine.get('kind', 'grass') == 'grass' else '',
+                   'conditioning': 'least-cost drainage of depressions and flats',
+                   'elevation_source': 'original DEM; not filled or resampled',
+                   'reference': 'https://grass.osgeo.org/grass-stable/manuals/r.watershed.html'}
         progress(5)
-        if not reused:
+        if not reused and engine['available'] and engine.get('kind') == 'taudem':
+            from .taudem_engine import prepare_d8
+            prepared = prepare_d8(source, cache, cancelled=cancelled,
+                progress=lambda text, percent: progress(10 + min(45, .45 * float(percent))))
+            directions = Path(prepared.caumax_d8_path)
+            key, reused = prepared.source_key, prepared.cache_reused
+            routing = dict(prepared.metadata, engine_path=engine.get('path', ''),
+                           engine_flags='PitRemove; D8FlowDir',
+                           reference='https://hydrology.usu.edu/taudem/taudem5/help53/D8FlowDirections.html')
+        elif not reused:
             if not engine["available"]:
                 raise ValueError(engine["reason"])
             # Windows may release a killed child's inherited log handle shortly
@@ -1114,11 +1152,8 @@ def analyze_dem(dem_path, outlet_x, outlet_y, cache_dir,
                     'geotransform': list(transform),
                     'bounds': [transform[0], transform[3] + rows * transform[5],
                                transform[0] + cols * transform[1], transform[3]],
-                    'metadata': {'engine': 'GRASS r.watershed', 'engine_flags': '-s -m',
-                                 'engine_path': engine.get('path', ''), 'source_key': key,
+                    'metadata': {**routing, 'source_key': key,
                                  'cache_reused': reused, 'native_resolution': (selected.width, selected.height),
-                                 'conditioning': 'least-cost drainage of depressions and flats',
-                                 'elevation_source': 'original DEM; not filled or resampled',
                                  'accumulation_path': accumulation_path,
                                  'accumulation_cache_reused': accumulation_reused},
                 }))
@@ -1130,10 +1165,7 @@ def analyze_dem(dem_path, outlet_x, outlet_y, cache_dir,
                 raise ValueError("La acumulación D8 no coincide con la cuenca del cierre ajustado; "
                                  "no se publica un resultado incoherente.")
             snap["candidate_touches_boundary"] = bool(boundary)
-        metadata = {"engine": "GRASS r.watershed", "engine_flags": "-s -m",
-                    "engine_path": engine.get("path", ""), "cache_reused": reused,
-                    "conditioning": "least-cost drainage of depressions and flats",
-                    "elevation_source": "original DEM; not filled or resampled",
+        metadata = {**routing, "cache_reused": reused,
                     "native_resolution": (selected.width, selected.height),
                     "raster_cells": cols * rows, "analysis_window_cells": window_cells,
                     "basin_cells": count, "raster_boundary_touched": boundary,
@@ -1142,8 +1174,7 @@ def analyze_dem(dem_path, outlet_x, outlet_y, cache_dir,
                     "memory_feasibility": feasibility,
                     "cache_directory": str(cache), "requested_cache_directory": str(requested_cache),
                     "accumulation_path": accumulation_path,
-                    "accumulation_cache_reused": accumulation_reused,
-                    "reference": "https://grass.osgeo.org/grass-stable/manuals/r.watershed.html"}
+                    "accumulation_cache_reused": accumulation_reused}
     finally:
         dataset = None
     _check(cancelled)
@@ -1157,10 +1188,16 @@ def analyze_dem(dem_path, outlet_x, outlet_y, cache_dir,
     diagnostic["dem_hydrology"] = metadata
     if snap is not None:
         diagnostic["outlet_snap"] = snap
-    notes = (*analysis.notes,
-             "Las direcciones D8 se recalculan con GRASS r.watershed (-s -m) sobre el MDT "
-             "a su resolución original, resolviendo depresiones y planicies por búsqueda de coste. "
-             "Las cotas, el TRI y la pendiente local se calculan sobre el MDT original, sin rellenarlo ni remuestrearlo.")
+    if routing['engine'] == 'TauDEM':
+        routing_note = ('Direcciones D8 calculadas con TauDEM PitRemove y D8FlowDir, a resolución original, '
+            'al no disponer de GRASS. El MDT rellenado se usa exclusivamente para dirigir el flujo; '
+            'las cotas, el TRI y la pendiente local se calculan sobre el MDT original. '
+            'Esta delimitación no ejecuta Threshold ni StreamNet.')
+    else:
+        routing_note = ('Las direcciones D8 se recalculan con GRASS r.watershed (-s -m) sobre el MDT '
+            'a su resolución original, resolviendo depresiones y planicies por búsqueda de coste. '
+            'Las cotas, el TRI y la pendiente local se calculan sobre el MDT original, sin rellenarlo ni remuestrearlo.')
+    notes = (*analysis.notes, routing_note)
     if snap is not None and snap.get('method') == 'reference_basin_d8':
         notes += (f"Correspondencia espacial entre resoluciones: el cierre comparte "
                   f"{100 * snap['reference_coverage_fraction']:.1f} % de la huella original y "

@@ -21,6 +21,7 @@ from osgeo import gdal, ogr, osr
 from . import basin as _b
 from . import dem_hydrology as _h
 from . import taudem_runtime as _runtime
+from .grid import cell_at_point
 from .terrain import analyze_basin
 
 INSTALL_URL = "https://github.com/dtarb/TauDEM/releases/latest"
@@ -28,6 +29,8 @@ _TOOLS = ("pitremove", "d8flowdir", "aread8", "threshold", "streamnet")
 _CLI_NAMES = {"pitremove": "PitRemove", "d8flowdir": "D8FlowDir", "aread8": "AreaD8",
               "threshold": "Threshold", "streamnet": "StreamNet"}
 _VERSION = "taudem-native-products-v1"
+_D8_VERSION = "taudem-pitremove-d8-native-v1"
+_D8_TOOLS = ("pitremove", "d8flowdir")
 _LUT = np.array([255, 1, 128, 64, 32, 16, 8, 4, 2], dtype=np.uint8)
 
 
@@ -47,8 +50,24 @@ class TauDEMProducts:
     metadata: dict
 
 
-def probe_taudem(bin_dir=None):
+@dataclass(frozen=True)
+class TauDEMDirections:
+    dem_path: str
+    filled_dem_path: str
+    tau_d8_path: str
+    caumax_d8_path: str
+    slope_path: str
+    cache_directory: str
+    source_key: str
+    cache_reused: bool
+    metadata: dict
+
+
+def probe_taudem(bin_dir=None, *, required_tools=None):
     """Find the real tools and MPI without changing environment or settings."""
+    required_tools = _TOOLS if required_tools is None else tuple(required_tools)
+    if not required_tools or any(tool not in _TOOLS for tool in required_tools):
+        raise ValueError('Herramientas TauDEM solicitadas no válidas.')
     if bin_dir is None:
         try:
             bundled = _runtime.discover_bundled_runtime()
@@ -95,7 +114,7 @@ def probe_taudem(bin_dir=None):
         if os.environ.get("ProgramFiles"):
             candidates.append(Path(os.environ["ProgramFiles"]) / "Microsoft MPI" / "Bin" / "mpiexec.exe")
         mpi = next((str(path) for path in candidates if path.is_file()), None)
-    missing = [tool for tool in _TOOLS if tool not in executables]
+    missing = [tool for tool in required_tools if tool not in executables]
     if not mpi:
         missing.append("MPI/mpiexec")
     return {"available": not missing, "reason": "" if not missing else
@@ -177,6 +196,13 @@ def _recode_tau_d8(native_path, destination, dem_path, cancelled):
                 valid &= values != nodata
             if not band.GetMaskFlags() & gdal.GMF_ALL_VALID:
                 valid &= _b._read(band.GetMaskBand(), 0, top, values.shape[1], values.shape[0]) != 0
+            original = dem.GetRasterBand(1)
+            elevations = _b._read(original, 0, top, values.shape[1], values.shape[0])
+            valid &= np.isfinite(elevations)
+            if original.GetNoDataValue() is not None:
+                valid &= elevations != original.GetNoDataValue()
+            if not original.GetMaskFlags() & gdal.GMF_ALL_VALID:
+                valid &= _b._read(original.GetMaskBand(), 0, top, values.shape[1], values.shape[0]) != 0
             if np.any(valid & ((values < 1) | (values > 8) | (values != np.trunc(values)))):
                 raise ValueError("La salida TauDEM contiene códigos distintos de1..8.")
             coded = np.full(values.shape, 255, dtype=np.uint8)
@@ -185,6 +211,112 @@ def _recode_tau_d8(native_path, destination, dem_path, cancelled):
         target.FlushCache()
     finally:
         source = dem = target = None
+
+
+def _cached_directions(paths, manifest, dem, key, hashes, runtime):
+    """Recognize this engine's aligned products, never a GRASS cache."""
+    if not manifest.is_file() or not all(path.is_file() for path in paths):
+        return None
+    try:
+        provenance = json.loads(manifest.read_text(encoding='utf-8'))
+        steps = provenance.get('steps', [])
+        if (provenance.get('source_key') != key or provenance.get('binary_sha256') != hashes
+                or provenance.get('runtime') != runtime or len(steps) != 2
+                or [step.get('tool') for step in steps] != list(_D8_TOOLS)
+                or any(not step.get('version') for step in steps)):
+            return None
+        for path in paths:
+            cached = _b._open_raster(path, 'producto TauDEM D8 en caché')
+            try:
+                _b._aligned(cached, dem)
+                if path == paths[-1] and not (
+                        cached.GetMetadataItem('HYDRO_VERSION') == _D8_VERSION
+                        and cached.GetMetadataItem('SOURCE_KEY') == key
+                        and cached.GetMetadataItem('HYDROLOGY_ENGINE') == 'TauDEM'
+                        and cached.GetRasterBand(1).DataType == gdal.GDT_Byte
+                        and cached.GetRasterBand(1).GetNoDataValue() == 255):
+                    return None
+            finally:
+                cached = None
+        return provenance
+    except (OSError, ValueError, TypeError, AttributeError, RuntimeError):
+        return None
+
+
+def _prepare_d8_cache(engine, source, dem, cache_dir, cancelled, progress):
+    """The shared, unchanged PitRemove/D8FlowDir sequence used by both paths."""
+    hashes = {name: _fingerprint(engine['executables'][name]) for name in _D8_TOOLS}
+    runtime = engine.get('runtime', {'kind': 'external'})
+    key = hashlib.sha256(repr((_D8_VERSION, _h._source_key(dem, source), hashes, runtime)).encode()).hexdigest()
+    requested = _h._cache_folder(Path(cache_dir).expanduser().resolve())
+    directory_name = 'taudem_d8_' + key[:24]
+    # Saved variants supply the existing D8's parent during reference rechecks.
+    # It already names this exact source/engine key; do not nest the cache.
+    base = requested if requested.name == directory_name else requested/directory_name
+    base.mkdir(parents=True, exist_ok=True)
+    filled, native, slope, coded = paths = tuple(base/name for name in (
+        'filled.tif', 'd8_tau.tif', 'slope_tau.tif', 'd8_caumax.tif'))
+    manifest = base/'source.json'
+    provenance = _cached_directions(paths, manifest, dem, key, hashes, runtime)
+    reused = provenance is not None
+    if not reused:
+        with tempfile.TemporaryDirectory(prefix='td_', dir=str(_h._runtime_folder()), ignore_cleanup_errors=True) as temporary:
+            work = Path(temporary)
+            staged = _h._stage_dem(source, dem, work, cancelled)
+            progress('Preparando MDT con TauDEM PitRemove', 5)
+            steps = [_run(engine, 'pitremove', ['-z', staged, '-fel', work/'filled.tif'], work, cancelled)]
+            progress('Calculando direcciones TauDEM D8', 20)
+            steps.append(_run(engine, 'd8flowdir', ['-fel', work/'filled.tif', '-p', work/'d8_tau.tif',
+                                                  '-sd8', work/'slope_tau.tif'], work, cancelled))
+            _recode_tau_d8(work/'d8_tau.tif', work/'d8_caumax.tif', source, cancelled)
+            converted = gdal.Open(str(work/'d8_caumax.tif'), gdal.GA_Update)
+            if converted is None:
+                raise ValueError('No se puede identificar la caché D8 TauDEM generada.')
+            converted.SetMetadataItem('HYDRO_VERSION', _D8_VERSION)
+            converted.SetMetadataItem('SOURCE_KEY', key)
+            converted.FlushCache()
+            converted = None
+            provenance = dict(source_key=key, steps=steps, binary_sha256=hashes, runtime=runtime)
+            for target in paths:
+                _h._check(cancelled)
+                _h._publish_cache(work/target.name, target, cancelled)
+            staged_manifest = work/'source.json'
+            staged_manifest.write_text(json.dumps(provenance), encoding='utf-8')
+            _h._publish_cache(staged_manifest, manifest, cancelled)
+    _h._check(cancelled)
+    metadata = dict(engine='TauDEM', version=provenance['steps'][0]['version'],
+        source_url='https://github.com/dtarb/TauDEM', source_key=key, cache_reused=reused,
+        binary_sha256=hashes, runtime=runtime, steps=provenance['steps'],
+        flow_encoding='ESRI_D8', native_flow_encoding='TAUDEM_D8',
+        conditioning='TauDEM PitRemove and D8FlowDir; filled DEM routes flow only',
+        elevation_source='original DEM; not filled or resampled', d8_only=True)
+    return TauDEMDirections(str(source), str(filled), str(native), str(coded), str(slope),
+                           str(base), key, reused, metadata)
+
+
+def prepare_d8(dem_path, cache_dir, *, bin_dir=None, cancelled=lambda: False,
+               progress=lambda text, percent: None):
+    """Prepare native D8 with the bundled engine, without a network or outlet.
+
+    Only PitRemove, D8FlowDir and MPI are required. The caller performs its own
+    containing-cell/reference-basin selection and analyses original elevations.
+    """
+    _h._check(cancelled)
+    engine = probe_taudem(bin_dir, required_tools=_D8_TOOLS)
+    if not engine['available']:
+        raise ValueError(engine['reason'])
+    if engine.get('private_runtime'):
+        progress('Preparando TauDEM integrado y verificando sus archivos', 0)
+    engine = _runtime.ensure_runtime(engine, cancelled)
+    source = Path(dem_path).expanduser().resolve()
+    dem = _b._open_raster(source, 'MDT TauDEM')
+    try:
+        _b._aligned(dem, dem)
+        if dem.RasterXSize * dem.RasterYSize > _h.MAX_RASTER_CELLS:
+            raise ValueError('El MDT supera el límite de celdas de esta versión; no se remuestrea.')
+        return _prepare_d8_cache(engine, source, dem, cache_dir, cancelled, progress)
+    finally:
+        dem = None
 
 
 def _outlet(path, x, y, wkt):
@@ -244,10 +376,116 @@ def _network(engine, filled, native, accumulation, outlet, threshold_cells, fold
     return stream, network, steps
 
 
+def _preserved_outlet(directions_path, counts, transform, target_crs, x, y, parameters,
+                      outlet_analysis, refinement_reference, cancelled):
+    """Confirm the same basin from the original click; never move a manual cell.
+
+    Different D8 engines can put the channel in adjacent cells. Automatic
+    correspondence must pass both the coarse footprint and the accepted fine
+    footprint. Its section is always selected from the original red point.
+    """
+    _h._check(cancelled)
+    rows, cols = counts.shape
+    bounds = (transform[0], transform[3] + rows * transform[5],
+              transform[0] + cols * transform[1], transform[3])
+    previous_snap = ((outlet_analysis.diagnostics or {}).get('outlet_snap') or {}
+                     if outlet_analysis is not None else {})
+    manual = (previous_snap.get('method') == 'manual_cell_d8'
+              and previous_snap.get('explicit_user_choice') is True)
+    effective_x, effective_y = (float(outlet_analysis.outlet_x), float(outlet_analysis.outlet_y)) \
+        if outlet_analysis is not None else (float(x), float(y))
+    convert = None
+    if outlet_analysis is not None:
+        source_crs = osr.SpatialReference()
+        if source_crs.ImportFromWkt(str(outlet_analysis.crs_wkt)) != 0:
+            raise ValueError('No se conserva el CRS del cierre aceptado para TauDEM.')
+        source_crs.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+        if not source_crs.IsSame(target_crs):
+            convert = osr.CoordinateTransformation(source_crs, target_crs)
+            x, y, *_ = convert.TransformPoint(float(x), float(y))
+            effective_x, effective_y, *_ = convert.TransformPoint(effective_x, effective_y)
+    original = cell_at_point(float(x), float(y), *bounds, cols, rows)
+    previous = cell_at_point(effective_x, effective_y, *bounds, cols, rows)
+    effective = previous
+    area = effective.width * effective.height
+    reference_area, _, radius = parameters
+    snap = dict(previous_snap) if manual else None
+    selection = dict(method='manual_cell' if manual else 'containing_cell',
+        original_x=float(x), original_y=float(y),
+        previous_outlet_x=previous.x, previous_outlet_y=previous.y,
+        previous_engine=(outlet_analysis.diagnostics or {}).get('dem_hydrology', {}).get('engine')
+                        if outlet_analysis is not None else None,
+        engine='TauDEM', crs_wkt=target_crs.ExportToWkt(), explicit_user_choice=manual,
+        coarse_reference_checked=False, fine_reference_checked=False)
+    if refinement_reference is not None and not manual:
+        from .refinement_snap import select_reference_outlet
+        try:
+            effective, snap = select_reference_outlet(directions_path, counts,
+                float(x), float(y), radius, refinement_reference, cancelled,
+                reference_area_m2=reference_area)
+            selection.update(method='original_point_reference_section', coarse_reference_checked=True)
+            if outlet_analysis is not None:
+                fine_reference = dict(geometry_wkb=outlet_analysis.geometry_wkb,
+                    main_course_wkb=outlet_analysis.main_course_wkb, crs_wkt=outlet_analysis.crs_wkt,
+                    cell_width=outlet_analysis.cell_width, cell_height=outlet_analysis.cell_height)
+                checked, evidence = select_reference_outlet(directions_path, counts,
+                    effective.x, effective.y, radius, fine_reference, cancelled,
+                    reference_area_m2=outlet_analysis.area_m2)
+                if (checked.row, checked.col) != (effective.row, effective.col):
+                    raise ValueError('El cierre compatible con 500 m no conserva la cuenca fina aceptada.')
+                selection.update(method='original_point_dual_reference_section', fine_reference_checked=True,
+                    fine_reference_geometry_sha256=hashlib.sha256(bytes(outlet_analysis.geometry_wkb)).hexdigest(),
+                    fine_reference_area_m2=float(outlet_analysis.area_m2),
+                    fine_reference_raster_area_m2=evidence['reference_raster_area_m2'],
+                    fine_intersection_area_m2=evidence['intersection_area_m2'],
+                    fine_reference_coverage_fraction=evidence['reference_coverage_fraction'],
+                    fine_candidate_overlap_fraction=evidence['candidate_overlap_fraction'],
+                    fine_intersection_over_union=evidence['intersection_over_union'])
+        except ValueError as error:
+            raise ValueError('Las direcciones TauDEM no conservan la cuenca aceptada en una '
+                'sección compatible. No se sustituye el delineado ni se cambia de cauce. ' + str(error)) from error
+    count = int(counts[effective.row, effective.col])
+    if count <= 0:
+        raise ValueError('El cierre elegido no tiene dirección TauDEM válida (NoData); '
+                         'no se publica una cuenca sin drenaje válido.')
+    if manual and convert is not None:
+        if 'manual_requested_x' in snap and 'manual_requested_y' in snap:
+            sx, sy, *_ = convert.TransformPoint(float(snap['manual_requested_x']), float(snap['manual_requested_y']))
+            snap['manual_requested_x'], snap['manual_requested_y'] = sx, sy
+        if snap.get('manual_selection_scope') == 'raster_extent':
+            snap.update(manual_raster_bounds=list(bounds), manual_raster_size=[cols, rows])
+    if snap is not None:
+        original_area = int(counts[original.row, original.col]) * area
+        snap.update(original_x=float(x), original_y=float(y), original_row=original.row, original_col=original.col,
+            snapped_x=effective.x, snapped_y=effective.y, snapped_row=effective.row, snapped_col=effective.col,
+            status='unchanged' if (original.row, original.col) == (effective.row, effective.col) else 'snapped',
+            distance_m=math.hypot(effective.x - x, effective.y - y), search_radius_m=radius,
+            reference_area_m2=reference_area, minimum_upstream_area_m2=area,
+            candidate_upstream_area_m2=count * area, original_cell_upstream_area_m2=original_area,
+            area_change_vs_original_cell_m2=count * area - original_area,
+            area_change_vs_reference_pct=100 * (count * area / reference_area - 1))
+    selection.update(outlet_x=effective.x, outlet_y=effective.y,
+        distance_from_original_m=math.hypot(effective.x - x, effective.y - y),
+        outlet_preserved=(previous.row, previous.col) == (effective.row, effective.col),
+        outlet_adjustment_m=math.hypot(effective.x - previous.x, effective.y - previous.y))
+    if selection['coarse_reference_checked']:
+        selection.update(coarse_reference_coverage_fraction=snap['reference_coverage_fraction'],
+                         coarse_candidate_overlap_fraction=snap['candidate_overlap_fraction'])
+    _h._check(cancelled)
+    return effective, snap, selection
+
+
 def prepare_taudem(dem_path, outlet_x, outlet_y, cache_dir, *, reference_area_m2,
                    reference_cell_width, reference_cell_height, threshold_area_m2=None,
+                   outlet_analysis=None, refinement_reference=None,
                    bin_dir=None, cancelled=lambda: False, progress=lambda text, percent: None):
-    """True TauDEM→snap→Analysis→outlet-restricted stream products."""
+    """True TauDEM products at a fixed manual or spatially verified outlet.
+
+    ``outlet_analysis`` supplies the accepted fine basin and input CRS. Manual
+    cells stay fixed. Automatic sections use the original point and must match
+    both this footprint and ``refinement_reference`` with TauDEM's own D8.
+    The actual basin is always recomputed; no geometry or area is inherited.
+    """
     engine = probe_taudem(bin_dir)
     if not engine["available"]:
         raise ValueError(engine["reason"])
@@ -264,48 +502,35 @@ def prepare_taudem(dem_path, outlet_x, outlet_y, cache_dir, *, reference_area_m2
             raise ValueError("El MDT supera el límite de celdas de esta versión; no se remuestrea.")
         parameters = _h._snap_parameters(reference_area_m2, reference_cell_width,
                                          reference_cell_height, None, .9)
+        directions = _prepare_d8_cache(engine, source, dem, cache_dir, cancelled, progress)
         hashes = {name: _fingerprint(path) for name, path in engine["executables"].items()}
-        runtime = engine.get("runtime", {"kind": "external"})
-        key = hashlib.sha256(repr((_VERSION, _h._source_key(dem, source), hashes, runtime)).encode()).hexdigest()[:24]
-        base = _h._cache_folder(Path(cache_dir).expanduser().resolve()) / ("taudem_" + key)
-        base.mkdir(parents=True, exist_ok=True)
-        filled, native, slope, coded = (base / name for name in ("filled.tif", "d8_tau.tif", "slope_tau.tif", "d8_caumax.tif"))
-        manifest = base / "source.json"
+        runtime = directions.metadata['runtime']
+        base = Path(directions.cache_directory)
+        product_key = hashlib.sha256(repr((_VERSION, hashes, runtime)).encode()).hexdigest()[:16]
+        filled, native, slope, coded = map(Path, (directions.filled_dem_path,
+            directions.tau_d8_path, directions.slope_path, directions.caumax_d8_path))
+        provenance = directions.metadata
         steps = []
         with tempfile.TemporaryDirectory(prefix="td_", dir=str(_h._runtime_folder()), ignore_cleanup_errors=True) as temporary:
             work = Path(temporary)
-            if not all(path.is_file() for path in (filled, native, slope, coded, manifest)):
-                staged = _h._stage_dem(source, dem, work, cancelled)
-                progress("Preparando MDT con TauDEM PitRemove", 5)
-                steps.append(_run(engine, "pitremove", ["-z", staged, "-fel", work / "filled.tif"], work, cancelled))
-                progress("Calculando direcciones TauDEM D8", 20)
-                steps.append(_run(engine, "d8flowdir", ["-fel", work / "filled.tif", "-p", work / "d8_tau.tif",
-                                                        "-sd8", work / "slope_tau.tif"], work, cancelled))
-                _recode_tau_d8(work / "d8_tau.tif", work / "d8_caumax.tif", source, cancelled)
-                for target in (filled, native, slope, coded):
-                    _h._check(cancelled)
-                    _h._publish_cache(work / target.name, target, cancelled)
-                manifest.write_text(json.dumps({"steps": steps, "binary_sha256": hashes, "runtime": runtime}), encoding="utf-8")
-            provenance = json.loads(manifest.read_text(encoding="utf-8"))
-            steps = []
-            progress("Calculando aporte y ajustando cierre", 35)
+            progress("Calculando aporte y verificando cierre", 35)
             counts, inclusive_path, reused = _h._accumulation(coded, cancelled,
-                lambda fraction: progress("Calculando aporte y ajustando cierre", 35 + 15 * fraction))
-            effective, snap = _h._nearest_main_channel(counts, transform, outlet_x, outlet_y,
-                                                       *parameters, cancelled=cancelled,
-                                                       directions_path=coded)
+                lambda fraction: progress("Calculando aporte y verificando cierre", 35 + 15 * fraction))
+            effective, snap, selection = _preserved_outlet(coded, counts, transform, reference,
+                outlet_x, outlet_y, parameters, outlet_analysis, refinement_reference, cancelled)
             del counts
             count, _, boundary, _ = _h._preflight_analysis(coded, effective, cancelled)
             cell_area = abs(transform[1] * transform[5])
-            if snap["candidate_upstream_area_m2"] != count * cell_area:
-                raise ValueError("La acumulación TauDEM no coincide con su cuenca.")
-            snap["candidate_touches_boundary"] = bool(boundary)
+            if snap is not None:
+                if snap["candidate_upstream_area_m2"] != count * cell_area:
+                    raise ValueError("La acumulación TauDEM no coincide con su cuenca.")
+                snap["candidate_touches_boundary"] = bool(boundary)
             progress("Analizando cuenca TauDEM", 52)
-            analysis = analyze_basin(coded, source, effective.x, effective.y, cancelled=cancelled,
+            analysis = analyze_basin(coded, source, effective.x, effective.y, cancelled=cancelled, upstream_only=False,
                 progress=lambda n: progress("Analizando cuenca TauDEM", 52 + min(10, 10 * n / max(count, 1))))
             selection_key = hashlib.sha256(repr((effective.row, effective.col)).encode()).hexdigest()[:16]
-            selected_folder = base / ("outlet_" + selection_key)
-            selected_folder.mkdir(exist_ok=True)
+            selected_folder = base / ('products_' + product_key) / ("outlet_" + selection_key)
+            selected_folder.mkdir(parents=True, exist_ok=True)
             closure = selected_folder / "outlet.gpkg"
             accumulation = selected_folder / "area_tau.tif"
             if not closure.is_file():
@@ -344,13 +569,15 @@ def prepare_taudem(dem_path, outlet_x, outlet_y, cache_dir, *, reference_area_m2
                     "threshold_policy": "plugin heuristic max(100 native cells, 1% of TauDEM basin area)",
                     "outlet_path": str(closure), "bin_dir": str(bin_dir) if bin_dir is not None else None,
                     "inclusive_accumulation_path": inclusive_path,
-                    "edge_contamination_check": True}
+                    "edge_contamination_check": True, "outlet_selection": selection}
         diagnostic = dict(analysis.diagnostics)
-        diagnostic.update(outlet_snap=snap, taudem_pipeline_executed=True, dem_hydrology=metadata)
+        diagnostic.update(taudem_pipeline_executed=True, dem_hydrology=metadata)
+        if snap is not None:
+            diagnostic['outlet_snap'] = snap
         notes = tuple(note for note in analysis.notes if "No se ejecuta TauDEM" not in note)
         notes += ("Direcciones y red calculadas con TauDEM real: PitRemove, D8FlowDir, AreaD8, Threshold y StreamNet. "
                   "Las cotas, TRI y pendiente local siguen usando el MDT original, no el MDT rellenado.",)
-        analysis = replace(analysis, selected_x=float(outlet_x), selected_y=float(outlet_y),
+        analysis = replace(analysis, selected_x=selection['original_x'], selected_y=selection['original_y'],
                            diagnostics=diagnostic, notes=notes)
         _h._check(cancelled)
         progress("Capas TauDEM preparadas", 100)

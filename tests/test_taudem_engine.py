@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 import tempfile
 import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -102,16 +103,23 @@ class TauDEMTests(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 8)
 
     @unittest.skipUnless(engine.probe_taudem()["available"], "Runtime TauDEM real no disponible")
-    def test_real_pipeline_snap_original_heights_basin_network_and_rebuild(self):
+    def test_real_pipeline_keeps_manual_outlet_original_heights_basin_network_and_rebuild(self):
         yy, xx = np.indices((101, 101))
         values = 1000 + (100 - .05 * (np.abs(xx - 50) - 40) ** 2) + 200 - .002 * (yy - 15) ** 2
         values[35, 35] = 0  # a pit raised for flow routing, retained in terrain statistics
         dem = self.raster(values)
         source_bytes = dem.read_bytes()
         x, y = 300000 + 55.5 * 25, 4700000 - 70.5 * 25
+        dataset = gdal.Open(str(dem))
+        accepted = SimpleNamespace(outlet_x=300000 + 50.5 * 25, outlet_y=y,
+            crs_wkt=dataset.GetProjectionRef(), diagnostics={'outlet_snap': {
+                'method': 'manual_cell_d8', 'selection_mode': 'user_selected_cell',
+                'explicit_user_choice': True}})
+        dataset = None
         updates = []
         result = engine.prepare_taudem(dem, x, y, self.folder / "cache",
             reference_area_m2=2e6, reference_cell_width=500, reference_cell_height=500,
+            outlet_analysis=accepted,
             progress=lambda text, percent: updates.append(percent))
         self.assertEqual(result.metadata["engine"], "TauDEM")
         self.assertEqual(result.metadata["version"], "5.5.0")
@@ -158,7 +166,8 @@ class TauDEMTests(unittest.TestCase):
         self.assertEqual(rebuilt.threshold_cells, result.threshold_cells * 2)
         with patch.object(engine, "_run", side_effect=AssertionError("Cached products must not rerun tools")):
             cached = engine.prepare_taudem(dem, x, y, self.folder / "cache",
-                reference_area_m2=2e6, reference_cell_width=500, reference_cell_height=500)
+                reference_area_m2=2e6, reference_cell_width=500, reference_cell_height=500,
+                outlet_analysis=accepted)
         self.assertEqual(cached.network_path, result.network_path)
         self.assertEqual(cached.analysis.area_m2, result.analysis.area_m2)
         self.assertEqual(dem.read_bytes(), source_bytes)

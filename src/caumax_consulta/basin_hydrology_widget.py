@@ -8,7 +8,7 @@ import copy
 import math
 
 from qgis.PyQt.QtCore import QBuffer, QIODevice, QPointF, QRectF, QSize, Qt, pyqtSignal, QTimer
-from qgis.PyQt.QtGui import QColor, QFont, QImage, QPainter, QPen, QPolygonF
+from qgis.PyQt.QtGui import QColor, QFont, QImage, QPainter, QPen, QPolygonF, QTextDocument
 from qgis.PyQt.QtWidgets import (
     QCheckBox, QDoubleSpinBox, QGridLayout, QGroupBox, QHeaderView, QLabel, QPushButton,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
@@ -194,9 +194,10 @@ def describe_precipitation_estimates(state, rich_text=False):
     if statistics is not None and forward['flow'] is not None:
         maximum,minimum,deviation = (('Máx','Mín','Desv. típ. espacial') if rich_text else
                                     ('Máximo','Mínimo','Desviación típica espacial'))
+        deviation_separator = ' · ' if rich_text else '\n'
         direct_text=(f"Pd({_years(state['input_period'])} años): media {highlight(_number(statistics['mean_mm']))} mm · "
             f"mediana {_number(statistics['median_mm'])} mm\n"
-            f"{maximum}: {_number(statistics['max_mm'])} mm · {minimum}: {_number(statistics['min_mm'])} mm\n"
+            f"{maximum}: {_number(statistics['max_mm'])} mm · {minimum}: {_number(statistics['min_mm'])} mm{deviation_separator}"
             f"{deviation}: {_number(statistics['stddev_mm'])} mm")
         note += ' Los estadísticos de Pd(T) se obtienen interpolando por celda en ln(T), sobre la superficie válida común de las capas.'
     elif forward['flow'] is not None:
@@ -220,27 +221,27 @@ def _precipitation_plot_inputs(state):
     return dict(state,input_flow=state['input_precipitation']),known,forward,inverse
 
 
-def render_precipitation_plots(state,width=1100,height=500,font_family=None):
+def render_precipitation_plots(state,width=1100,height=500,font_family=None,*,fit_height=False):
     """Pd uses the same integer ticks and measured margins as the Qci plots."""
     from .quantile_graphics import render
     prepared,known,forward,inverse=_precipitation_plot_inputs(state)
-    return render(prepared,known,forward,inverse,width,height,font_family,quantity='Pd',unit='mm')
+    return render(prepared,known,forward,inverse,width,height,font_family,quantity='Pd',unit='mm',fit_height=fit_height)
 
 
 class _PrecipitationPlots(QWidget):
     def __init__(self,parent):
         super().__init__(parent)
         self.state=None
-        self.setMinimumHeight(360)
+        self.setMinimumHeight(324)
 
-    def sizeHint(self):return QSize(640,360)
+    def sizeHint(self):return QSize(640,324)
 
     def heightForWidth(self,width):
         base=680 if width<580 else 360
-        if self.state is None:return base
+        if self.state is None:return round(base*.9)
         from .quantile_graphics import geometry
         state,known,forward,inverse=_precipitation_plot_inputs(self.state)
-        return geometry(state,known,forward,inverse,width,base)['height']
+        return round(geometry(state,known,forward,inverse,width,base)['height']*.9)
 
     def resizeEvent(self,event):
         super().resizeEvent(event)
@@ -254,7 +255,7 @@ class _PrecipitationPlots(QWidget):
             painter.fillRect(self.rect(),QColor('white'))
         else:
             png=render_precipitation_plots(self.state,max(320,self.width()),
-                                         max(self.heightForWidth(self.width()),self.height()))
+                                         max(self.heightForWidth(self.width()),self.height()),fit_height=True)
             painter.drawImage(self.rect(),QImage.fromData(png))
         painter.end()
 
@@ -358,6 +359,9 @@ class BasinHydrologyWidget(QWidget):
         rainfall_layout.addWidget(self.method_label)
         self.plots = _PrecipitationPlots(self)
         rainfall_layout.addWidget(self.plots)
+        self._statistics_layout_timer=QTimer(self)
+        self._statistics_layout_timer.setSingleShot(True)
+        self._statistics_layout_timer.timeout.connect(self._fit_statistic_labels)
         self.status_label = QLabel('Selecciona una cuenca para calcular sus datos hidrológicos.',self)
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
@@ -380,9 +384,46 @@ class BasinHydrologyWidget(QWidget):
                 metrics=button.fontMetrics()
                 width=metrics.horizontalAdvance(button.text())+(4 if button is self.rainfall_button else 22)
                 height=max(26,max(metrics.height(),metrics.lineSpacing())+6)
+                if button is self.rainfall_button:
+                    width=round(width*1.10)
                 button.setFixedSize(width,height)
+            if hasattr(self,'_statistics_layout_timer'):
+                self._statistics_layout_timer.start(0)
         except RuntimeError:
             return
+
+    def _fit_statistic_labels(self):
+        """Keep the two requested result lines to the right of their controls.
+
+        Only these result labels use a smaller local font when necessary. A
+        very narrow dialog may wrap at the readable minimum; no value is lost.
+        """
+        base=QFont(self.font())
+        base.setBold(False)
+        for label in (self.p0_statistics_label,self.forward_label):
+            width=max(1,label.width()-2)
+            font=QFont(base)
+            document=QTextDocument()
+            document.setDocumentMargin(0)
+            while True:
+                document.setDefaultFont(font)
+                if label.textFormat()==Qt.RichText:
+                    document.setHtml(label.text())
+                else:
+                    document.setPlainText(label.text())
+                document.setTextWidth(-1)
+                if document.idealWidth()<=width:
+                    break
+                if font.pixelSize()>0:
+                    minimum=min(base.pixelSize(),11)
+                    if font.pixelSize()<=minimum:break
+                    font.setPixelSize(font.pixelSize()-1)
+                else:
+                    minimum=min(base.pointSizeF(),8.)
+                    if font.pointSizeF()<=minimum:break
+                    font.setPointSizeF(max(minimum,font.pointSizeF()-.25))
+            if label.font()!=font:
+                label.setFont(font)
 
     def _fit_rainfall_rows(self):
         table=self.rainfall_table
@@ -405,6 +446,8 @@ class BasinHydrologyWidget(QWidget):
         super().resizeEvent(event)
         if hasattr(self,'_rainfall_rows_timer'):
             self._rainfall_rows_timer.start(0)
+        if hasattr(self,'_statistics_layout_timer'):
+            self._statistics_layout_timer.start(0)
 
     def set_analysis(self,analysis,state=_NOT_GIVEN):
         if analysis is None:
@@ -530,7 +573,7 @@ class BasinHydrologyWidget(QWidget):
             else:
                 numbers = {key:f'{value:.2f}'.replace('.', ',') for key,value in statistics.items()}
                 self.p0_statistics_label.setText(
-                    f"Mediana: {numbers['median_mm']} mm · Máx: {numbers['max_mm']} mm · Mín: {numbers['min_mm']} mm\n"
+                    f"Mediana: {numbers['median_mm']} mm · Máx: {numbers['max_mm']} mm · Mín: {numbers['min_mm']} mm · "
                     f"Desv. típ: {numbers['stddev_mm']} mm")
             self.p0_statistics_label.setToolTip('Mediana y desviación típica poblacional ponderadas por el área válida de los píxeles dentro de la cuenca. No se aplica β.')
             self.coverage_label.setText(
@@ -571,5 +614,6 @@ class BasinHydrologyWidget(QWidget):
         self.plots.setMinimumHeight(self.plots.heightForWidth(self.plots.width()))
         self.plots.updateGeometry();self.plots.update()
         self._rainfall_rows_timer.start(0)
+        self._statistics_layout_timer.start(0)
         if not self._busy:
             self._set_status(self._ready_status())

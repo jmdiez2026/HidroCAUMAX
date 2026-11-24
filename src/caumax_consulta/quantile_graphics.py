@@ -21,7 +21,7 @@ def integer_log_ticks(low, high, count=12):
     return sorted(values)
 
 
-def geometry(state, known, forward, inverse, width, height, font_family=None):
+def geometry(state, known, forward, inverse, width, height, font_family=None, *, fit_height=False):
     width = max(320, int(width))
     font = QFont(font_family or QApplication.font().family())
     font.setPixelSize(round(max(10, min(18, int(width / 65))) * 1.10))
@@ -54,7 +54,10 @@ def geometry(state, known, forward, inverse, width, height, font_family=None):
     stacked = width < 580
     rows = 2 if stacked else 1
     top, bottom, legend, gap = line + 12, line * 2 + 12, 0, 14
-    height = max(int(height), rows * (axis_height + top + bottom) + legend + (gap if stacked else 0))
+    # Screen widgets can reduce their established height without rescaling
+    # fonts or changing tick values; exported figures retain their minima.
+    minimum_axis = line * 2 if fit_height else axis_height
+    height = max(int(height), rows * (minimum_axis + top + bottom) + legend + (gap if stacked else 0))
     panels = ([QRectF(0, 0, width, (height - legend - gap) / 2),
                QRectF(0, (height - legend + gap) / 2, width, (height - legend - gap) / 2)]
               if stacked else [QRectF(0, 0, (width - gap) / 2, height - legend),
@@ -84,8 +87,8 @@ def geometry(state, known, forward, inverse, width, height, font_family=None):
                 ticks=ticks, qmax=qmax, tmin=tmin, tmax=tmax, legend=legend, stacked=stacked)
 
 
-def render(state, known, forward, inverse, width, height, font_family=None, quantity='Qci', unit='m³/s'):
-    layout = geometry(state, known, forward, inverse, width, height, font_family)
+def render(state, known, forward, inverse, width, height, font_family=None, quantity='Qci', unit='m³/s', *, fit_height=False):
+    layout = geometry(state, known, forward, inverse, width, height, font_family, fit_height=fit_height)
     width, height, line = layout['width'], layout['height'], layout['line']
     image = QImage(width, height, QImage.Format_RGB32)
     image.fill(QColor('white'))

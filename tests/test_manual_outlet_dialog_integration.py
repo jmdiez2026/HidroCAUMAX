@@ -203,9 +203,11 @@ class ManualOutletDialogIntegrationTests(unittest.TestCase):
         self.assertEqual(selector.rejections, 1)
         self.assertIs(dialog.analysis, before)
 
-    def test_switching_variant_invalidates_the_previous_selector(self):
+    def test_selecting_unverified_variant_closes_selector_and_waits_for_reference_check(self):
         self.configure()
         dialog, controller = self.dialog, self.controller
+        previous = dialog.analysis
+        self.assertTrue(controller.needs_reference_check('5'))
         selector = self.open_selector()
         context = deepcopy(selector.context)
         with patch.object(controller, 'select_outlet', wraps=controller.select_outlet) as select:
@@ -215,8 +217,26 @@ class ManualOutletDialogIntegrationTests(unittest.TestCase):
             selector.point = (context['original_x'], context['original_y'])
             dialog._apply_outlet_selection(selector, controller, context)
             select.assert_not_called()
-        self.assertEqual((dialog._active_resolution_key, controller.active_key), ('5', '5'))
-        self.assertEqual(dialog.analysis.cell_width, 5)
+        # A cached automatic result is now checked against the reference
+        # asynchronously. It must not replace the accepted basin prematurely.
+        task = controller._task
+        self.assertIsNotNone(task)
+        self.assertEqual(task.key, '5')
+        self.assertEqual(task.reference_signature, controller._reference_signature())
+        self.assertTrue(controller.busy)
+        self.assertTrue(dialog._resolution_pending)
+        self.assertEqual(controller.requested_key, '5')
+        self.assertEqual((dialog._active_resolution_key, controller.active_key), ('25', '25'))
+        self.assertIs(dialog.analysis, previous)
+        # Returning to the accepted variant cancels that verification and also
+        # keeps a late completion from reviving the previous map selector.
+        dialog._select_resolution('25')
+        self.assertTrue(task.isCanceled())
+        task.finished(False)
+        self.assertFalse(controller.busy)
+        self.assertFalse(dialog._resolution_pending)
+        self.assertIsNone(dialog._outlet_selector)
+        self.assertIs(dialog.analysis, previous)
         dialog._cancel_surface()
 
     def test_initial_500_uses_clicked_cell_then_allows_manual_adjustment_after_save_restore(self):
@@ -339,7 +359,7 @@ class ManualOutletDialogIntegrationTests(unittest.TestCase):
                          (native.outlet_x,native.outlet_y))
         self.assertTrue(dialog.clear_delineation_button.isEnabled())
 
-    def test_global_clear_keeps_other_initial_worker_from_redrawing_after_completion(self):
+    def test_global_clear_cancels_other_initial_worker_and_ignores_queued_completion(self):
         self.configure()
         coarse=self.helper.variant(500)
         query=coarse['query']
@@ -351,45 +371,49 @@ class ManualOutletDialogIntegrationTests(unittest.TestCase):
         pending._task=task
         self.assertIsNone(pending.analysis)
         self.assertFalse(pending._delineation_cleared)
+        # Finish numerical work, but hold the callback as Qt can do while the
+        # user presses Clear. Even a successful queued result must be ignored.
+        self.assertTrue(task.run(),task.error)
         self.dialog.clear_delineation_button.click()
         remaining=set(QgsProject.instance().mapLayers())
         self.assertTrue(pending._delineation_cleared)
         self.assertFalse(pending._disposed)
         self.assertFalse(self.dialog._disposed)
-        self.assertTrue(task.run(),task.error)
+        self.assertTrue(task.isCanceled())
+        self.assertIsNone(pending._task)
         task.finished(True)
-        discovery=pending._resolution_controller._task
-        pending._queue_smoothing()
-        pending._smoothing_timer.stop()
-        pending._update_smoothing()
-        surface=self.helper.manager.tasks[-1]
-        discovery.payload={'options':[],'engine':{'available':False,'reason':'Prueba sin red'}}
-        discovery.finished(True)
-        self.helper.publish(surface)
         QTest.qWait(10)
+        self.assertIsNone(pending.analysis)
+        self.assertIsNone(pending._resolution_controller)
+        self.assertFalse(pending._smoothing_timer.isActive())
         self.assertTrue(pending._delineation_cleared)
         self.assertIsNone(pending._marker)
         self.assertIsNone(pending._outlet_selector)
         self.assertEqual(set(QgsProject.instance().mapLayers()),remaining)
         self.assertTrue(pending._surface_valid)
-        self.assertTrue(pending._smoothing_ready)
-        self.assertTrue(pending.report_button.isEnabled())
-        self.assertTrue(pending.save_project_button.isEnabled())
+        self.assertFalse(pending._smoothing_ready)
+        self.assertFalse(pending.report_button.isEnabled())
+        self.assertFalse(pending.save_project_button.isEnabled())
 
     def test_clear_during_manual_worker_keeps_complete_geometry_for_outputs_without_redrawing(self):
         self.configure()
         dialog=self.dialog
+        previous=dialog.analysis
         selector=self.open_selector()
         selector.choose(dialog.query.x,dialog.query.y+25)
         task=self.helper.manager.tasks[-1]
+        # This new manual result has finished computing, but is not yet
+        # accepted by the dialog when the user clears every drawing.
+        self.assertTrue(task.run(),task.error)
         dialog._clear_delineation()
         remaining=set(QgsProject.instance().mapLayers())
-        ok=task.run()
-        self.assertTrue(ok,task.error)
-        task.finished(ok)
-        dialog._smoothing_timer.stop()
-        dialog._update_smoothing()
-        self.helper.publish(self.helper.manager.tasks[-1])
+        self.assertTrue(task.isCanceled())
+        self.assertIsNone(self.controller._task)
+        task.finished(True)
+        QTest.qWait(10)
+        self.assertIs(dialog.analysis,previous)
+        self.assertFalse(dialog._resolution_pending)
+        self.assertFalse(dialog._smoothing_timer.isActive())
         self.assertTrue(dialog._delineation_cleared)
         self.assertIsNone(dialog._marker)
         self.assertEqual(set(QgsProject.instance().mapLayers()),remaining)

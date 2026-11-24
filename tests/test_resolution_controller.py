@@ -579,9 +579,11 @@ class ResolutionControllerTests(unittest.TestCase):
             self.assertTrue(restored.restore(state))
             self.assertEqual(restored.active_key,'5')
             self.assertFalse(restored.busy)
-            self.assertTrue(restored.select('25'))
-            self.assertEqual(restored.active_key,'25')
-        self.assertEqual(self.results[-1][0],'25')
+            self.assertTrue(restored.needs_reference_check('25'))
+            self.assertFalse(restored.select('25'))
+            self.assertEqual(restored.active_key,'5')
+        self.assertEqual(self.results[-1][0],'5')
+        self.assertIn('rásteres no están disponibles',self.errors[-1])
 
     def test_restore_preserves_an_older_explicitly_saved_automatic_snap(self):
         c=self.controller()
@@ -595,7 +597,9 @@ class ResolutionControllerTests(unittest.TestCase):
               patch.object(rc,'_analyze_dem',side_effect=AssertionError('No reinterpretation on restore'))):
             self.assertTrue(c.restore(state))
             self.assertTrue(c.select('500'))
-            self.assertTrue(c.select('5'))
+            self.assertTrue(c.needs_reference_check('5'))
+            self.assertFalse(c.select('5'))
+            self.assertEqual(c.active_key,'500')
         restored=c.variants['5']['analysis']
         self.assertIs(restored,legacy)
         self.assertEqual((restored.outlet_x,restored.outlet_y),(262.5,252.5))
