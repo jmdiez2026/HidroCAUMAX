@@ -1,3 +1,13 @@
+# HidroCAUMAX v1.0.1 — actualizaciones desde QGIS (2026-11-25)
+
+- Mantiene todas las funciones de v1.0 y la carpeta de complemento `caumax_consulta`.
+- Publicación futura automatizada al incrementar la versión en `metadata.txt` sobre `main`: comprobación de fuente, paquete QGIS, instalador Windows, etiqueta GitHub, Release e índice `plugins.xml` en GitHub Pages.
+- Conservación de entregas anteriores para recuperación sin afectar al gestor de QGIS.
+- Nombre, metadatos, título de diálogo, informes y referencias de instalación coherentes con la versión 1.0.1.
+- La instalación desde QGIS sigue siendo una acción explícita del usuario; ninguna actualización se instala en segundo plano.
+
+---
+
 # HidroCAUMAX v1.0 — reinicio de numeración (2026-11-25)
 
 - Nueva identificación pública **v1.0**; versión técnica QGIS **1.0.0** y etiqueta Git **v1.0**.
