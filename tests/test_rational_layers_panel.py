@@ -100,6 +100,18 @@ class RationalLayersPanelTests(unittest.TestCase):
         resolution.selected(self.panel._selected_key())
         return self.panel._controller.drainage.complete()
 
+    def test_resolution_sizes_are_visible_while_reference_is_loading(self):
+        panel = self.panel
+        self.assertEqual(panel.resolution_combo.count(), 5)
+        self.assertEqual(panel._selected_key(), '25')
+        self.assertFalse(panel._selected_available())
+        self.assertFalse(panel.resolution_combo.model().item(
+            panel.resolution_combo.findData('25')).isEnabled())
+        self.assertIn('25', panel.resolution_combo.currentText())
+        self.discovered()
+        self.assertEqual(panel._selected_key(), '25')
+        self.assertTrue(panel._selected_available())
+
     def test_available_fine_choices_and_changed_point_discard_old_work(self):
         resolution = self.discovered()
         panel = self.panel
