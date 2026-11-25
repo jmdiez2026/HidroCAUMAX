@@ -95,12 +95,13 @@ class RationalLayersController(QObject):
     on_options(list), on_result(key, products, state), on_status(text, progress)
     and on_error(text). Construction never starts work or calls a consumer.
     """
-    def __init__(self, on_options=None, on_result=None, on_status=None, on_error=None, parent=None):
+    def __init__(self, on_options=None, on_result=None, on_status=None, on_error=None, parent=None, on_basin=None):
         super().__init__(parent)
         self._on_options = on_options or (lambda options: None)
         self._on_result = on_result or (lambda key, products, state: None)
         self._on_status = on_status or (lambda text, progress=0.: None)
         self._on_error = on_error or (lambda text: None)
+        self._on_basin = on_basin or (lambda key, analysis, query: None)
         self.query = None
         self.signature = None
         self.base_analysis = None
@@ -115,6 +116,7 @@ class RationalLayersController(QObject):
         self._generation = 0
         self._prepare_generation = 0
         self._pending = None
+        self._basin_pending = None
         self._disposed = False
         if parent is not None:
             parent.destroyed.connect(self.dispose)
@@ -217,6 +219,33 @@ class RationalLayersController(QObject):
             self._pending = None
         self._on_error(str(text))
 
+    def select_resolution(self, key):
+        """Delineate immediately with the verified reference-D8 algorithm.
+
+        TauDEM network generation is intentionally NOT required here. A valid
+        watershed must appear even if StreamNet later yields zero channels.
+        """
+        if self._disposed or self._task is not None or self.resolution is None:
+            return False
+        try:
+            numeric = float(key)
+            if not math.isfinite(numeric) or not 0 < numeric < 500:
+                raise ValueError('Selecciona una resolución mejorada inferior a 500 m.')
+            key = format(numeric, '.12g')
+            if _query_signature(self.query) != self.signature:
+                self.set_context(self.query)
+                return False
+            self.cancel()
+            self._basin_pending = key
+            accepted = self.resolution.select(key)
+            if not accepted:
+                self._basin_pending = None
+            return bool(accepted)
+        except (AttributeError, OSError, TypeError, ValueError) as error:
+            self._basin_pending = None
+            self._on_error(str(error))
+            return False
+
     def prepare(self, key, threshold_area_m2=None, automatic=True):
         """Prepare the chosen fine variant, then invoke the existing TauDEM route."""
         if self._disposed or self._task is not None or self.resolution is None:
@@ -246,12 +275,21 @@ class RationalLayersController(QObject):
             return False
 
     def _resolution_ready(self, generation, key, analysis, query):
-        if not self._current(generation) or self._pending is None:
+        if not self._current(generation):
+            return
+        if self._pending is None:
+            if self._basin_pending != key:
+                return
+            self._basin_pending = None
+            self.active_key = key
+            self._on_basin(key, analysis, query)
             return
         pending_key, threshold, automatic, _ = self._pending
         if key != pending_key:
             return
         self.active_key = key
+        # Publish the actual watershed before the optional TauDEM network.
+        self._on_basin(key, analysis, query)
         try:
             if self.drainage is None:
                 self.drainage = DrainageController(
@@ -295,29 +333,43 @@ class RationalLayersController(QObject):
         variant.update(analysis=products.analysis, query=replace(variant['query'],
             dem_path=str(products.dem_path), directions_path=str(products.caumax_d8_path)),
             smoothing_state=None)
+        self._on_basin(key, variant['analysis'], variant['query'])
         self._on_result(key, products, state)
 
     def selection_context(self):
-        """Offer only a pending ambiguous selection, never another active basin."""
-        if (self._disposed or self._pending is None or self.resolution is None
-                or self.resolution.outlet_selection_context is None):
+        """Manual review is optional, including for a valid active delineation."""
+        if self._disposed or self.resolution is None:
             return None
-        context = self.resolution.selection_context()
+        if self._pending is None and self._basin_pending is None and self.active_key is None:
+            return None
+        try:
+            context = self.resolution.selection_context()
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return None
         context['_rational_context_generation'] = self._generation
         context['_rational_prepare_generation'] = self._prepare_generation
         return context
 
     def select_outlet(self, context, x, y):
-        if self._disposed or self._pending is None or self.resolution is None:
+        if self._disposed or self.resolution is None:
             return False
+        selected_key = str(context.get('resolution_key'))
+        failed_key = ((self.resolution.outlet_selection_context or {}).get('resolution_key')
+                      if self.resolution is not None else None)
+        accepted_key = (self._pending[0] if self._pending else
+                        self._basin_pending or failed_key or self.active_key)
         if (context.get('_rational_context_generation') != self._generation
                 or context.get('_rational_prepare_generation') != self._prepare_generation
-                or str(context.get('resolution_key')) != self._pending[0]):
+                or selected_key != accepted_key):
             self._on_error('La selección del cierre pertenece a un cálculo anterior.')
             return False
         prepared = deepcopy(context)
         prepared.pop('_rational_context_generation', None)
         prepared.pop('_rational_prepare_generation', None)
+        # When network generation was not requested, manual adjustment updates
+        # only the watershed; later D8 generation uses this verified closure.
+        if self._pending is None:
+            self._basin_pending = selected_key
         # A manual choice must not reuse products associated with another cell.
         if self.drainage is not None:
             self.drainage.dispose()
@@ -332,6 +384,7 @@ class RationalLayersController(QObject):
     def cancel(self):
         self._prepare_generation += 1
         self._pending = None
+        self._basin_pending = None
         task, self._task = self._task, None
         if task is not None:
             task.cancel()
@@ -359,3 +412,4 @@ class RationalLayersController(QObject):
         self._on_result = lambda key, products, state: None
         self._on_status = lambda text, progress=0.: None
         self._on_error = lambda text: None
+        self._on_basin = lambda key, analysis, query: None
