@@ -23,6 +23,7 @@ from qgis.core import (
 from qgis.gui import QgsRubberBand, QgsVertexMarker
 
 from .parameter_schema import METRICS, format_value
+from .drainage_threshold import manual_step, recommended_threshold
 from .metrics import shape_metrics
 from .morphology_table import ActionGroupBox, InterpretationDelegate, InterpretationHeader, fit_morphology_rows
 from .drainage_panel import DrainageControls, DrainageStatusLabel
@@ -1015,9 +1016,11 @@ class BasinDialog(QDialog):
         self._drainage_loading = True
         if analysis is not None and not busy:
             minimum = analysis.cell_width*analysis.cell_height
-            recommended = max(100*minimum,.01*analysis.area_m2)
+            recommended = (float(state['recommended_threshold_area_m2']) if state else
+                recommended_threshold(analysis.area_m2, minimum))
             chosen = float(state['threshold_area_m2']) if state else recommended
             self.drainage_threshold.setRange(minimum/1e6,max(analysis.area_m2*2,chosen,recommended)/1e6)
+            self.drainage_threshold.setSingleStep(manual_step(analysis.area_m2, minimum)/1e6)
             self.drainage_threshold.setValue(chosen/1e6)
         if state and not busy:
             self.drainage_auto.setChecked(state['automatic'])

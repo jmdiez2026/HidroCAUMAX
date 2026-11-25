@@ -44,7 +44,9 @@ def _state(products, automatic, encoding):
     from .drainage_layers import read_network_snapshot
     snapshot = read_network_snapshot(products)
     analysis = products.analysis
-    recommended = max(100 * analysis.cell_width * analysis.cell_height, .01 * analysis.area_m2)
+    from .drainage_threshold import recommended_threshold
+    recommended = float(products.metadata.get('recommended_threshold_area_m2') or
+        recommended_threshold(analysis.area_m2, analysis.cell_width * analysis.cell_height))
     state = dict(metadata=dict(products.metadata),
         threshold_area_m2=float(products.threshold_area_m2),
         recommended_threshold_area_m2=float(recommended), automatic=bool(automatic),

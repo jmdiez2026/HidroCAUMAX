@@ -337,6 +337,10 @@ def _outlet(path, x, y, wkt):
     feature = layer = ds = None
 
 
+class EmptyStreamNetworkError(ValueError):
+    """TauDEM finished, but no drainage reaches were produced for this cutoff."""
+
+
 def _threshold(area_m2, cell_area):
     area = _h._positive_finite(area_m2, "El umbral de red")
     cells = max(1, int(math.ceil(area / cell_area)))
@@ -351,7 +355,7 @@ def _network(engine, filled, native, accumulation, outlet, threshold_cells, fold
         vector = None
         if valid:
             return stream, network, []
-    staging = work / "network"
+    staging = work / ("network_" + str(threshold_cells))
     staging.mkdir(exist_ok=True)
     staged_stream, staged_network = staging / stream.name, staging / network.name
     progress("Definiendo red TauDEM", 75)
@@ -365,7 +369,7 @@ def _network(engine, filled, native, accumulation, outlet, threshold_cells, fold
         "-w", staging / "watersheds.tif", "-sw"], work, cancelled))
     vector = ogr.Open(str(staged_network))
     if vector is None or vector.GetLayer(0).GetFeatureCount() <= 0:
-        raise ValueError("El umbral no produce cauces TauDEM en la cuenca. Elija un umbral menor.")
+        raise EmptyStreamNetworkError("El umbral no produce cauces TauDEM en la cuenca. Elija un umbral menor.")
     vector = None
     _h._check(cancelled)
     folder.mkdir(parents=True, exist_ok=True)
@@ -553,12 +557,33 @@ def prepare_taudem(dem_path, outlet_x, outlet_y, cache_dir, *, reference_area_m2
                 raise ValueError("El aporte de AreaD8 no coincide con la delimitación TauDEM inclusiva.")
             if area_source != accumulation:
                 _h._publish_cache(area_source, accumulation, cancelled)
-            recommended = max(100 * cell_area, .01 * analysis.area_m2)
-            cells, threshold_area = _threshold(recommended if threshold_area_m2 is None else threshold_area_m2, cell_area)
-            net_folder = selected_folder / ("network_" + str(cells))
-            stream, network, network_steps = _network(engine, filled, native, accumulation,
-                closure, cells, net_folder, work, cancelled, progress)
-            steps.extend(network_steps)
+            from .drainage_threshold import recommended_threshold, automatic_threshold_cells
+            recommended = recommended_threshold(analysis.area_m2, cell_area)
+            is_automatic = threshold_area_m2 is None
+            candidates = (automatic_threshold_cells(analysis.area_m2, cell_area)
+                          if is_automatic else (_threshold(threshold_area_m2, cell_area)[0],))
+            attempted = []
+            for cells in candidates:
+                _h._check(cancelled)
+                net_folder = selected_folder / ("network_" + str(cells))
+                attempted.append(cells)
+                try:
+                    stream, network, network_steps = _network(engine, filled, native, accumulation,
+                        closure, cells, net_folder, work, cancelled, progress)
+                except EmptyStreamNetworkError:
+                    if not is_automatic or cells == candidates[-1]:
+                        raise ValueError('TauDEM no genera tramos conectados al cierre, incluso '
+                            'con un umbral reducido. Revisa la correspondencia del cierre, '
+                            'las direcciones D8 y la cobertura del MDT.') from None
+                    progress('Umbral sin cauces; comprobando otro más pequeño', 87)
+                    continue
+                steps.extend(network_steps)
+                break
+            threshold_area = cells * cell_area
+            # The automatic control must restore the last verified value,
+            # not retry a larger cutoff that produced no streams.
+            if is_automatic:
+                recommended = threshold_area
         metadata = {"engine": "TauDEM", "version": provenance["steps"][0]["version"],
                     "binary_sha256": hashes, "runtime": runtime, "source_url": "https://github.com/dtarb/TauDEM",
                     "steps": provenance["steps"] + steps,
@@ -566,7 +591,9 @@ def prepare_taudem(dem_path, outlet_x, outlet_y, cache_dir, *, reference_area_m2
                     "elevation_source": "original DEM; filled DEM routes flow only",
                     "threshold_area_m2": threshold_area, "threshold_cells": cells,
                     "recommended_threshold_area_m2": recommended, "automatic": threshold_area_m2 is None,
-                    "threshold_policy": "plugin heuristic max(100 native cells, 1% of TauDEM basin area)",
+                    "threshold_policy": "provisional 0.5% basin area, min 8 cells, max 5%; bounded half-threshold retries if empty",
+                    "threshold_candidates_cells": attempted,
+                    "threshold_auto_reductions": len(attempted)-1 if is_automatic else 0,
                     "outlet_path": str(closure), "bin_dir": str(bin_dir) if bin_dir is not None else None,
                     "inclusive_accumulation_path": inclusive_path,
                     "edge_contamination_check": True, "outlet_selection": selection}

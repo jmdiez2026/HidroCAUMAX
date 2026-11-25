@@ -68,6 +68,12 @@ class DrainageControls(QGroupBox):
         self.drainage_threshold.setDecimals(6)
         self.drainage_threshold.setRange(.000001, 1000000)
         self.drainage_threshold.setSuffix(' km²')
+        self.drainage_threshold.setSingleStep(.000001)  # calibrated when basin area is known
+        self.drainage_threshold.setToolTip(
+            'Umbral de superficie contribuyente para iniciar los cauces D8. '
+            'En automático se ensaya una proporción orientativa del área de cuenca; '
+            'las flechas ajustan pasos pequeños y proporcionales. '
+            'No determina el nacimiento real del cauce.')
         self.drainage_auto = QCheckBox('Automático', self)
         self.drainage_auto.setChecked(True)
         self.drainage_visible = QCheckBox('Mostrar red', self)
@@ -81,8 +87,10 @@ class DrainageControls(QGroupBox):
             row.addWidget(control)
         row.addStretch(1)
         layout.addLayout(row)
-        density = QLabel('Un umbral menor produce una red más densa. El valor automático '
-            'es una propuesta inicial y puedes editarlo.', self)
+        density = QLabel('Umbral orientativo: 0,5 % de la cuenca, ajustado a la malla; '
+            'si no se obtiene red, el modo automático ensaya umbrales menores. '
+            'Las flechas cambian el 0,01 % del área (mínimo una celda). '
+            'Un valor menor produce una red más densa; contrasta el resultado con los cauces reales.', self)
         density.setWordWrap(True)
         layout.addWidget(density)
         self._drainage_exports_widget = QWidget(self)

@@ -6,6 +6,7 @@ from qgis.PyQt.QtWidgets import QComboBox, QFileDialog, QHBoxLayout, QLabel, QWi
 
 from .drainage_layers import DrainageLayers
 from .drainage_panel import DrainageControls
+from .drainage_threshold import manual_step, recommended_threshold
 from .rational_layers_controller import RationalLayersController
 
 
@@ -129,11 +130,12 @@ class RationalLayersPanel(DrainageControls):
         if key is None or reference is None:
             return
         cell_area = float(key) ** 2
-        recommended = max(100 * cell_area, .01 * reference.area_m2)
+        recommended = recommended_threshold(reference.area_m2, cell_area)
         self._loading = True
         try:
             self.drainage_threshold.setRange(cell_area / 1e6,
                 max(reference.area_m2 * 2, recommended) / 1e6)
+            self.drainage_threshold.setSingleStep(manual_step(reference.area_m2, cell_area) / 1e6)
             self.drainage_threshold.setValue(recommended / 1e6)
         finally:
             self._loading = False
@@ -223,6 +225,7 @@ class RationalLayersPanel(DrainageControls):
             self.drainage_threshold.setRange(minimum / 1e6,
                 max(analysis.area_m2 * 2, threshold,
                     state['recommended_threshold_area_m2']) / 1e6)
+            self.drainage_threshold.setSingleStep(manual_step(analysis.area_m2, minimum) / 1e6)
             self.drainage_threshold.setValue(threshold / 1e6)
             self.drainage_auto.setChecked(bool(state['automatic']))
             state['network_visible'] = self.drainage_visible.isChecked()

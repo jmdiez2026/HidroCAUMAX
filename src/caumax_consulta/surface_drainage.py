@@ -35,7 +35,8 @@ def clip_network(state, analysis, cancelled=lambda: False):
         for line in lines(geometry.Intersection(polygon)):
             features.append(dict(wkb=bytes(line.ExportToWkb()), attributes=deepcopy(feature['attributes'])))
     result['features'] = features
-    recommended = max(100*analysis.cell_width*analysis.cell_height, .01*analysis.area_m2)
+    from .drainage_threshold import recommended_threshold
+    recommended = recommended_threshold(analysis.area_m2, analysis.cell_width * analysis.cell_height)
     result['recommended_threshold_area_m2'] = recommended
     result['metadata']['active_surface_area_m2'] = analysis.area_m2
     result['metadata']['surface_clip'] = 'exact_active_polygon'
