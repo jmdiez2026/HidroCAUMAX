@@ -156,7 +156,16 @@ class RationalLayersController(QObject):
         self.active_key = None
         self.products = self.state = None
         self._states.clear()
-        self._publish_options([])
+        if snapshot is None:
+            self._publish_options([])
+        else:
+            # Show the supported MDT sizes immediately while the reference
+            # watershed is prepared asynchronously. Availability is confirmed
+            # only by the later coverage-discovery callback.
+            self._publish_options([
+                {'key': key, 'resolution': float(key), 'available': False,
+                 'status': 'Preparando cuenca de referencia'}
+                for key in ('500', '25', '5', '2', '0.5')])
         if snapshot is None:
             self._on_status('Selecciona un punto de cálculo para preparar sus capas.', 0.)
             return True
