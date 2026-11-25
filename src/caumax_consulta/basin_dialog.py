@@ -99,7 +99,7 @@ class BasinDialog(QDialog):
     def __init__(self, query, iface, parent=None, saved_session=None):
         super().__init__(parent)
         self.setObjectName('CaumaxCuencaHidrograficaDialog')
-        self.setWindowTitle('HidroCAUMAX v1.2.12 · Cuenca hidrográfica')
+        self.setWindowTitle('HidroCAUMAX v1.2.13 · Cuenca hidrográfica')
         self.setStyleSheet(BLUE_BUTTON_STYLE)
         self.setAttribute(Qt.WA_DeleteOnClose)
         self.setModal(False)
@@ -539,6 +539,7 @@ class BasinDialog(QDialog):
 
     def _update_context(self):
         query,analysis = self.query,self.analysis
+        self.analysis_ai_button.setVisible(not is_rational_query(query))
         coordinates = lambda value: f'{value:.3f}'.rstrip('0').rstrip('.')
         self.context_point.setText(
             f'Punto original de consulta: X={coordinates(query.x)}; Y={coordinates(query.y)} · '

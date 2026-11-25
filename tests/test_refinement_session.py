@@ -76,6 +76,25 @@ class RefinementSessionTests(unittest.TestCase):
         return replace(analysis, selected_x=point[0], selected_y=point[1],
                        diagnostics={**analysis.diagnostics, 'outlet_snap': record})
 
+    def rational_nearest(self, fixture):
+        """Independent fine drainage with a long qualifying chain near the click."""
+        directions, dem = self.rasters('rational_fine', size=180, resolution=25)
+        codes = np.zeros((180, 180), dtype=np.uint8)
+        codes[20:160, 20:89] = 1
+        codes[20:160, 90:160] = 16
+        codes[20:159, 89] = 4
+        ds = gdal.Open(str(directions), gdal.GA_Update)
+        ds.GetRasterBand(1).WriteArray(codes)
+        ds = None
+        reference = dict(geometry_wkb=fixture.analysis.geometry_wkb,
+                         main_course_wkb=fixture.analysis.main_course_wkb,
+                         crs_wkt=fixture.analysis.crs_wkt,
+                         selection_policy='nearest_reference_chain_cell')
+        query = replace(fixture.query, directions_path=str(directions), dem_path=str(dem))
+        analysis = self.refined(directions, dem, (query.x, query.y), reference,
+                                historical=fixture.analysis.area_m2)
+        return analysis, query, directions, dem
+
     def fixture(self, *, unchanged=False, inset=False, vertices=0):
         directions, dem = self.rasters('fine')
         original = analyze_basin(directions, dem, 137.5, 112.5)
@@ -283,6 +302,104 @@ class RefinementSessionTests(unittest.TestCase):
         self.assertEqual(saved.analysis, restored.analysis)
         self.assertEqual(json.loads(self.path.read_text())['analysis']['diagnostics']['outlet_snap'],
                          document['analysis']['diagnostics']['outlet_snap'])
+
+    def test_rational_nearest_chain_proof_roundtrips_without_source_rasters(self):
+        from test_rational_basin import rational_fixture
+
+        with rational_fixture() as fixture:
+            active, query, directions, dem = self.rational_nearest(fixture)
+            record = active.diagnostics['outlet_snap']
+            self.assertEqual(record['reference_policy_version'], 2)
+            self.assertGreater(record['candidate_count'], 20)
+            self.assertEqual((active.outlet_x, active.outlet_y), (2237.5, 2237.5))
+            self.assertFalse(active.touches_boundary)
+            self.save(active, query)
+            for path in (directions, dem, *fixture.paths.values()):
+                path.unlink()
+            with patch.object(gdal, 'Open', side_effect=AssertionError('No source rasters')):
+                restored = session_store.load_session(self.path)
+            self.assertEqual(restored.analysis, active)
+            self.assertEqual(restored.query, query)
+            self.assertEqual(restored.query.source_kind, 'rational')
+
+    def test_rational_nearest_chain_corruption_is_rejected_before_raster_work(self):
+        from test_rational_basin import rational_fixture
+
+        with rational_fixture() as fixture:
+            active, query, _, _ = self.rational_nearest(fixture)
+            self.save(active, query)
+            previous = self.path.read_bytes()
+            base = active.diagnostics['outlet_snap']
+            bad_connection = deepcopy(base['candidate_chain_cells'])
+            bad_connection[0][2] = 1
+            bad_accumulation = deepcopy(base['candidate_chain_cells'])
+            bad_accumulation[1][3] = bad_accumulation[0][3]
+            bad_overlap = deepcopy(base['candidate_chain_cells'])
+            bad_overlap[1][4] = bad_overlap[0][4] - 1
+            terminal_cycle = deepcopy(base['candidate_chain_cells'])
+            terminal_cycle[-1][2] = 64
+            corruptions = (
+                ('selection_policy', 'nearest_reference_section'),
+                ('projection_kind', 'orthogonal'),
+                ('reference_policy_version', True),
+                ('candidate_chain_cells', []),
+                ('candidate_chain_cells', bad_connection),
+                ('candidate_chain_cells', bad_accumulation),
+                ('candidate_chain_cells', bad_overlap),
+                ('candidate_chain_cells', terminal_cycle),
+                ('candidate_chain_cells', base['candidate_chain_cells'][1:]),
+                ('reference_course_wkb_hex', None),
+                ('candidate_count', base['candidate_count'] - 1),
+                ('branch_ambiguity_tolerance_m', 1.25),
+                ('branch_distance_m', base['branch_distance_m'] + 1),
+                ('branch_runner_up_distance_m', None),
+                ('section_projection_x', active.outlet_x),
+            )
+            with patch.object(session_store, '_reference_mask_counts',
+                              side_effect=AssertionError('Must preflight first')) as rasterize:
+                for key, value in corruptions:
+                    invalid = replace(active, diagnostics={**active.diagnostics,
+                                      'outlet_snap': {**base, key: value}})
+                    with self.subTest(key=key), self.assertRaises(ValueError):
+                        self.save(invalid, query)
+                    self.assertEqual(self.path.read_bytes(), previous)
+                rasterize.assert_not_called()
+            raster_query = replace(query, source_kind='caumax_raster', rational_context=None,
+                                   flow=10)
+            with self.assertRaisesRegex(ValueError, 'racional'):
+                self.save(active, raster_query)
+            self.assertEqual(self.path.read_bytes(), previous)
+
+    def test_larger_valid_basin_cannot_replace_the_nearest_rational_closure(self):
+        from test_rational_basin import rational_fixture
+
+        with rational_fixture() as fixture:
+            active, query, directions, dem = self.rational_nearest(fixture)
+            base = active.diagnostics['outlet_snap']
+            row, col, _, count, overlap = base['candidate_chain_cells'][1]
+            x, y = (col + .5) * 25, 4500 - (row + .5) * 25
+            larger = analyze_basin(directions, dem, x, y)
+            self.assertGreater(larger.area_m2, active.area_m2)
+            distance = ((query.x - x) ** 2 + (query.y - y) ** 2) ** .5
+            area, intersection = count * 625, overlap * 625
+            ref_area = base['reference_raster_area_m2']
+            record = {**base, 'snapped_row': row, 'snapped_col': col,
+                      'snapped_x': x, 'snapped_y': y,
+                      'candidate_upstream_area_m2': area, 'intersection_area_m2': intersection,
+                      'distance_m': distance, 'branch_distance_m': distance,
+                      'branch_runner_up_distance_m': base['distance_m'],
+                      'reference_coverage_fraction': intersection / ref_area,
+                      'candidate_overlap_fraction': intersection / area,
+                      'intersection_over_union': intersection / (ref_area + area - intersection),
+                      'area_change_vs_original_cell_m2': area - base['original_cell_upstream_area_m2'],
+                      'area_change_vs_reference_pct': 100 * (area / base['reference_area_m2'] - 1),
+                      'candidate_touches_boundary': larger.touches_boundary}
+            larger = replace(larger, selected_x=query.x, selected_y=query.y,
+                             diagnostics={**larger.diagnostics, 'outlet_snap': record})
+            with patch.object(session_store, '_reference_mask_counts',
+                              side_effect=AssertionError('Must preflight first')):
+                with self.assertRaisesRegex(ValueError, 'minimiza'):
+                    self.save(larger, query)
 
 
 if __name__ == '__main__':

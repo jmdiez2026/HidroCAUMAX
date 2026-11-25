@@ -450,6 +450,8 @@ class ResolutionController(QObject):
                 main_course_wkb=reference_analysis.main_course_wkb,
                 crs_wkt=reference_analysis.crs_wkt,cell_width=reference_analysis.cell_width,
                 cell_height=reference_analysis.cell_height)
+            if getattr(self.base_query,'source_kind','caumax_raster')=='rational':
+                refinement_reference['selection_policy']='nearest_reference_chain_cell'
         snap_options={
             'reference_area_m2':self.reference_area_m2,
             'reference_cell_width':float(reference_analysis.cell_width),
@@ -517,6 +519,8 @@ class ResolutionController(QObject):
             main_course_wkb=reference_analysis.main_course_wkb,
             crs_wkt=reference_analysis.crs_wkt,cell_width=reference_analysis.cell_width,
             cell_height=reference_analysis.cell_height)
+        if getattr(self.base_query,'source_kind','caumax_raster')=='rational':
+            reference['selection_policy']='nearest_reference_chain_cell'
         source_wkt,x,y=self._query_crs,self._query_x,self._query_y
         snap_options=dict(reference_area_m2=self.reference_area_m2,
             reference_cell_width=float(reference_analysis.cell_width),

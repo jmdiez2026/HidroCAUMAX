@@ -2,8 +2,10 @@
 
 This is a conservative, explicit plugin policy, not a hydrological standard:
 both basins must share strictly more than half of their rasterized footprints.
-The native D8 topology then identifies one ancestral chain. Distance to its
-real segments selects an upstream centre; area is never a target to reproduce.
+The native D8 topology then identifies one ancestral chain. The original
+policy selects an upstream section. Rational point queries can instead use
+the nearest qualifying centre on that same chain, without imposing an axis
+from a much coarser course. Area is never a target to reproduce.
 Only GDAL/OGR and NumPy are used, including in QGIS worker threads.
 """
 import math
@@ -24,6 +26,18 @@ POLICY = ('plugin: strictly more than half of both native raster footprints must
           'cell when qualified, otherwise use its nearest unambiguous orthogonal section '
           'and first upstream centre; the incoming coarse course excludes downstream '
           'closures; no reference-area target; unresolved correspondence requires manual choice')
+LEGACY_SELECTION_POLICY = 'nearest_reference_section'
+NEAREST_CHAIN_SELECTION_POLICY = 'nearest_reference_chain_cell'
+NEAREST_CHAIN_POLICY_VERSION = 2
+NEAREST_CHAIN_POLICY = (
+    'plugin: strictly more than half of both native raster footprints must overlap; '
+    'all qualifying outlets must form one connected ancestral D8 chain; choose the '
+    'qualifying cell centre with minimum Euclidean distance to the original point; '
+    'numerically equal distances within max(cell width, cell height)*1e-7 metres '
+    'choose the upstream centre on that same chain; no coarse-course alignment, '
+    'maximum-accumulation preference or reference-area target; unresolved '
+    'correspondence requires manual choice')
+NEAREST_CHAIN_REFERENCE = 'https://jblindsay.github.io/ghrg/Whitebox/Help/JensonSnapPourPoints.html'
 
 
 def _review(message, reason):
@@ -110,7 +124,11 @@ def _course_axis(course):
 
 
 def _select_chain(data, window, transform, counts, overlap, reference_count,
-                  original, x, y, radius, axis, cancelled):
+                  original, x, y, radius, axis, cancelled, *,
+                  selection_policy=LEGACY_SELECTION_POLICY):
+    if selection_policy not in (LEGACY_SELECTION_POLICY, NEAREST_CHAIN_SELECTION_POLICY):
+        raise ValueError('La política de correspondencia del cierre no es reconocida.')
+    nearest_centre = selection_policy == NEAREST_CHAIN_SELECTION_POLICY
     left, top, width, height = window
     step_x, step_y = transform[1], -transform[5]
     epsilon = max(step_x, step_y) * 1e-7
@@ -135,11 +153,11 @@ def _select_chain(data, window, transform, counts, overlap, reference_count,
         _review('Ningún cierre próximo comparte la mayoría espacial de la cuenca de referencia.',
                 'no_reference_match')
     origin = original.row, original.col
-    if origin in candidates:
+    if origin in candidates and not nearest_centre:
         return dict(cell=origin, projection_kind='containing_cell',
                     candidate_count=len(candidates), ambiguity=ambiguity,
                     lateral_distance=distance(origin), runner_up=None)
-    if axis is None:
+    if axis is None and not nearest_centre:
         _review('Falta el tramo inicial del curso de referencia para verificar la sección.',
                 'missing_reference_course')
     offsets = {code: (-dy, -dx) for dx, dy, code in _b.DIRECTIONS}
@@ -156,7 +174,7 @@ def _select_chain(data, window, transform, counts, overlap, reference_count,
         chain.append(current)
         row, col, code = entry(current)
         if current == last:
-            if code:
+            if code and not nearest_centre:
                 dr, dc = offsets[code]
                 target = row + dr, col + dc
                 if (top <= target[0] < top + height and left <= target[1] < left + width
@@ -174,6 +192,21 @@ def _select_chain(data, window, transform, counts, overlap, reference_count,
         current = target
     if not candidates.issubset(visited):
         _review('Hay varias ramas sin una correspondencia D8 única.', 'ambiguous_reference_chain')
+    if nearest_centre:
+        # The 500 m course gives a drainage identity, not a fine-scale section
+        # direction. Requiring its axis can reject the closest valid 5/25 m
+        # centre even after the two footprint tests and D8 ancestry agree.
+        # Jenson's nearest-stream-cell principle is applied only to this
+        # independently qualified chain, never to every high-accumulation cell.
+        minimum = min(distance(cell) for cell in candidates)
+        tied = [cell for cell in candidates if distance(cell) <= minimum + epsilon]
+        chosen = min(tied, key=lambda cell: (int(counts[cell]), cell))
+        runner = min((distance(cell) for cell in candidates if cell != chosen), default=None)
+        proof = [entry(cell) + [int(counts[cell]), int(overlap[cell])] for cell in chain]
+        return dict(cell=chosen, projection_kind='nearest_chain_cell',
+                    candidate_count=len(candidates), ambiguity=epsilon,
+                    lateral_distance=distance(chosen), runner_up=runner,
+                    candidate_chain_cells=proof)
     projections = {}
     for source, target in zip(chain, chain[1:]):
         if source not in candidates:
@@ -231,6 +264,10 @@ def select_reference_outlet(directions_path, counts, x, y, radius, reference,
         _require_accumulation_memory(rows * cols, 32)
         if not isinstance(reference, dict):
             _review('No se conserva la cuenca de referencia para el refinamiento.', 'invalid_reference')
+        selection_policy = reference.get('selection_policy', LEGACY_SELECTION_POLICY)
+        if selection_policy not in (LEGACY_SELECTION_POLICY, NEAREST_CHAIN_SELECTION_POLICY):
+            raise ValueError('La política de correspondencia del cierre no es reconocida.')
+        nearest_centre = selection_policy == NEAREST_CHAIN_SELECTION_POLICY
         source = osr.SpatialReference()
         if (source.ImportFromWkt(str(reference.get('crs_wkt', ''))) != 0
                 or not source.IsProjected() or not math.isclose(source.GetLinearUnits(), 1., rel_tol=1e-8)):
@@ -254,7 +291,8 @@ def select_reference_outlet(directions_path, counts, x, y, radius, reference,
         window = (left, top, right - left, bottom - top)
         data = _b._read(dataset.GetRasterBand(1), *window)
         selected = _select_chain(data, window, transform, counts, overlap, reference_count,
-                                 original, float(x), float(y), radius, _course_axis(course), cancelled)
+                                 original, float(x), float(y), radius, _course_axis(course), cancelled,
+                                 selection_policy=selection_policy)
         row, col = selected['cell']
         cx, cy = transform[0] + (col + .5) * original.width, transform[3] - (row + .5) * original.height
         cell = cell_at_point(cx, cy, *bounds, cols, rows)
@@ -266,7 +304,9 @@ def select_reference_outlet(directions_path, counts, x, y, radius, reference,
         historic_area = _positive_finite(reference_area_m2 if reference_area_m2 is not None
                                          else geometry.GetArea(), 'El área de referencia')
         diagnostic = dict(method='reference_basin_d8', selection_mode='reference_basin_overlap',
-            reference_policy_version=POLICY_VERSION, policy=POLICY, tie_break='nearest_reference_section',
+            reference_policy_version=NEAREST_CHAIN_POLICY_VERSION if nearest_centre else POLICY_VERSION,
+            policy=NEAREST_CHAIN_POLICY if nearest_centre else POLICY,
+            tie_break=selection_policy,
             status='unchanged' if (row, col) == (original.row, original.col) else 'snapped',
             original_x=float(x), original_y=float(y), original_row=original.row, original_col=original.col,
             snapped_x=cell.x, snapped_y=cell.y, snapped_row=row, snapped_col=col,
@@ -288,6 +328,10 @@ def select_reference_outlet(directions_path, counts, x, y, radius, reference,
             candidate_count=selected['candidate_count'], projection_kind=selected['projection_kind'],
             branch_distance_m=float(selected['lateral_distance']),
             branch_runner_up_distance_m=selected['runner_up'], branch_ambiguity_tolerance_m=selected['ambiguity'])
+        if nearest_centre:
+            diagnostic.update(selection_policy=selection_policy,
+                candidate_chain_cells=selected['candidate_chain_cells'],
+                reference=NEAREST_CHAIN_REFERENCE)
         if selected['projection_kind'] == 'orthogonal':
             diagnostic.update(section_source_cell=selected['source'], section_target_cell=selected['target'],
                 section_projection_x=float(selected['projection'][0]), section_projection_y=float(selected['projection'][1]),

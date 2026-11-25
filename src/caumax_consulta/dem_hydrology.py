@@ -1199,12 +1199,17 @@ def analyze_dem(dem_path, outlet_x, outlet_y, cache_dir,
             'Las cotas, el TRI y la pendiente local se calculan sobre el MDT original, sin rellenarlo ni remuestrearlo.')
     notes = (*analysis.notes, routing_note)
     if snap is not None and snap.get('method') == 'reference_basin_d8':
+        selection_note = (
+            "Se selecciona el centro de celda admisible más cercano al clic original "
+            "dentro de una única cadena D8 compatible. "
+            if snap.get('reference_policy_version') == 2 else
+            "Se conserva la celda del clic cuando cumple; un ajuste usa la sección de una única "
+            "cadena D8 compatible y se verifica frente a la orientación del curso original. ")
         notes += (f"Correspondencia espacial entre resoluciones: el cierre comparte "
                   f"{100 * snap['reference_coverage_fraction']:.1f} % de la huella original y "
                   f"{100 * snap['candidate_overlap_fraction']:.1f} % de su propia cuenca con ella. "
                   "La política exige mayoría estricta en ambas direcciones, sin reproducir un área objetivo. "
-                  "Se conserva la celda del clic cuando cumple; un ajuste usa la sección de una única "
-                  "cadena D8 compatible y se verifica frente a la orientación del curso original. "
+                  + selection_note +
                   "Esta comprobación ráster no certifica por sí sola la identidad física del cauce.",)
     elif snap is not None:
         association = ("Se ha seguido la traza D8 fina del punto original para asociar el cauce "

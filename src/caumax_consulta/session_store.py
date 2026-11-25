@@ -183,6 +183,8 @@ def _outlet_snap(diagnostics, basin, selected_x, selected_y, boundary, budget=No
                                'section_source_cell', 'section_target_cell',
                                'section_projection_x', 'section_projection_y',
                                'section_offset_m', 'coarse_upstream_distance_m'}
+        if snap.get('reference_policy_version') == 2:
+            extra |= {'selection_policy', 'candidate_chain_cells'}
         _keys(snap, required | extra, 'ajuste por cuenca de referencia', refinement_optional)
     else:
         _keys(snap, required, 'ajuste del cierre', optional)
@@ -246,7 +248,8 @@ def _outlet_snap(diagnostics, basin, selected_x, selected_y, boundary, budget=No
     if 'candidate_touches_boundary' in snap:
         if _bool(snap['candidate_touches_boundary'], 'borde del cierre ajustado') != basin.touches_boundary:
             _fail('ajuste del cierre', 'el indicador de borde no corresponde a la cuenca')
-    expected_tie = ('nearest_reference_section' if refinement else
+    expected_tie = ('nearest_reference_chain_cell' if refinement and snap.get('reference_policy_version') == 2 else
+                    'nearest_reference_section' if refinement else
                     'nearest_branch_geometry' if snap.get('selection_mode') in
                     ('upstream_nearest_branch', 'upstream_lateral_nearest_branch') else
                     'main_course_d8_order' if snap.get('selection_mode') in
@@ -342,8 +345,8 @@ def _reference_basin_record(snap, basin, selected_x, selected_y, budget):
     """Validate a self-contained snapshot of the coarse reference and its grid."""
     from .grid import cell_at_point
 
-    if (snap['selection_mode'] != 'reference_basin_overlap'
-            or _int(snap['reference_policy_version'], 'versión de referencia', 1, 1) != 1):
+    version = _int(snap['reference_policy_version'], 'versión de referencia', 1, 2)
+    if snap['selection_mode'] != 'reference_basin_overlap':
         _fail('referencia espacial', 'método o versión desconocidos')
     for key in ('minimum_reference_coverage', 'minimum_candidate_overlap'):
         if _float(snap[key], 'referencia ' + key) != 0.5:
@@ -415,12 +418,104 @@ def _reference_basin_record(snap, basin, selected_x, selected_y, budget):
     _close(snap['area_change_vs_reference_pct'],
            100 * (snap['candidate_upstream_area_m2'] / snap['reference_area_m2'] - 1),
            'variación de área de referencia histórica')
-    _reference_section_record(snap, basin, reference, bounds, (cols, rows), budget)
+    if version == 2:
+        _reference_nearest_chain_record(snap, basin, reference, bounds, (cols, rows), budget)
+    else:
+        _reference_section_record(snap, basin, reference, bounds, (cols, rows), budget)
     # Recompute the proof, not merely its reported ratios. A valid older
     # reference snapshot remains valid after a later manual 500m choice.
     actual = _reference_mask_counts(reference, candidate, bounds, (cols, rows), snap['reference_crs_wkt'])
     if actual != tuple(counts):
         _fail('referencia espacial', 'la coincidencia declarada no corresponde a las geometrías rasterizadas')
+
+
+def _reference_nearest_chain_record(snap, basin, reference, bounds, size, budget):
+    """Validate the rational nearest-centre proof without reopening rasters."""
+    from .basin import DIRECTIONS
+
+    if (snap['selection_policy'] != 'nearest_reference_chain_cell'
+            or snap['projection_kind'] != 'nearest_chain_cell'):
+        _fail('cadena de referencia', 'política o proyección desconocidas')
+    forbidden = {'section_source_cell', 'section_target_cell', 'section_projection_x',
+                 'section_projection_y', 'section_offset_m', 'coarse_upstream_distance_m'}
+    if forbidden & set(snap):
+        _fail('cadena de referencia', 'la elección de centro no usa una sección ortogonal')
+    raw_course = snap['reference_course_wkb_hex']
+    if raw_course != '':
+        course = _reference_wkb(raw_course, 'curso de referencia', {2}, budget)
+        point = ogr.Geometry(ogr.wkbPoint)
+        point.AddPoint_2D(*course.GetPoint_2D(0))
+        if not reference.Intersects(point):
+            _fail('cadena de referencia', 'el inicio del curso queda fuera de su cuenca')
+    epsilon = max(basin.cell_width, basin.cell_height) * 1e-7
+    if not math.isclose(_float(snap['branch_ambiguity_tolerance_m'], 'tolerancia numérica'),
+                        epsilon, rel_tol=1e-10, abs_tol=1e-12):
+        _fail('cadena de referencia', 'la tolerancia de desempate no es numérica')
+    cols, rows = size
+    chain = snap['candidate_chain_cells']
+    if not isinstance(chain, list) or not 1 <= len(chain) <= min(cols * rows, MAX_METADATA_ITEMS):
+        _fail('cadena de referencia', 'lista de celdas ausente o demasiado grande')
+    offsets = {code: (-dy, -dx) for dx, dy, code in DIRECTIONS}
+    cell_area = basin.cell_width * basin.cell_height
+    reference_count = round(snap['reference_raster_area_m2'] / cell_area)
+    seen, candidates = set(), []
+    previous = None
+    for index, entry in enumerate(chain):
+        if not isinstance(entry, list) or len(entry) != 5:
+            _fail('cadena de referencia', 'celda D8 o recuentos incompletos')
+        row = _int(entry[0], 'fila de cadena', 0, rows - 1)
+        col = _int(entry[1], 'columna de cadena', 0, cols - 1)
+        code = _int(entry[2], 'dirección de cadena', 0, 128)
+        if code not in set(offsets) | {0} or (row, col) in seen:
+            _fail('cadena de referencia', 'dirección desconocida o ciclo D8')
+        seen.add((row, col))
+        count = _int(entry[3], 'acumulación de cadena', 1, cols * rows)
+        overlap = _int(entry[4], 'intersección de cadena', 0, min(count, reference_count))
+        if previous is not None:
+            pr, pc, direction, pcnt, poverlap = previous
+            if direction not in offsets:
+                _fail('cadena de referencia', 'una celda intermedia carece de salida D8')
+            dr, dc = offsets[direction]
+            if (pr + dr, pc + dc) != (row, col):
+                _fail('cadena de referencia', 'las celdas no forman una única cadena D8')
+            if count <= pcnt or not 0 <= overlap - poverlap <= count - pcnt:
+                _fail('cadena de referencia', 'recuentos incompatibles con la acumulación D8')
+        previous = row, col, code, count, overlap
+        cx = bounds[0] + (col + .5) * basin.cell_width
+        cy = bounds[3] - (row + .5) * basin.cell_height
+        distance = math.hypot(cx - snap['original_x'], cy - snap['original_y'])
+        if distance > snap['search_radius_m'] + epsilon:
+            _fail('cadena de referencia', 'una celda queda fuera del radio de búsqueda')
+        qualified = 2 * overlap > reference_count and 2 * overlap > count
+        if index in (0, len(chain) - 1) and not qualified:
+            _fail('cadena de referencia', 'los extremos no son candidatos admisibles')
+        if qualified:
+            candidates.append((distance, count, row, col, overlap))
+        if (row, col) == (snap['original_row'], snap['original_col']):
+            _close(count * cell_area, snap['original_cell_upstream_area_m2'], 'área acumulada original')
+    if previous[2] in offsets:
+        dr, dc = offsets[previous[2]]
+        if (previous[0] + dr, previous[1] + dc) in seen:
+            _fail('cadena de referencia', 'el extremo final forma un ciclo D8')
+    if len(candidates) != snap['candidate_count']:
+        _fail('cadena de referencia', 'el número de candidatos no coincide con la cadena')
+    minimum = min(item[0] for item in candidates)
+    chosen = min((item for item in candidates if item[0] <= minimum + epsilon),
+                 key=lambda item: (item[1], item[2], item[3]))
+    if chosen[2:4] != (snap['snapped_row'], snap['snapped_col']):
+        _fail('cadena de referencia', 'el cierre no minimiza la distancia al punto original')
+    _close(chosen[0], snap['distance_m'], 'distancia al centro más cercano')
+    _close(chosen[0], snap['branch_distance_m'], 'distancia de la cadena al clic')
+    _close(chosen[1] * cell_area, snap['candidate_upstream_area_m2'], 'área del centro más cercano')
+    _close(chosen[4] * cell_area, snap['intersection_area_m2'], 'intersección del centro más cercano')
+    others = [item[0] for item in candidates if item[2:4] != chosen[2:4]]
+    runner = _float(snap['branch_runner_up_distance_m'], 'segunda distancia de cadena', nullable=True)
+    if others:
+        if runner is None:
+            _fail('cadena de referencia', 'falta la segunda distancia de candidatos')
+        _close(runner, min(others), 'segunda distancia de candidatos')
+    elif runner is not None:
+        _fail('cadena de referencia', 'hay una segunda distancia sin otro candidato')
 
 
 def _reference_section_record(snap, basin, reference, bounds, size, budget):
@@ -1274,6 +1369,10 @@ def _decode_single(document):
     if qdata['source_kind'] not in ('caumax_raster', 'rational'):
         _fail('origen de la consulta', 'origen desconocido')
     rational = qdata['source_kind'] == 'rational'
+    outlet_proof = diagnostics.get('outlet_snap') or {}
+    if (outlet_proof.get('method') == 'reference_basin_d8'
+            and outlet_proof.get('reference_policy_version') == 2 and not rational):
+        _fail('origen de la consulta', 'el cierre automático de distancia mínima requiere origen racional')
     if rational:
         from .rational_basin import validate_rational_context
         qdata['rational_context'] = validate_rational_context(qdata['rational_context'])

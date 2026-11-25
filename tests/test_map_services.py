@@ -74,6 +74,12 @@ class ReferenceLayerTests(unittest.TestCase):
             uri.setEncodedUri(maps.build_wms_uri(flood, layer))
             self.assertEqual(uri.param('styles'), '')
             self.assertIn('styles=', maps.build_wms_uri(flood, layer))
+        uri.setEncodedUri(maps.build_xyz_uri(maps.GOOGLE_SERVICE))
+        self.assertEqual(uri.param('type'), 'xyz')
+        self.assertEqual(uri.param('url'), 'https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}')
+        self.assertEqual(uri.param('zmin'), '0')
+        self.assertEqual(uri.param('zmax'), '19')
+        self.assertEqual(uri.param('crs'), 'EPSG:3857')
 
     def test_groups_default_visibility_repeat_and_foreign_content_are_preserved(self):
         foreign_group = self.project.layerTreeRoot().addGroup(maps.ROOT_TITLE)
@@ -84,8 +90,8 @@ class ReferenceLayerTests(unittest.TestCase):
         self.assertEqual((report.added, report.existing, report.failed), (self.total, 0, 0))
         self.assertEqual(self.project.crs(), original_crs)
         root, groups = self.groups()
-        self.assertIs(self.project.layerTreeRoot().children()[0], foreign_group)
-        self.assertIs(self.project.layerTreeRoot().children()[-1], root)
+        self.assertIs(self.project.layerTreeRoot().children()[0], root)
+        self.assertIs(self.project.layerTreeRoot().children()[-1], foreign_group)
         self.assertEqual(list(groups), [service.service_id for service in maps.WMS_SERVICES])
         self.assertTrue(all(not group.isExpanded() for group in groups.values()))
         flood = groups['snczi']
@@ -113,6 +119,93 @@ class ReferenceLayerTests(unittest.TestCase):
         land = groups['corine'].children()[0].layer()
         self.assertIn('SIOSE de Alta Resolución 2017', land.metadata().abstract())
         self.assertIn('no descarga un ráster local', land.metadata().abstract())
+
+    def test_repeat_moves_existing_block_inside_caumax_first_without_recreating_layers(self):
+        self.load()
+        references, groups = self.groups()
+        references.setName('Referencias renombradas')
+        groups['snczi'].children()[2].setItemVisibilityChecked(True)
+        groups['agroclima'].setItemVisibilityChecked(True)
+        original_nodes = list(references.findLayers())
+        original_groups = list(references.findGroups())
+        checked = [node.itemVisibilityChecked() for node in original_nodes]
+        layers = dict(self.project.mapLayers())
+        root = self.project.layerTreeRoot()
+        official = root.addGroup('CAUMAX_CAPAS')
+        native = []
+        for name in ('Red10km2', 'Ríos'):
+            layer = QgsVectorLayer('LineString?crs=EPSG:25830', name, 'memory')
+            self.project.addMapLayer(layer, False); official.addLayer(layer); native.append(layer)
+        result = QgsVectorLayer('Polygon?crs=EPSG:25830', 'Resultado hidrológico', 'memory')
+        self.project.addMapLayer(result)
+        result.setCustomProperty('HidroCAUMAX/order_rank', 20)
+        outside = QgsVectorLayer('Point?crs=EPSG:25830', 'Ajena', 'memory')
+        self.project.addMapLayer(outside)
+        reference_order = list(reversed(list(layers.values())))
+        root.setCustomLayerOrder([result, native[0], reference_order[0], outside,
+                                  native[1]] + reference_order[1:])
+        root.setHasCustomLayerOrder(True)
+        root_nodes = [node for node in root.children() if node is not references]
+        loader = self.make_loader()
+        before_extent = QgsRectangle(self.canvas.extent())
+        before_crs = self.canvas.mapSettings().destinationCrs()
+        self.requests.clear()
+        with patch.object(maps.QgsApplication, 'taskManager') as manager:
+            self.assertTrue(loader.load())
+            self.assertTrue(loader.load())
+        manager.assert_not_called()
+        self.assertEqual(self.requests, [])
+        self.assertIs(official.children()[0], references)
+        self.assertEqual([node.name() for node in official.children()[1:]], ['Red10km2', 'Ríos'])
+        self.assertEqual(list(root.children()), root_nodes)
+        self.assertEqual(references.name(), 'Referencias renombradas')
+        self.assertEqual(references.findLayers(), original_nodes)
+        self.assertEqual(references.findGroups(), original_groups)
+        self.assertEqual([node.itemVisibilityChecked() for node in original_nodes], checked)
+        self.assertTrue(groups['agroclima'].itemVisibilityChecked())
+        self.assertTrue(groups['snczi'].isMutuallyExclusive())
+        self.assertEqual([node.itemVisibilityChecked() for node in groups['snczi'].children()], [False, False, True])
+        self.assertEqual(root.customLayerOrder(), [result] + reference_order + [native[0], outside, native[1]])
+        self.assertEqual({key: self.project.mapLayer(key) for key in layers}, layers)
+        self.assertEqual(self.canvas.extent(), before_extent)
+        self.assertEqual(self.canvas.mapSettings().destinationCrs(), before_crs)
+        self.assertEqual(self.project.crs().authid(), 'EPSG:4326')
+
+    def test_new_block_is_first_inside_caumax_and_its_custom_drawing_order(self):
+        root = self.project.layerTreeRoot()
+        official = root.addGroup('CAUMAX_CAPAS')
+        native = QgsVectorLayer('LineString?crs=EPSG:25830', 'Red10km2', 'memory')
+        self.project.addMapLayer(native, False); official.addLayer(native)
+        root.setCustomLayerOrder([native]); root.setHasCustomLayerOrder(True)
+        self.load()
+        references = official.children()[0]
+        self.assertEqual(references.customProperty(maps.ROOT_PROPERTY), 'v1')
+        self.assertEqual(official.children()[1].name(), 'Red10km2')
+        self.assertEqual(root.customLayerOrder()[-1], native)
+        self.assertEqual(len(root.customLayerOrder()), self.total + 1)
+
+    def test_google_xyz_is_inserted_after_snczi_hidden_and_repeated_visibility_is_kept(self):
+        services = (maps.WMS_SERVICES[0], maps.GOOGLE_SERVICE, maps.WMS_SERVICES[1])
+        report = maps.load_reference_layers(self.project, services=services, layer_factory=self.layer_factory)
+        self.assertEqual((report.added, report.failed), (5, 0))
+        root, groups = self.groups()
+        self.assertEqual(list(groups), ['snczi', 'google_satellite', 'pfafstetter'])
+        google = groups['google_satellite']
+        node = google.children()[0]
+        self.assertFalse(google.itemVisibilityChecked())
+        self.assertFalse(node.itemVisibilityChecked())
+        self.assertEqual(node.layer().attribution(), '© Google y proveedores de imágenes')
+        self.assertEqual(node.layer().attributionUrl(), 'https://maps.google.com')
+        self.assertIn('teselas XYZ', node.layer().metadata().abstract())
+        google.setItemVisibilityChecked(True); node.setItemVisibilityChecked(True)
+        factory = Mock(side_effect=AssertionError('Repeated references must be reused'))
+        report = maps.load_reference_layers(self.project, services=services, layer_factory=factory)
+        factory.assert_not_called()
+        self.assertEqual((report.added, report.existing), (0, 5))
+        self.assertTrue(google.itemVisibilityChecked())
+        self.assertTrue(node.itemVisibilityChecked())
+        request = next(item for item in self.requests if item[1] == 'Google Satellite')
+        self.assertEqual(request[2], 'wms')
 
     def test_one_unavailable_service_does_not_repeat_timeouts_or_block_other_sources(self):
         def factory(uri, title, provider):

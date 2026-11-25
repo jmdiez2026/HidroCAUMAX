@@ -1,3 +1,44 @@
+# HidroCAUMAX 1.2.13
+
+## Cierre automático de mínima distancia en Método racional
+
+Seleccionar MDT de **25 × 25 m o 5 × 5 m** ajusta automáticamente el cierre al centro de celda admisible más próximo al punto original. Antes de elegirlo, se exige que la cuenca refinada y la referencia compartan estrictamente más de la mitad de ambas huellas rasterizadas, y que todos los candidatos pertenezcan a una única cadena D8 conectada. Estos filtros son una política geométrica del complemento; no constituyen un umbral normativo ni un objetivo de área.
+
+Se elimina, solo en modo racional, la condición que imponía la orientación inicial del curso de 500 m al drenaje fino. Esa condición descartaba cierres válidos ligeramente al oeste del clic y abría innecesariamente el ajuste manual. La selección nueva minimiza la distancia euclídea; únicamente los empates numéricos se resuelven hacia aguas arriba. **Ajuste Punto de Cierre** permanece disponible para una elección manual. Una correspondencia realmente ambigua sigue requiriendo revisión.
+
+En el punto comunicado **X=346039,5; Y=4717691,8 (EPSG:25830)**, se han ejecutado los cálculos con MDT oficiales reales y D8 de GRASS:
+
+| MDT | Cierre automático X; Y | Desplazamiento | Área | Celdas |
+|---|---|---:|---:|---:|
+| 25 m | 346012,5; 4717712,5 | 34,0219 m | 14,515625 km² | 23.225 |
+| 5 m | 346027,5; 4717692,5 | 12,0204 m | 14,491800 km² | 579.672 |
+
+La enumeración de los 53 candidatos admisibles de 25 m y los 285 de 5 m confirma el mínimo. Ambas cuencas quedan completas dentro del MDT. También se ha comprobado el punto anterior X=346034,4; Y=4717685,7. El diálogo permite pasar de 25 a 5 m sin abrir el selector, actualiza morfología, hipsometría, P₀ y los seis Pd, y conserva el cálculo racional nativo. Guardar y abrir recupera las variantes 500/25/5 y la resolución activa sin necesitar los rásteres originales.
+
+Los proyectos registran la política v2 y la cadena comprobada. El cargador valida conectividad, ausencia de ciclos, recuentos, coincidencia geométrica y elección de mínima distancia. Se conservan los proyectos y elecciones manuales anteriores, así como la política v1 de las consultas de caudales ráster.
+
+## Cabecera del diálogo racional
+
+Se retira **Análisis IA** de la cabecera **Resolución MDT** cuando la cuenca procede del Método racional. Se conserva el botón del encabezado Interpretación y el acceso superior del modo de consulta ráster.
+
+## Instalador Windows
+
+Se incorpora **HidroCAUMAX_v1_2_13_Setup.exe**, con un icono propio de río en crecida. El asistente instala el complemento para el usuario actual, permite elegir un perfil estándar de QGIS 3 y muestra el destino antes de instalar. Requiere QGIS y CAUMAX original ya instalados y pide cerrar QGIS; no necesita permisos de administrador.
+
+El EXE contiene los mismos archivos del ZIP oficial. La actualización prepara la carpeta nueva antes de sustituir la anterior y conserva una copia previa fuera de la carpeta de complementos. El desinstalador limita el borrado a los archivos de su entrega reconocida, sin eliminar los datos de otros complementos ni las configuraciones de QGIS. Se publica el manifiesto del instalador y su suma SHA-256. El icono y las fuentes NSIS forman parte del repositorio.
+
+## Google Satellite
+
+Nueva conexión XYZ **Google Satellite**, situada después de SNCZI y antes de Pfafstetter. Su grupo y su capa se crean desactivados; las cargas posteriores respetan la visibilidad elegida. El catálogo contiene 27 capas en siete subgrupos. Se ha comprobado la entrega de imagen del servidor de Google.
+
+## Capas de referencia por encima de las capas de CAUMAX
+
+**Cargar capas HidroCAUMAX** coloca **HidroCAUMAX · Capas de referencia** como primer subgrupo de **CAUMAX_CAPAS**, antes de Red 10 km², Ríos y las demás capas originales. Si el grupo CAUMAX_CAPAS todavía no existe, las referencias se colocan en la primera posición del árbol.
+
+El comando recoloca un grupo ya existente, también cuando no es necesario descargar ni crear ninguna capa. Se conservan sus capas, nombres, subgrupos y elecciones de visibilidad. El orden de dibujo personalizado también sitúa las referencias por encima de las capas originales.
+
+---
+
 # HidroCAUMAX 1.2.12
 
 ## Cargar capas HidroCAUMAX

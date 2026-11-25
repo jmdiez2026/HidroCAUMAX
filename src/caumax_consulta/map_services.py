@@ -44,6 +44,29 @@ class WmsServiceSpec:
 
 
 @dataclass(frozen=True)
+class XyzLayerSpec:
+    layer_id: str
+    title: str
+    visible: bool = False
+    description: str = ''
+
+
+@dataclass(frozen=True)
+class XyzServiceSpec:
+    service_id: str
+    title: str
+    url: str
+    layers: tuple
+    visible: bool = False
+    exclusive: bool = False
+    description: str = ''
+    zmin: int = 0
+    zmax: int = 19
+    attribution: str = ''
+    attribution_url: str = ''
+
+
+@dataclass(frozen=True)
 class StationLayerSpec:
     layer_id: str
     title: str
@@ -127,7 +150,13 @@ WMS_SERVICES = (
 
 AEMET_SERVICE = StationServiceSpec('aemet', 'Red estaciones AEMET',
     (StationLayerSpec('precipitation_stations', 'Estaciones AEMET · precipitación (inventario histórico)'),))
-REFERENCE_SERVICES = (AEMET_SERVICE,) + WMS_SERVICES
+GOOGLE_SERVICE = XyzServiceSpec('google_satellite', 'Google Satellite',
+    'https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
+    (XyzLayerSpec('satellite', 'Google Satellite'),),
+    description='Imágenes de satélite de Google. © Google y proveedores de imágenes. '
+                'Fuente: https://maps.google.com',
+    attribution='© Google y proveedores de imágenes', attribution_url='https://maps.google.com')
+REFERENCE_SERVICES = (AEMET_SERVICE, WMS_SERVICES[0], GOOGLE_SERVICE) + WMS_SERVICES[1:]
 
 
 def build_wms_uri(service, layer):
@@ -137,6 +166,14 @@ def build_wms_uri(service, layer):
                        ('styles', layer.style), ('crs', layer.crs),
                        ('format', layer.image_format), ('version', service.version),
                        ('transparent', 'true')):
+        uri.setParam(key, value)
+    return bytes(uri.encodedUri()).decode('utf-8')
+
+
+def build_xyz_uri(service):
+    uri = QgsDataSourceUri()
+    for key, value in (('type', 'xyz'), ('url', service.url), ('crs', 'EPSG:3857'),
+                       ('zmin', str(service.zmin)), ('zmax', str(service.zmax))):
         uri.setParam(key, value)
     return bytes(uri.encodedUri()).decode('utf-8')
 
@@ -217,7 +254,8 @@ def _prepare_layers(pending, layer_factory, cancelled=lambda: False, progress=la
                         else:
                             layer = station_factory(spec.title, cancelled=cancelled)
                     else:
-                        layer = layer_factory(build_wms_uri(service, spec), spec.title, 'wms')
+                        uri = build_xyz_uri(service) if isinstance(service, XyzServiceSpec) else build_wms_uri(service, spec)
+                        layer = layer_factory(uri, spec.title, 'wms')
                     if not layer.isValid():
                         error = layer.error().summary() or 'La fuente de referencia no está disponible.'
                     else:
@@ -225,12 +263,16 @@ def _prepare_layers(pending, layer_factory, cancelled=lambda: False, progress=la
                         layer.setCustomProperty(LAYER_PROPERTY, spec.layer_id)
                         metadata = layer.metadata()
                         content = metadata.abstract() if isinstance(service, StationServiceSpec) else (
-                            'Visualización mediante WMS en línea; requiere conexión y no descarga '
-                            'un ráster local ni aporta datos al cálculo hidrológico.')
+                            ('Visualización mediante teselas XYZ en línea; ' if isinstance(service, XyzServiceSpec)
+                             else 'Visualización mediante WMS en línea; ') +
+                            'requiere conexión y no descarga un ráster local ni aporta datos al cálculo hidrológico.')
                         description = ' '.join(filter(None, (service.description, spec.description, content)))
                         metadata.setTitle(spec.title)
                         metadata.setAbstract(description)
                         layer.setMetadata(metadata)
+                        if isinstance(service, XyzServiceSpec):
+                            layer.setAttribution(service.attribution)
+                            layer.setAttributionUrl(service.attribution_url)
                         prepared.append((service, spec, layer))
                 except Exception as exception:
                     error = str(exception) or type(exception).__name__
@@ -249,15 +291,63 @@ def _prepare_layers(pending, layer_factory, cancelled=lambda: False, progress=la
     return prepared, failures
 
 
-def _root_group(project):
+def _root_group(project, create=True):
+    """Keep the existing reference block first inside the native CAUMAX group."""
     root = project.layerTreeRoot()
-    for group in root.findGroups(recursive=True):
-        if group.customProperty(ROOT_PROPERTY, '') == 'v1':
-            return group
-    # Appending keeps all existing result and user layers above the references.
-    group = root.addGroup(ROOT_TITLE)
-    group.setCustomProperty(ROOT_PROPERTY, 'v1')
-    group.setExpanded(True)
+    group = next((item for item in root.findGroups(recursive=True)
+                  if item.customProperty(ROOT_PROPERTY, '') == 'v1'), None)
+    if group is None and not create:
+        return None
+    target = root.findGroup('CAUMAX_CAPAS') or root
+    ancestor = target
+    while ancestor is not None:
+        if ancestor is group:
+            target = root  # Never move a group into one of its own descendants.
+            break
+        ancestor = ancestor.parent()
+    current = list(root.customLayerOrder()) if root.hasCustomLayerOrder() else None
+    if group is None:
+        group = target.insertGroup(0, ROOT_TITLE)
+        group.setCustomProperty(ROOT_PROPERTY, 'v1')
+        group.setExpanded(True)
+    elif group.parent() is not target or target.children()[0] is not group:
+        # Keep a clone in the tree while detaching: the registry bridge must
+        # never interpret this move as deletion of the registered map layers.
+        descendants, exclusive_groups = [], []
+        def remember(parent):
+            children = list(parent.children())
+            if isinstance(parent, QgsLayerTreeGroup) and parent.isMutuallyExclusive():
+                selected = next((index for index, child in enumerate(children)
+                                 if child.itemVisibilityChecked()), -1)
+                exclusive_groups.append((parent, selected, parent.itemVisibilityChecked()))
+            if children:
+                descendants.append((parent, children))
+                for child in children:
+                    remember(child)
+        remember(group)
+        placeholder = group.clone()
+        target.insertChildNode(0, placeholder)
+        for parent, _, _ in exclusive_groups:
+            parent.setIsMutuallyExclusive(False)
+        group.parent().takeChild(group)
+        for parent, children in reversed(descendants):
+            parent.insertChildNodes(0, children)
+        target.insertChildNode(0, group)
+        for parent, selected, checked in exclusive_groups:
+            parent.setIsMutuallyExclusive(True, selected)
+            parent.setItemVisibilityChecked(checked)
+        target.removeChildNode(placeholder)
+    if current is not None:
+        reference_ids = {node.layerId() for node in group.findLayers()}
+        references = [layer for layer in current if layer.id() in reference_ids]
+        others = [layer for layer in current if layer.id() not in reference_ids]
+        native_ids = {node.layerId() for node in target.findLayers()} - reference_ids
+        index = (0 if target is root else
+                 next((i for i, layer in enumerate(others) if layer.id() in native_ids), None))
+        if index is not None:
+            updated = others[:index] + references + others[index:]
+            if root.customLayerOrder() != updated:
+                root.setCustomLayerOrder(updated)
     return group
 
 
@@ -265,7 +355,7 @@ def _publish_layers(project, prepared, services, failures=()):
     """Publish on the GUI thread; preserve existing groups and visibility."""
     original_crs = QgsCoordinateReferenceSystem(project.crs())
     existing = _owned_layers(project)
-    root, groups, created, added = None, {}, set(), 0
+    root, groups, created, added = _root_group(project, create=bool(prepared)), {}, set(), 0
     try:
         for service, spec, layer in prepared:
             key = service.service_id, spec.layer_id
@@ -302,6 +392,8 @@ def _publish_layers(project, prepared, services, failures=()):
                 selected = next((index for index, node in enumerate(group.children())
                                  if node.itemVisibilityChecked()), -1)
                 group.setIsMutuallyExclusive(True, selected)
+        # Include newly added references in custom drawing order as well.
+        _root_group(project, create=False)
     finally:
         if project.crs() != original_crs:
             project.setCrs(original_crs)
@@ -383,7 +475,7 @@ class ReferenceLayerLoader(QObject):
             return False
         pending, present, self._failures = _pending_layers(self.project, self.services)
         if not pending:
-            self._report(LoadReport(0, present, tuple(self._failures)))
+            self._report(self._publish_preserving_view([], self._failures))
             return True
         task = _ReferenceTask(pending, self.layer_factory, self._finished, self.station_factory)
         task.layer_progress.connect(self._progress)

@@ -306,10 +306,41 @@ class ResolutionControllerTests(unittest.TestCase):
         self.assertEqual((settings['reference_cell_width'],settings['reference_cell_height']),(500,500))
         self.assertAlmostEqual(settings['snap_radius_m'],math.hypot(500,500))
         self.assertEqual(settings['snap_minimum_fraction'],.9)
+        self.assertNotIn('selection_policy',settings['refinement_reference'])
         count=len(self.analyses)
         c.select('500')
         self.assertEqual(len(self.analyses),count)
         self.assertIs(self.results[-1][1],self.base)
+
+    def test_nearest_reference_policy_is_rational_only_for_new_and_restored_variants(self):
+        for source_kind in ('caumax_raster','rational'):
+            with self.subTest(source_kind=source_kind):
+                query=replace(self.query,source_kind=source_kind,
+                    rational_context=({'area_m2':self.base.area_m2,
+                        'geotransform':[0,500,0,500,0,-500]} if source_kind=='rational' else None))
+                controller=self.controller(query)
+                self.discover(controller)
+                self.assertTrue(controller.select('25'))
+                self.wait(lambda:not controller.busy)
+                expected='nearest_reference_chain_cell' if source_kind=='rational' else None
+                self.assertEqual(self.snap_options[-1]['refinement_reference'].get('selection_policy'),expected)
+                variant=controller.variants['25']
+                # The fake analysis engine only needs this availability marker;
+                # real D8 correspondence is covered by the refinement tests.
+                Path(variant['query'].directions_path).parent.mkdir(parents=True,exist_ok=True)
+                Path(variant['query'].directions_path).touch()
+                state=dict(active_key='25',
+                    options=[item for item in controller.options if item['key'] in ('500','25')],
+                    variants={key:controller.variants[key] for key in ('500','25')})
+                restored=self.controller(query)
+                self.assertTrue(restored.restore(state))
+                self.assertTrue(restored.needs_reference_check('25'))
+                downloads=len(self.downloads)
+                self.assertTrue(restored.select('25'))
+                self.wait(lambda:not restored.busy)
+                self.assertEqual(len(self.downloads),downloads)
+                self.assertEqual(self.snap_options[-1]['refinement_reference'].get('selection_policy'),expected)
+                self.assertFalse(self.errors)
 
     def test_real_native_variants_and_bulk_save_cache_verify_the_matching_clicked_cell(self):
         c=self.controller()

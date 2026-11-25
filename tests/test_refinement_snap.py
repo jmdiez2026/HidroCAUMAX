@@ -95,6 +95,146 @@ class RefinementSnapTests(unittest.TestCase):
         self.assertEqual(snap['projection_kind'], 'containing_cell')
         self.assertFalse(result.metadata['outlet_snapped_to_channel'])
 
+    def nearest_reference(self, reference):
+        return dict(reference, selection_policy=refinement.NEAREST_CHAIN_SELECTION_POLICY)
+
+    def assert_nearest_proof(self, result, directions, reference, counts, click):
+        """Enumerate actual upstream masks, independently of the chain chooser."""
+        dataset = gdal.Open(str(directions))
+        try:
+            transform = dataset.GetGeoTransform()
+            geometry = ogr.CreateGeometryFromWkb(reference['geometry_wkb'])
+            reference_mask, reference_count, _ = refinement._reference_mask(dataset, geometry, lambda: False)
+            choices = []
+            for row, col in np.argwhere(counts > reference_count / 2):
+                row, col = int(row), int(col)
+                centre = gdal.ApplyGeoTransform(transform, col + .5, row + .5)
+                distance = math.dist(centre, click)
+                if distance > math.hypot(500, 500):
+                    continue
+                mask, window, count, _ = hydro._b._visit_upstream(
+                    dataset.GetRasterBand(1), row, col, lambda: False, lambda n: None)
+                left, top, width, height = window
+                overlap = int(np.count_nonzero(mask & reference_mask[top:top + height, left:left + width]))
+                if 2 * overlap > reference_count and 2 * overlap > count:
+                    choices.append((distance, count, row, col, overlap))
+        finally:
+            dataset = None
+        snap = result.diagnostics['outlet_snap']
+        epsilon = max(result.cell_width, result.cell_height) * 1e-7
+        minimum = min(item[0] for item in choices)
+        chosen = min((item for item in choices if item[0] <= minimum + epsilon), key=lambda item: item[1:4])
+        self.assertEqual((snap['snapped_row'], snap['snapped_col']), chosen[2:4])
+        self.assertEqual(snap['candidate_count'], len(choices))
+        self.assertEqual(snap['reference_policy_version'], 2)
+        self.assertEqual(snap['projection_kind'], 'nearest_chain_cell')
+        self.assertEqual(snap['tie_break'], refinement.NEAREST_CHAIN_SELECTION_POLICY)
+        proof = snap['candidate_chain_cells']
+        admissible = {tuple(item[:2]) for item in proof
+                      if 2 * item[4] > reference_count and 2 * item[4] > item[3]}
+        self.assertEqual(admissible, {item[2:4] for item in choices})
+        self.assertEqual(proof[0][3], min(item[1] for item in choices))
+        self.assertEqual(proof[-1][3], max(item[1] for item in choices))
+        offsets = {code: (-dy, -dx) for dx, dy, code in hydro._b.DIRECTIONS}
+        for first, second in zip(proof, proof[1:]):
+            dr, dc = offsets[first[2]]
+            self.assertEqual((first[0] + dr, first[1] + dc), tuple(second[:2]))
+            self.assertLess(first[3], second[3])
+            self.assertLessEqual(first[4], second[4])
+        self.assertFalse(any(key.startswith('section_') for key in snap))
+        self.assertNotIn('coarse_upstream_distance_m', snap)
+        return snap
+
+    def test_rational_nearest_qualified_chain_rejects_the_closer_larger_neighbour_at_5_and_25m(self):
+        for resolution in (5, 25):
+            with self.subTest(resolution=resolution):
+                dem, directions, reference, counts = self.valley(resolution)
+                reference = self.nearest_reference(reference)
+                # The larger river at col30 is closer, but its footprint fails
+                # the reference identity. A maximum-accumulation snap is wrong.
+                click = tuple(self.fixture.point(dem, 18, 27))
+                before = directions.read_bytes(), dem.read_bytes()
+                result = self.analyze(dem, reference, click)
+                self.assertEqual((result.outlet_x, result.outlet_y), tuple(self.fixture.point(dem, 18, 10)))
+                self.assertGreater(int(counts[18, 30]), result.cell_count)
+                self.assert_nearest_proof(result, directions, reference, counts, click)
+                self.assertEqual(before, (directions.read_bytes(), dem.read_bytes()))
+
+    def test_rational_nearest_chain_does_not_impose_the_coarse_course_axis(self):
+        for resolution in (5, 25):
+            with self.subTest(resolution=resolution):
+                dem, directions, reference, counts = self.valley(resolution)
+                line = ogr.Geometry(ogr.wkbLineString)
+                for col in (10, 17):
+                    line.AddPoint_2D(*self.fixture.point(dem, 20, col))
+                reference['main_course_wkb'] = bytes(line.ExportToWkb())
+                click = tuple(self.fixture.point(dem, 18, 12))
+                with self.assertRaises(hydro.OutletSelectionRequired) as caught:
+                    self.analyze(dem, reference, click)
+                self.assertEqual(caught.exception.selection_context['reason_code'], 'no_reference_section')
+                reference = self.nearest_reference(reference)
+                result = self.analyze(dem, reference, click)
+                self.assert_nearest_proof(result, directions, reference, counts, click)
+                self.assertEqual((result.outlet_x, result.outlet_y), tuple(self.fixture.point(dem, 18, 10)))
+
+    def test_rational_nearest_distance_is_not_rounded_by_the_branch_tolerance(self):
+        dem, directions, reference, counts = self.valley()
+        reference = self.nearest_reference(reference)
+        x, y = self.fixture.point(dem, 18, 12)
+        click = x, y - .501 * 5
+        result = self.analyze(dem, reference, click)
+        # The downstream centre is only slightly nearer. It must win despite
+        # the much wider 5%-of-pixel tolerance used by the old section policy.
+        self.assertEqual((result.outlet_x, result.outlet_y), tuple(self.fixture.point(dem, 19, 10)))
+        snap = self.assert_nearest_proof(result, directions, reference, counts, click)
+        self.assertLess(snap['branch_runner_up_distance_m'] - snap['branch_distance_m'],
+                        hydro._b._branch_ambiguity_tolerance(5, 5))
+        self.assertGreater(snap['branch_runner_up_distance_m'] - snap['branch_distance_m'],
+                           snap['branch_ambiguity_tolerance_m'])
+
+    def test_rational_exact_distance_tie_chooses_upstream_on_the_same_chain(self):
+        dem, directions, reference, counts = self.valley()
+        reference = self.nearest_reference(reference)
+        x, y = self.fixture.point(dem, 18, 12)
+        click = x, y - .5 * 5
+        result = self.analyze(dem, reference, click)
+        self.assertEqual((result.outlet_x, result.outlet_y), tuple(self.fixture.point(dem, 18, 10)))
+        snap = self.assert_nearest_proof(result, directions, reference, counts, click)
+        self.assertEqual(snap['branch_runner_up_distance_m'], snap['branch_distance_m'])
+
+    def test_rational_containing_cell_still_records_the_complete_verified_chain_without_a_coarse_course(self):
+        dem, directions, reference, counts = self.valley()
+        reference = self.nearest_reference(dict(reference, main_course_wkb=b''))
+        click = tuple(self.fixture.point(dem, 18, 10))
+        result = self.analyze(dem, reference, click)
+        snap = self.assert_nearest_proof(result, directions, reference, counts, click)
+        self.assertEqual(snap['status'], 'unchanged')
+        self.assertGreater(len(snap['candidate_chain_cells']), 1)
+
+    def test_rational_nearest_policy_keeps_strict_bidirectional_overlap_and_rejects_unknown_modes(self):
+        dem, directions, reference, counts = self.valley()
+        original_reference = dict(reference)
+        reference = self.nearest_reference(reference)
+        dataset = gdal.Open(str(directions))
+        try:
+            mask, window, count, _ = hydro._b._visit_upstream(
+                dataset.GetRasterBand(1), 21, 10, lambda: False, lambda n: None)
+            full = np.zeros(counts.shape, dtype=np.uint8)
+            left, top, width, height = window
+            full[top:top + height, left:left + width] = mask
+            both = full | np.roll(full, 20, axis=1)
+            reference['geometry_wkb'], _ = hydro._b._polygonize(
+                both, dataset.GetGeoTransform(), hydro._b._spatial_reference(dataset, 'direcciones'), lambda: False)
+            self.assertEqual(int(np.count_nonzero(both)), 2 * count)
+        finally:
+            dataset = None
+        with self.assertRaises(hydro.OutletSelectionRequired) as caught:
+            self.analyze(dem, reference, tuple(self.fixture.point(dem, 18, 12)))
+        self.assertEqual(caught.exception.selection_context['reason_code'], 'no_reference_match')
+        original_reference['selection_policy'] = 'unrecognised-nearest-policy'
+        with self.assertRaisesRegex(ValueError, 'política'):
+            self.analyze(dem, original_reference, tuple(self.fixture.point(dem, 18, 12)))
+
     def test_coarse_course_vetoes_a_nearer_downstream_bend_before_confluence(self):
         dem, _, reference, _ = self.valley(downstream_bend=True)
         click = tuple(self.fixture.point(dem, 18, 12))

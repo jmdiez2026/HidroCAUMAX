@@ -45,7 +45,7 @@ class OutletSelectionDialog(QDialog):
         self.setWindowModality(Qt.NonModal)
         layout = QVBoxLayout(self)
         introduction = QLabel(
-            'El cierre automático se sitúa en el centro de la celda del punto de consulta. '
+            'El cierre se sitúa en un centro de celda del MDT activo. '
             'Para ajustarlo manualmente, usa las direcciones o «Elegir en el mapa». '
             'El cálculo se actualizará al pulsar «Aplicar cierre».', self)
         introduction.setWordWrap(True)

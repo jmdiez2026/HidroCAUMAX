@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 import xml.etree.ElementTree as ET
@@ -33,6 +34,58 @@ author=JM
 experimental=False
 category=Raster
 '''
+
+
+def attach_windows_fixture(test):
+    """Exercise bundling with a non-executable envelope and a fake extractor.
+
+    The NSIS builder's own tests cover real PE/extraction. This fixture keeps
+    the release and retry contracts testable using the standard library only.
+    """
+    base=test.manifest
+    source_names=('scripts/build_windows_installer.py','packaging/windows/installer.nsi',
+                  'packaging/windows/hidrocaumax.ico')
+    for index,name in enumerate(source_names):
+        path=test.folder/name
+        path.parent.mkdir(parents=True,exist_ok=True)
+        path.write_bytes(f'Versioned installer input {index}\n'.encode('ascii'))
+    test.installer=test.output/('HidroCAUMAX_v'+base['version'].replace('.','_')+'_Setup.exe')
+    test.installer_proof=test.output/'installer_manifest.json'
+    prefix=b'MZ\0Non-executable packaging test envelope\0'
+    test.installer.write_bytes(prefix+(test.output/base['package']).read_bytes())
+    document=dict(schema_version=1,version=base['version'],plugin_id=builder.PLUGIN_ID,
+        installer=test.installer.name,sha256=builder.sha256(test.installer),bytes=test.installer.stat().st_size,
+        payload_zip=base['package'],payload_sha256=base['sha256'],payload_bytes=base['bytes'],
+        payload_source_files=base['source_files'],nsis_version='fixture-only',
+        icon_sha256=builder.sha256(test.folder/source_names[2]),
+        script_sha256=builder.sha256(test.folder/source_names[1]),requires_admin=False,
+        profile_root=r'%APPDATA%\QGIS\QGIS3\profiles',
+        build_sources={name:builder.sha256(test.folder/name) for name in source_names})
+    test.installer_proof.write_text(json.dumps(document,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+    test.installer_verifications=[]
+    def verify(exe,proof,package,release_manifest,*,source_root=None,extractor=None):
+        proof=json.loads(Path(proof).read_text()) if not isinstance(proof,dict) else proof
+        test.installer_verifications.append(str(exe))
+        if Path(source_root)!=test.folder:
+            raise ValueError('Installer build root differs.')
+        if (proof['version']!=release_manifest['version'] or proof['plugin_id']!=builder.PLUGIN_ID
+                or proof['payload_sha256']!=builder.sha256(package)
+                or proof['payload_bytes']!=Path(package).stat().st_size
+                or proof['payload_source_files']!=release_manifest['source_files']):
+            raise ValueError('Installer payload manifest differs from release ZIP.')
+        if (proof['sha256']!=builder.sha256(exe) or proof['bytes']!=Path(exe).stat().st_size):
+            raise ValueError('Installer bytes differ from manifest.')
+        if Path(exe).read_bytes()!=prefix+Path(package).read_bytes():
+            raise ValueError('Extracted installer payload differs from release ZIP.')
+        if proof['build_sources']!={name:builder.sha256(test.folder/name) for name in source_names}:
+            raise ValueError('Installer build sources differ from manifest.')
+        return proof
+    for mocked in (patch.dict('sys.modules',{'build_windows_installer':SimpleNamespace(verify_installer=verify)}),
+                   patch.object(builder,'DEFAULT_ROOT',test.folder)):
+        mocked.start();test.addCleanup(mocked.stop)
+    test.manifest=builder.build(test.source,test.output,reuse_zip=test.output/base['package'],
+        installer=test.installer,installer_manifest=test.installer_proof)
+    return document
 
 
 class ReleasePackagingTests(unittest.TestCase):
@@ -168,6 +221,104 @@ class ReleasePackagingTests(unittest.TestCase):
         (self.source/'broken.py').write_text('def missing_syntax(',encoding='utf-8')
         with self.assertRaises(SyntaxError):
             self.build()
+
+    def test_new_publisher_accepts_a_pinned_zip_only_legacy_builder_signature(self):
+        self.build()
+        calls=[]
+        def legacy(source,output,tag,repository,reuse_zip):
+            calls.append(True)
+            return builder.build(source,output,tag,repository,reuse_zip)
+        with patch.object(publisher,'DEFAULT_ROOT',self.folder),patch.object(publisher,'build',side_effect=legacy):
+            manifest,assets=publisher.validate_bundle(self.output,builder.DEFAULT_REPOSITORY)
+        self.assertEqual(calls,[True])
+        self.assertNotIn('windows_installer',manifest)
+        self.assertEqual(len(assets),4)
+
+
+class WindowsReleasePackagingTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary=tempfile.TemporaryDirectory(prefix='hidrocaumax-windows-bundle-')
+        self.addCleanup(self.temporary.cleanup)
+        self.folder=Path(self.temporary.name)
+        self.source=self.folder/'src'/'caumax_consulta';self.source.mkdir(parents=True)
+        (self.source/'metadata.txt').write_text(METADATA,encoding='utf-8')
+        (self.source/'__init__.py').write_text('def classFactory(iface):\n    return iface\n',encoding='utf-8')
+        self.output=self.folder/'dist';self.manifest=builder.build(self.source,self.output)
+        self.zip_bytes=(self.output/self.manifest['package']).read_bytes()
+        self.document=attach_windows_fixture(self)
+        mocked=patch.object(publisher,'DEFAULT_ROOT',self.folder);mocked.start();self.addCleanup(mocked.stop)
+
+    def rebuild(self,**kwargs):
+        arguments=dict(reuse_zip=self.output/self.manifest['package'],
+                       installer=self.installer,installer_manifest=self.installer_proof)
+        arguments.update(kwargs)
+        return builder.build(self.source,self.output,**arguments)
+
+    def test_same_zip_exe_manifest_checksums_and_pages_are_bound_together(self):
+        self.assertEqual((self.output/self.manifest['package']).read_bytes(),self.zip_bytes)
+        windows=self.manifest['windows_installer']
+        self.assertEqual(windows['payload_sha256'],self.manifest['sha256'])
+        self.assertEqual(windows['sha256'],builder.sha256(self.installer))
+        self.assertEqual(windows['manifest_sha256'],builder.sha256(self.installer_proof))
+        checksums=dict(line.split('  ')[::-1] for line in (self.output/'SHA256SUMS.txt').read_text().splitlines())
+        self.assertEqual(set(checksums),{self.manifest['package'],'plugins.xml',self.installer.name,'installer_manifest.json'})
+        for name,digest in checksums.items():self.assertEqual(digest,builder.sha256(self.output/name))
+        self.assertEqual((self.output/'SHA256SUMS.txt').read_bytes(),(self.output/'site'/'SHA256SUMS.txt').read_bytes())
+        self.assertIn(windows['download_url'],(self.output/'site'/'index.html').read_text())
+        self.assertIn(windows['sha256'],(self.output/'release_notes.md').read_text())
+        checked,assets=publisher.validate_bundle(self.output,builder.DEFAULT_REPOSITORY)
+        self.assertEqual(checked,self.manifest)
+        self.assertEqual(len(assets),6)
+        self.assertGreaterEqual(len(self.installer_verifications),2)
+
+    def test_installer_inputs_must_be_supplied_together(self):
+        for arguments in (dict(installer=self.installer),dict(installer_manifest=self.installer_proof)):
+            target=self.folder/'invalid-output'
+            with self.subTest(arguments=arguments),self.assertRaisesRegex(ValueError,'both'):
+                builder.build(self.source,target,**arguments)
+            self.assertFalse(target.exists())
+
+    def test_wrong_version_and_unsafe_installer_filename_are_rejected(self):
+        for name in ('../outside.exe','other.exe','HidroCAUMAX_v9_9_9_Setup.exe'):
+            document=dict(self.document,installer=name)
+            self.installer_proof.write_text(json.dumps(document))
+            with self.subTest(name=name),self.assertRaisesRegex(ValueError,'filename'):
+                self.rebuild()
+
+    def test_changed_exe_is_rejected_even_if_its_own_hash_is_updated(self):
+        self.installer.write_bytes(self.installer.read_bytes()+b'altered-payload')
+        with self.assertRaisesRegex(ValueError,'Installer bytes differ'):
+            self.rebuild()
+        document=dict(self.document,sha256=builder.sha256(self.installer),bytes=self.installer.stat().st_size)
+        self.installer_proof.write_text(json.dumps(document))
+        with self.assertRaisesRegex(ValueError,'payload differs'):
+            self.rebuild()
+
+    def test_stale_payload_or_build_source_proof_is_rejected(self):
+        self.installer_proof.write_text(json.dumps(dict(self.document,payload_sha256='0'*64)))
+        with self.assertRaisesRegex(ValueError,'payload manifest'):
+            self.rebuild()
+        self.installer_proof.write_text(json.dumps(self.document))
+        (self.folder/'packaging/windows/installer.nsi').write_bytes(b'changed installer code')
+        with self.assertRaisesRegex(ValueError,'build sources'):
+            self.rebuild()
+
+    def test_public_checksums_pages_and_installer_manifest_cannot_drift(self):
+        for relative,message in (('SHA256SUMS.txt','bundle is inconsistent'),
+                                 ('site/SHA256SUMS.txt','Pages bundle is inconsistent'),
+                                 ('site/index.html','Pages bundle is inconsistent')):
+            path=self.output/relative;original=path.read_bytes();path.write_bytes(original+b'changed')
+            with self.subTest(path=relative),self.assertRaisesRegex(ValueError,message):
+                publisher.validate_bundle(self.output,builder.DEFAULT_REPOSITORY)
+            path.write_bytes(original)
+        self.installer_proof.write_text(self.installer_proof.read_text()+'\n')
+        with self.assertRaisesRegex(ValueError,'manifest no longer matches'):
+            publisher.validate_bundle(self.output,builder.DEFAULT_REPOSITORY)
+
+    def test_explicit_publisher_paths_must_match_finalized_installer(self):
+        publisher.validate_bundle(self.output,builder.DEFAULT_REPOSITORY,self.installer,self.installer_proof)
+        with self.assertRaisesRegex(ValueError,'Explicit installer files'):
+            publisher.validate_bundle(self.output,builder.DEFAULT_REPOSITORY,self.folder/self.installer.name,self.installer_proof)
 
 
 class ReleasePublishingTests(unittest.TestCase):
@@ -416,6 +567,80 @@ class ReleasePublishingTests(unittest.TestCase):
         self.assertFalse(self.commands)
         self.assertFalse(self.mutations)
         self.assertEqual(json.loads(self.console.getvalue())['action'],'validate-only')
+
+    def test_verify_only_never_creates_or_completes_a_release(self):
+        self.exists=False
+        with self.assertRaisesRegex(ValueError,'never creates'):
+            self.publish(verify_only=True)
+        self.exists=True
+        self.remote={self.names[0]:self.local[self.names[0]]}
+        with self.assertRaisesRegex(ValueError,'never uploads'):
+            self.publish(verify_only=True)
+        self.assertFalse(self.mutations)
+        self.remote=dict(self.local)
+        self.publish(verify_only=True)
+        self.assertFalse(self.mutations)
+        self.assertEqual(json.loads(self.console.getvalue())['action'],'verify-only')
+
+
+class WindowsReleasePublishingTests(ReleasePublishingTests):
+    """Apply all retry/identity/channel cases to the six-asset Windows bundle."""
+    def setUp(self):
+        super().setUp()
+        self.legacy_local=dict(self.local)
+        document=attach_windows_fixture(self)
+        self.names.extend((self.installer.name,'installer_manifest.json'))
+        self.local={name:(self.output/name).read_bytes() for name in self.names}
+        self.tracked.extend(document['build_sources'])
+
+    def test_retry_after_exe_upload_preserves_it_and_adds_only_missing_manifest(self):
+        self.fail_after=5
+        with self.assertRaisesRegex(RuntimeError,'Connection lost'):
+            self.publish()
+        self.assertIn(self.installer.name,self.remote)
+        before=self.remote[self.installer.name]
+        self.fail_after=None;self.events.clear()
+        self.publish()
+        self.assertEqual(self.remote[self.installer.name],before)
+        self.assertEqual([event for event in self.events if event[0]=='upload'],
+                         [('upload',('installer_manifest.json',))])
+        self.assertEqual(self.remote,self.local)
+
+    def test_untracked_installer_source_prevents_every_upload(self):
+        self.tracked.remove('packaging/windows/installer.nsi')
+        with self.assertRaisesRegex(ValueError,'installer build source must be committed'):
+            self.publish()
+        self.assertFalse(self.mutations)
+        self.assertTrue(any(command[:2]==['git','diff'] and 'packaging' in command for command in self.commands))
+
+    def test_installer_changed_during_remote_verification_is_not_uploaded(self):
+        self.remote={self.names[0]:self.local[self.names[0]]}
+        self.after_download=lambda name:self.installer.write_bytes(b'changed executable')
+        with self.assertRaisesRegex(ValueError,'Local release asset changed'):
+            self.publish()
+        self.assertFalse(self.mutations)
+
+    def test_changed_installer_before_release_creation_is_not_uploaded(self):
+        self.exists=False
+        original_api=self.api
+        def changed(endpoint,*,missing_ok=False):
+            value=original_api(endpoint,missing_ok=missing_ok)
+            if '/releases/tags/' in endpoint:
+                self.installer.write_bytes(b'changed before create')
+            return value
+        with patch.object(publisher,'api',side_effect=changed):
+            with self.assertRaisesRegex(ValueError,'Local release asset changed'):
+                self.publish()
+        self.assertFalse(self.mutations)
+        self.assertFalse(self.exists)
+
+    def test_previously_published_zip_only_checksums_are_never_replaced_to_add_exe(self):
+        self.remote=dict(self.legacy_local)
+        before=dict(self.remote)
+        with self.assertRaisesRegex(ValueError,'Existing release asset differs'):
+            self.publish()
+        self.assertEqual(self.remote,before)
+        self.assertFalse(self.mutations)
 
 
 if __name__=='__main__':

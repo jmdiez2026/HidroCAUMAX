@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Etiqueta existente que coincide con metadata.txt (por ejemplo v1.2.2)'
+        description: 'Etiqueta existente que coincide con metadata.txt (por ejemplo v1.2.13)'
         required: true
         type: string
 
@@ -19,17 +19,17 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
+  build:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
-      contents: write
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      contents: read
+    outputs:
+      source_commit: ${{ steps.source.outputs.source_commit }}
+      release_tag: ${{ steps.source.outputs.release_tag }}
+      has_installer: ${{ steps.source.outputs.has_installer }}
     steps:
-      - name: Obtener exactamente la etiqueta solicitada
+      - name: Obtener exactamente el código solicitado
         uses: actions/checkout@v7
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
@@ -38,22 +38,190 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
+      - name: Fijar fuente y modalidad de publicación
+        id: source
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          HAS_INSTALLER_BUILDER: ${{ hashFiles('scripts/build_windows_installer.py') != '' }}
+          HAS_WINDOWS_SMOKE: ${{ hashFiles('tests/windows_installer_smoke.ps1') != '' }}
+        run: |
+          # Las etiquetas históricas sin ambos archivos mantienen su ZIP.
+          # Una integración incompleta nunca publica un EXE sin prueba Windows.
+          if [ "$HAS_INSTALLER_BUILDER" != "$HAS_WINDOWS_SMOKE" ]; then
+            echo 'El constructor EXE y su prueba Windows deben estar versionados juntos.' >&2
+            exit 1
+          fi
+          printf 'source_commit=%s\n' "$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          printf 'release_tag=%s\n' "$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          printf 'has_installer=%s\n' "$HAS_INSTALLER_BUILDER" >> "$GITHUB_OUTPUT"
+      - name: Preparar compilador y extractor del instalador Windows
+        if: steps.source.outputs.has_installer == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y nsis p7zip-full
+      - name: Validar el instalador Windows
+        if: steps.source.outputs.has_installer == 'true'
+        run: python -m unittest discover -s tests -p test_windows_installer.py -v
       - name: Validar empaquetado, identidad y XML
         run: python -m unittest discover -s tests -p test_release_packaging.py -v
       - name: Validar empaquetador del runtime TauDEM
         run: python -m unittest discover -s tests -p test_taudem_bundle.py -v
       - name: Verificar integridad del runtime TauDEM versionado
         run: python scripts/prepare_taudem_bundle.py --verify src/caumax_consulta/vendor/taudem-5.5.0-win64.zip
-      - name: Construir publicación
+      - name: Construir ZIP reproducible
         env:
-          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ steps.source.outputs.release_tag }}
           RELEASE_REPOSITORY: ${{ github.repository }}
         run: python scripts/build_release.py --output dist --tag "$RELEASE_TAG" --repository "$RELEASE_REPOSITORY"
+      - name: Construir una vez e incorporar el instalador Windows
+        if: steps.source.outputs.has_installer == 'true'
+        env:
+          RELEASE_TAG: ${{ steps.source.outputs.release_tag }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+        run: |
+          BUNDLE_PACKAGE="$(python -c "import json; print(json.load(open('dist/release_manifest.json'))['package'])")"
+          BUNDLE_INSTALLER="${BUNDLE_PACKAGE%.zip}_Setup.exe"
+          python scripts/build_windows_installer.py --zip "dist/$BUNDLE_PACKAGE" --manifest dist/release_manifest.json --output-dir dist
+          python scripts/build_release.py --output dist --tag "$RELEASE_TAG" --repository "$RELEASE_REPOSITORY" --reuse-zip "dist/$BUNDLE_PACKAGE" --installer "dist/$BUNDLE_INSTALLER" --installer-manifest dist/installer_manifest.json
+      - name: Verificar el conjunto completo antes de conservarlo
+        env:
+          RELEASE_REPOSITORY: ${{ github.repository }}
+        run: |
+          python scripts/publish_release.py --output dist --repository "$RELEASE_REPOSITORY" --dry-run
+      - name: Conservar el mismo bundle para Windows, publicación y reintentos
+        uses: actions/upload-artifact@v4
+        with:
+          name: hidrocaumax-release-bundle-${{ github.run_id }}
+          path: dist/
+          if-no-files-found: error
+          include-hidden-files: true
+          compression-level: 0
+          retention-days: 30
+          overwrite: false
+
+  windows-smoke:
+    needs: build
+    if: needs.build.outputs.has_installer == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      installer_sha256: ${{ steps.smoke.outputs.installer_sha256 }}
+      zip_sha256: ${{ steps.smoke.outputs.zip_sha256 }}
+    steps:
+      - name: Obtener la misma revisión fuente del bundle
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.build.outputs.source_commit }}
+          persist-credentials: false
+      - name: Descargar el EXE original sin recompilar
+        uses: actions/download-artifact@v4
+        with:
+          name: hidrocaumax-release-bundle-${{ github.run_id }}
+          path: dist
+      - name: Probar instalación, actualización y desinstalación reales
+        id: smoke
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $PWD 'tests/windows_installer_smoke.ps1'), [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count) { throw ($errors | Out-String) }
+          $manifest = Get-Content -LiteralPath 'dist/release_manifest.json' -Raw | ConvertFrom-Json
+          $installer = Join-Path $PWD (Join-Path 'dist' $manifest.windows_installer.package)
+          $zip = Join-Path $PWD (Join-Path 'dist' $manifest.package)
+          $installerHash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          $zipHash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($installerHash -ne $manifest.windows_installer.sha256 -or
+              (Get-Item -LiteralPath $installer).Length -ne $manifest.windows_installer.bytes -or
+              $zipHash -ne $manifest.sha256 -or (Get-Item -LiteralPath $zip).Length -ne $manifest.bytes) {
+            throw 'El artefacto descargado no coincide con el manifiesto verificado.'
+          }
+          $reportPath = Join-Path $env:RUNNER_TEMP 'hidrocaumax-windows-smoke/windows_installer_smoke.json'
+          & pwsh -NoProfile -File tests/windows_installer_smoke.ps1 -InstallerPath $installer -ZipPath $zip -ReportPath $reportPath -TimeoutSeconds 180
+          if ($LASTEXITCODE -ne 0) { throw 'La prueba real del instalador Windows ha fallado.' }
+          $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
+          if (-not $report.success -or -not $report.windows_executed -or
+              $report.installer_sha256 -ne $installerHash -or $report.zip_sha256 -ne $zipHash) {
+            throw 'El informe Windows no confirma la ejecución correcta de estos archivos.'
+          }
+          "installer_sha256=$installerHash" >> $env:GITHUB_OUTPUT
+          "zip_sha256=$zipHash" >> $env:GITHUB_OUTPUT
+      - name: Conservar siempre el informe y el registro Windows
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hidrocaumax-windows-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/hidrocaumax-windows-smoke/
+          if-no-files-found: warn
+          retention-days: 30
+
+  publish:
+    needs: [build, windows-smoke]
+    if: ${{ always() && !cancelled() && needs.build.result == 'success' && (needs.windows-smoke.result == 'success' || (needs.build.outputs.has_installer == 'false' && needs.windows-smoke.result == 'skipped')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Obtener la misma revisión fuente del bundle
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.build.outputs.source_commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Preparar el extractor para verificar el EXE ya probado
+        if: needs.build.outputs.has_installer == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y p7zip-full
+      - name: Descargar el mismo bundle inmutable de este run
+        uses: actions/download-artifact@v4
+        with:
+          name: hidrocaumax-release-bundle-${{ github.run_id }}
+          path: dist
+      - name: Cotejar los archivos con la prueba Windows y la etiqueta solicitada
+        env:
+          RELEASE_TAG: ${{ needs.build.outputs.release_tag }}
+          HAS_INSTALLER: ${{ needs.build.outputs.has_installer }}
+          WINDOWS_EXE_SHA256: ${{ needs.windows-smoke.outputs.installer_sha256 }}
+          WINDOWS_ZIP_SHA256: ${{ needs.windows-smoke.outputs.zip_sha256 }}
+        run: |
+          python - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+
+          folder = Path('dist')
+          manifest = json.loads((folder / 'release_manifest.json').read_text(encoding='utf-8'))
+          if manifest['tag'] != os.environ['RELEASE_TAG']:
+              raise RuntimeError('El bundle pertenece a otra etiqueta.')
+          windows = manifest.get('windows_installer')
+          if bool(windows) != (os.environ['HAS_INSTALLER'] == 'true'):
+              raise RuntimeError('La modalidad de publicación ha cambiado después de construir el bundle.')
+          if windows:
+              for name, recorded, tested in (
+                  (windows['package'], windows['sha256'], os.environ['WINDOWS_EXE_SHA256']),
+                  (manifest['package'], manifest['sha256'], os.environ['WINDOWS_ZIP_SHA256']),
+              ):
+                  if not tested or recorded != tested or hashlib.sha256((folder / name).read_bytes()).hexdigest() != tested:
+                      raise RuntimeError('La publicación no contiene exactamente los archivos probados en Windows.')
+          PY
       - name: Preparar publicador de la revisión del workflow
         env:
           PUBLISHER_COMMIT: ${{ github.workflow_sha }}
         run: |
-          # El complemento y build_release siguen siendo los de la etiqueta.
+          # El complemento y build_release siguen siendo los de la fuente fijada.
           # El publicador corregido permite completar publicaciones existentes.
           git show "$PUBLISHER_COMMIT:scripts/publish_release.py" > "$RUNNER_TEMP/hidrocaumax-publish-release.py"
       - name: Crear o completar Release sin sustituir archivos existentes
@@ -75,8 +243,8 @@ jobs:
           PAGES_RUN_ID: ${{ github.run_id }}
           PAGES_ARTIFACT_NAME: github-pages-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
-          # Pages lists artifacts through the API after upload. Wait for this
-          # exact attempt; a retry must never select an older namesake.
+          # Pages espera el artefacto de este intento. El ZIP y el EXE siguen
+          # siendo los del bundle original, incluso al reintentar solo publish.
           for attempt in {1..12}; do
             count=$(gh api "repos/$PAGES_REPOSITORY/actions/runs/$PAGES_RUN_ID/artifacts?per_page=100" \
               | jq --arg name "$PAGES_ARTIFACT_NAME" '[.artifacts[] | select(.name == $name and .expired == false)] | length')

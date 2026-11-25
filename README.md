@@ -1,6 +1,6 @@
 # HidroCAUMAX
 
-Complemento para **QGIS 3** que amplía **CAUMAX 3.0** con delimitación y análisis de cuencas, selección de MDT, morfología, curva hipsométrica, umbral de escorrentía P₀, precipitación diaria máxima Pd y consultas de cuantiles. Versión actual: **1.2.12**. Repositorio: **jmdiez2026/HidroCAUMAX**.
+Complemento para **QGIS 3** que amplía **CAUMAX 3.0** con delimitación y análisis de cuencas, selección de MDT, morfología, curva hipsométrica, umbral de escorrentía P₀, precipitación diaria máxima Pd y consultas de cuantiles. Versión actual: **1.2.13**. Repositorio: **jmdiez2026/HidroCAUMAX**.
 
 El diálogo integra los estadísticos de cuenca y recalcula los resultados al cambiar la resolución del MDT o el grado de suavizado. Conserva el punto original consultado y los caudales oficiales de CAUMAX: cambiar el MDT modifica la delimitación y los parámetros de la cuenca, sin inventar nuevos caudales de avenida.
 
@@ -13,11 +13,22 @@ El diálogo integra los estadísticos de cuenca y recalcula los resultados al ca
 - Conexión a **Pollinations Classic** para el botón **Análisis IA**, gratuito y sin credenciales. No se requiere una cuenta, una clave ni una biblioteca adicional. La disponibilidad y los límites temporales dependen de ese servicio externo.
 - En **Windows de 64 bits**, TauDEM 5.5.0, MPI y sus bibliotecas y datos de GDAL/PROJ están incluidos en el ZIP y se preparan automáticamente. **CAUMAX es el único complemento previo**; el usuario no instala otro complemento ni un motor hidrológico adicional. Se reutilizan las bibliotecas de ejecución de C++ de QGIS/Windows. El paquete de ejecutables integrado es para Windows: en Linux/macOS se requieren los motores GRASS o TauDEM/MPI ya disponibles en esa instalación; no se presenta el ZIP de Windows como un runtime multiplataforma.
 
-La versión 1.2.12 se distribuye en el canal **estable** (`experimental=False`). El código contiene controles de cobertura, NoData y errores; sus resultados deben revisarse con las fuentes y la resolución de cada proyecto.
+La versión 1.2.13 se distribuye en el canal **estable** (`experimental=False`). El código contiene controles de cobertura, NoData y errores; sus resultados deben revisarse con las fuentes y la resolución de cada proyecto.
 
 ## Instalación
 
-1. Utiliza el archivo instalable **HidroCAUMAX_v1_2_12.zip** de esta entrega. El ZIP de código fuente que ofrece GitHub no es el instalable de QGIS.
+Descargas de la versión **1.2.13**:
+
+- [ZIP instalable desde QGIS](https://github.com/jmdiez2026/HidroCAUMAX/releases/download/v1.2.13/HidroCAUMAX_v1_2_13.zip).
+- [Instalador de Windows](https://github.com/jmdiez2026/HidroCAUMAX/releases/download/v1.2.13/HidroCAUMAX_v1_2_13_Setup.exe), con icono propio de río en crecida.
+
+**En Windows**, cierra QGIS, ejecuta el instalador y selecciona tu perfil de QGIS 3. El asistente muestra el destino dentro de `%APPDATA%\QGIS\QGIS3\profiles`, trabaja con el usuario actual y no necesita permisos de administrador. Después, abre QGIS con ese perfil y activa HidroCAUMAX. QGIS y CAUMAX original deben estar instalados previamente. Los perfiles ubicados fuera de la carpeta habitual pueden usar el ZIP desde QGIS.
+
+La instalación nueva se prepara antes de sustituir la anterior. Si ya había HidroCAUMAX, se conserva una copia fuera de la carpeta de complementos y el asistente muestra su ubicación. El instalador mantiene los demás perfiles, complementos, ajustes y datos. Su desinstalador retira únicamente los archivos propios de la entrega reconocida. El EXE no tiene firma digital de editor.
+
+**Instalación mediante ZIP**, válida también en Linux y macOS:
+
+1. Utiliza el archivo instalable **HidroCAUMAX_v1_2_13.zip** de esta entrega. El ZIP de código fuente que ofrece GitHub no es el instalable de QGIS.
 2. En QGIS abre **Complementos → Administrar e instalar complementos → Instalar a partir de ZIP** y selecciona el instalable, sin descomprimirlo.
 3. Si ya utilizas HidroCAUMAX, acepta sustituir el complemento anterior y reinicia QGIS para cargar juntos todos los módulos de la nueva versión. La carpeta interna permanece como **caumax_consulta** para conservar la identidad de instalación.
 4. Activa CAUMAX 3.0, carga sus capas y realiza una consulta válida. Pulsa **Cuenca hidrográfica** para abrir las herramientas ampliadas.
@@ -26,18 +37,21 @@ La [guía detallada del complemento](src/caumax_consulta/README.md) describe las
 
 ## Capas de referencia
 
-En **Complementos → HidroCAUMAX → Cargar capas HidroCAUMAX**, el complemento añade **HidroCAUMAX · Capas de referencia** al proyecto. Contiene seis subgrupos:
+En **Complementos → HidroCAUMAX → Cargar capas HidroCAUMAX**, el complemento añade **HidroCAUMAX · Capas de referencia** como **primer subgrupo dentro de CAUMAX_CAPAS**, por encima de **Red 10 km²**, **Ríos** y las demás capas de CAUMAX. Si CAUMAX_CAPAS aún no existe, se coloca en la primera posición del árbol. Al repetir el comando se recoloca también un grupo ya cargado, sin duplicarlo. Se respeta esta prioridad de dibujo aunque el proyecto utilice un orden de capas personalizado. Contiene siete subgrupos, en este orden:
 
 | Subgrupo | Contenido |
 |---|---|
-| Corine Land Cover · Ocupación del suelo | Servicio multiescala oficial del IGN/SCNE: CLC2018, SIOSE2014 y SIOSE AR2017, según la escala de visualización. |
+| Red estaciones AEMET | SHP de 3.249 estaciones con precipitación documentada, diferenciadas por su presencia en los catálogos OpenData consultados. |
+| Peligrosidad de inundación · SNCZI | Calados fluviales en tonos azules para T = 10, 100 y 500 años. |
+| Google Satellite | Imagen de Google mediante conexión XYZ, desactivada inicialmente. |
 | Clasificación Pfafstetter | Tramos de ríos clasificados según Pfafstetter modificado, MITECO. |
 | Caracterización AgroClimática | Las 17 variables del servicio MAPA, incluida la clasificación de Papadakis. |
-| Peligrosidad de inundación · SNCZI | Calados fluviales en tonos azules para T = 10, 100 y 500 años. |
 | IGME · Mapa Hidrogeológico | Mapa a escala 1:1.000.000 con hidrogeología, cuencas y unidades hidrogeológicas. |
-| Red estaciones AEMET | SHP de 3.249 estaciones con precipitación documentada, con círculos diferenciados por su presencia en los catálogos OpenData consultados. |
+| Corine Land Cover · Ocupación del suelo | Servicio multiescala oficial del IGN/SCNE: CLC2018, SIOSE2014 y SIOSE AR2017, según la escala de visualización. |
 
-Las 25 capas de los cinco primeros subgrupos son conexiones **WMS**, con imagen PNG transparente: se solicitan al servidor al visualizar el mapa y requieren conexión. El comando conserva el CRS y la extensión actual del proyecto. Repetirlo incorpora únicamente las capas que falten. Las capas de referencia permanecen al borrar los delineados de HidroCAUMAX.
+Las 25 capas WMS utilizan imagen PNG transparente: se solicitan al servidor al visualizar el mapa y requieren conexión. El comando conserva el CRS y la extensión actual del proyecto. Repetirlo incorpora únicamente las capas que falten. Las capas de referencia permanecen al borrar los delineados de HidroCAUMAX.
+
+**Google Satellite** se coloca inmediatamente después de SNCZI y antes de Pfafstetter. Su grupo y su capa comienzan desactivados; al repetir el comando se conserva la selección de visibilidad que haya hecho el usuario. Utiliza teselas XYZ del servidor de Google, con atribución a Google y sus proveedores.
 
 Los tres escenarios SNCZI se cargan por separado, con **T100 como escenario inicial**. Las variables agroclimáticas se agrupan para elegirlas; su grupo empieza desactivado y conserva Papadakis como selección inicial. El grupo IGME empieza desactivado y conserva sus tres componentes preparados para mostrarse juntos. Si un servicio no responde, se comunican las capas fallidas y las demás pueden seguir cargándose.
 
@@ -61,6 +75,15 @@ Fuentes y procedencia verificadas:
 - [MITECO: estaciones climatológicas AEMET y condiciones de uso](https://www.miteco.gob.es/es/cartografia-y-sig/ide/descargas/otros.html).
 - [Esri España: copia cartográfica AEMET publicada en 2017](https://www.arcgis.com/home/item.html?id=20e0ab17fcf249d1a03a4b5c7b083cb1).
 - [AEMET OpenData: centro de descargas](https://opendata.aemet.es/centrodedescargas/inicio).
+
+## Cambios incluidos en 1.2.13
+
+- **Cierre automático en Método racional:** al seleccionar MDT de 25 × 25 m o 5 × 5 m se identifica el drenaje correspondiente a la cuenca nativa y se elige el centro de celda admisible más próximo al punto original. Se elimina el veto de orientación del cauce grueso de 500 m que podía abrir innecesariamente el selector manual. **Ajuste Punto de Cierre** sigue disponible.
+- **Comprobación del caso comunicado:** en EPSG:25830, X=346039,5 e Y=4717691,8, el ajuste automático desplaza el cierre 34,02 m con MDT25 y 12,02 m con MDT5. Las cuencas resultantes tienen 14,515625 y 14,491800 km², respectivamente, sin alcanzar el borde del MDT. Se comprobaron la mínima distancia entre todos los candidatos, los cambios de resolución en el diálogo y el guardado/reapertura.
+- **IA en Método racional:** se retira el botón de la cabecera Resolución MDT. El acceso del encabezado Interpretación permanece disponible.
+- **Instalador Windows:** asistente por usuario y perfil de QGIS, icono de crecida, copia de la instalación anterior y desinstalación limitada a sus archivos. El contenido se comprueba contra el mismo ZIP distribuido.
+- **Google Satellite:** nueva capa XYZ, inicialmente desactivada, situada después de SNCZI y antes de Pfafstetter. El catálogo reúne 27 capas en siete subgrupos.
+- **Posición de las capas de referencia:** el grupo se coloca dentro de CAUMAX_CAPAS, en la primera posición, para dibujar sus capas sobre las de CAUMAX. La recolocación se aplica también al repetir el comando con todas las capas ya presentes y contempla el orden de dibujo personalizado.
 
 ## Cambios incluidos en 1.2.12
 
@@ -149,6 +172,7 @@ Se conservan las cotas y la malla del archivo, el suavizado, las tablas, las con
 | `src/caumax_consulta/` | Código y recursos del complemento instalable. |
 | `tests/` | Pruebas de cálculo, interfaz, persistencia, exportación y empaquetado. |
 | `scripts/` | Preparación y publicación de versiones. |
+| `packaging/windows/` | Asistente NSIS e icono del instalador Windows. |
 | `.github/workflows/` | Automatización de distribución y del índice de complementos. |
 
 No se incluyen capas de proyectos, sesiones guardadas, cachés, credenciales ni registros locales de validación. Los ensayos generan sus datos de prueba; algunos requieren una instalación externa de CAUMAX, GRASS o TauDEM y se omiten cuando falta ese requisito.
@@ -158,10 +182,19 @@ No se incluyen capas de proyectos, sesiones guardadas, cachés, credenciales ni 
 El empaquetado utiliza **Python 3.10 o posterior** y su biblioteca estándar; no necesita iniciar QGIS:
 
 ```text
-python scripts/build_release.py --output dist --tag v1.2.12
+python scripts/build_release.py --output dist --tag v1.2.13
 ```
 
 Genera el ZIP instalable, sus sumas SHA-256 y el índice XML de distribución. Los archivos resultantes quedan fuera del control de versiones mediante `.gitignore`.
+
+Para añadir el instalador Windows se necesitan **NSIS (`makensis`) y 7-Zip (`7z` o `7zz`)** en la máquina de compilación. No se requiere Python en el equipo donde se ejecuta el instalador:
+
+```text
+python scripts/build_windows_installer.py --zip dist/HidroCAUMAX_v1_2_13.zip --manifest dist/release_manifest.json --output-dir dist
+python scripts/build_release.py --output dist --tag v1.2.13 --reuse-zip dist/HidroCAUMAX_v1_2_13.zip --installer dist/HidroCAUMAX_v1_2_13_Setup.exe --installer-manifest dist/installer_manifest.json
+```
+
+El empaquetador verifica los archivos realmente contenidos en el EXE frente al ZIP, registra las fuentes y la versión del compilador y añade el instalador a las sumas SHA-256 y la página de descarga. El ZIP es reproducible byte a byte; no se presupone que dos versiones distintas de NSIS produzcan un EXE idéntico.
 
 ## Pruebas
 

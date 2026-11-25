@@ -1,7 +1,9 @@
-"""Build and verify a reproducible QGIS plugin ZIP and its public repository index.
+"""Build a reproducible plugin ZIP, optional verified Windows EXE and public index.
 
 Uses only Python's standard library. It neither changes plugin sources nor
 publishes anything. Archive entries keep the installed id ``caumax_consulta``.
+An optional prebuilt NSIS installer is verified against this exact ZIP; it is
+never rebuilt implicitly or assumed byte-reproducible across NSIS toolchains.
 """
 from __future__ import annotations
 
@@ -140,8 +142,41 @@ def repository_xml(metadata: dict[str, str], repository: str, tag: str, filename
     return ET.tostring(root, encoding='utf-8', xml_declaration=True)+b'\n'
 
 
+def _attach_installer(installer: Path, installer_manifest: Path, package: Path,
+                      manifest: dict, output: Path) -> dict:
+    """Bind an independently built EXE to the ZIP and its versioned build inputs."""
+    if installer.is_symlink() or installer_manifest.is_symlink():
+        raise ValueError('Installer inputs must be real files, not symbolic links.')
+    raw = installer_manifest.read_bytes()
+    document = json.loads(raw.decode('utf-8'))
+    expected = 'HidroCAUMAX_v'+manifest['version'].replace('.', '_')+'_Setup.exe'
+    if not isinstance(document, dict) or document.get('installer') != expected or installer.name != expected:
+        raise ValueError('Installer filename must match the release version.')
+    # Imported only on the optional Windows path: old ZIP-only releases and
+    # their pinned builders remain usable without NSIS or an extractor.
+    from build_windows_installer import verify_installer
+    verify_installer(installer, document, package, manifest, source_root=DEFAULT_ROOT)
+    if not isinstance(document.get('build_sources'), dict) or not document['build_sources']:
+        raise ValueError('Installer manifest must identify its versioned build sources.')
+    target, proof = output/expected, output/'installer_manifest.json'
+    if target.is_symlink() or proof.is_symlink():
+        raise ValueError('Installer output files must not be symbolic links.')
+    if installer.resolve() != target.resolve():
+        shutil.copyfile(installer, target)
+    proof.write_bytes(raw)
+    if sha256(target) != document['sha256'] or target.stat().st_size != document['bytes']:
+        raise ValueError('Installer changed while preparing the release bundle.')
+    return dict(package=expected, sha256=document['sha256'], bytes=document['bytes'],
+        manifest=proof.name, manifest_sha256=sha256(proof),
+        payload_sha256=manifest['sha256'], nsis_version=document['nsis_version'],
+        download_url=f"https://github.com/{manifest['repository']}/releases/download/{manifest['tag']}/{expected}")
+
+
 def build(source: Path, output: Path, tag: str | None = None,
-          repository: str = DEFAULT_REPOSITORY, reuse_zip: Path | None = None) -> dict:
+          repository: str = DEFAULT_REPOSITORY, reuse_zip: Path | None = None,
+          installer: Path | None = None, installer_manifest: Path | None = None) -> dict:
+    if (installer is None) != (installer_manifest is None):
+        raise ValueError('Provide both --installer and --installer-manifest, or neither.')
     repository = validate_repository(repository)
     if source.is_symlink():
         raise ValueError('Plugin source directory must not be a symbolic link.')
@@ -170,8 +205,6 @@ def build(source: Path, output: Path, tag: str | None = None,
     plugin = parsed.find('pyqgis_plugin')
     assert plugin.findtext('file_name').partition('.')[0] == PLUGIN_ID
     (output/'plugins.xml').write_bytes(xml)
-    checksums = ''.join(f'{sha256(output/name)}  {name}\n' for name in (filename, 'plugins.xml'))
-    (output/'SHA256SUMS.txt').write_text(checksums, encoding='ascii', newline='\n')
     owner, repo_name = repository.split('/')
     index_url = f'https://{owner}.github.io/{repo_name}/plugins.xml'
     manifest = dict(version=version, tag=tag, plugin_id=PLUGIN_ID,
@@ -180,6 +213,13 @@ def build(source: Path, output: Path, tag: str | None = None,
         sha256=sha256(package), bytes=package.stat().st_size,
         index_url=index_url, download_url=plugin.findtext('download_url'),
         source_files={name:sha256(path) for name,path in sorted(files.items())})
+    checksum_names = [filename, 'plugins.xml']
+    if installer is not None:
+        manifest['windows_installer'] = _attach_installer(
+            installer, installer_manifest, package, manifest, output)
+        checksum_names.extend((manifest['windows_installer']['package'], 'installer_manifest.json'))
+    checksums = ''.join(f'{sha256(output/name)}  {name}\n' for name in checksum_names)
+    (output/'SHA256SUMS.txt').write_text(checksums, encoding='ascii', newline='\n')
     (output/'release_manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+'\n',encoding='utf-8',newline='\n')
     channel = 'experimental' if manifest['experimental'] else 'estable'
     changelog = source/'CHANGELOG.md'
@@ -190,6 +230,10 @@ def build(source: Path, output: Path, tag: str | None = None,
         f'Repositorio QGIS: {index_url}\n\n'
         f'Instalación manual: {filename}, sin descomprimir.\n\n'
         f'SHA-256: {manifest["sha256"]}\n')
+    if 'windows_installer' in manifest:
+        windows = manifest['windows_installer']
+        notes += (f'\nInstalador de Windows: [{windows["package"]}]({windows["download_url"]}).\n\n'
+                  f'SHA-256 del EXE: {windows["sha256"]}\n')
     (output/'release_notes.md').write_text(notes, encoding='utf-8', newline='\n')
     site = output/'site'
     site.mkdir(exist_ok=True)
@@ -211,6 +255,13 @@ def build(source: Path, output: Path, tag: str | None = None,
 <p>SHA-256 del ZIP: <code style="overflow-wrap:anywhere">{manifest['sha256']}</code></p>
 </main></html>
 '''
+    if 'windows_installer' in manifest:
+        windows = manifest['windows_installer']
+        installer_html = (
+            f'<p><a href="{html.escape(windows["download_url"],quote=True)}">Descargar instalador de Windows (.exe)</a></p>\n'
+            f'<p>SHA-256 del EXE: <code style="overflow-wrap:anywhere">{windows["sha256"]}</code> · '
+            '<a href="SHA256SUMS.txt">Sumas SHA-256 de la publicación</a></p>\n')
+        page = page.replace('</main></html>', installer_html+'</main></html>')
     (site/'index.html').write_text(page,encoding='utf-8',newline='\n')
     return manifest
 
@@ -222,8 +273,11 @@ def main() -> None:
     parser.add_argument('--tag',help='Must equal v plus metadata.txt version.')
     parser.add_argument('--repository',default=DEFAULT_REPOSITORY)
     parser.add_argument('--reuse-zip',type=Path,help='Preserve an existing ZIP only if every source byte matches.')
+    parser.add_argument('--installer',type=Path,help='Attach a prebuilt Windows EXE verified against the same ZIP.')
+    parser.add_argument('--installer-manifest',type=Path,help='Manifest produced by build_windows_installer.py; requires --installer.')
     args = parser.parse_args()
-    manifest = build(args.source,args.output,args.tag,args.repository,args.reuse_zip)
+    manifest = build(args.source,args.output,args.tag,args.repository,args.reuse_zip,
+                     args.installer,args.installer_manifest)
     print(json.dumps({k:v for k,v in manifest.items() if k!='source_files'},ensure_ascii=False,indent=2))
 
 
