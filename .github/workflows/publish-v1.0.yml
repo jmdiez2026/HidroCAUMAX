@@ -39,7 +39,12 @@ jobs:
             echo "main cambió; se rechaza etiquetar código diferente." >&2
             exit 1
           fi
-          existing="$(gh api "repos/$GH_REPO/git/ref/tags/v1.0" --jq '.object.sha' 2>/dev/null || true)"
+          # Missing refs can yield a JSON null on some API wrappers.
+          # Only a literal 40-hex SHA is evidence that the tag exists.
+          existing="$(gh api "repos/$GH_REPO/git/ref/tags/v1.0" --jq '.object.sha // ""' 2>/dev/null || true)"
+          if ! [[ "$existing" =~ ^[0-9a-f]{40}$ ]]; then
+            existing=""
+          fi
           if [ -n "$existing" ] && [ "$existing" != "$GITHUB_SHA" ]; then
             echo "La etiqueta v1.0 existe y señala otro commit; no se altera." >&2
             exit 1
