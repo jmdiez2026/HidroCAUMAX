@@ -571,7 +571,9 @@ def prepare_taudem(dem_path, outlet_x, outlet_y, cache_dir, *, reference_area_m2
                     stream, network, network_steps = _network(engine, filled, native, accumulation,
                         closure, cells, net_folder, work, cancelled, progress)
                 except EmptyStreamNetworkError:
-                    if not is_automatic or cells == candidates[-1]:
+                    if not is_automatic:
+                        raise  # Respect the user's explicit threshold; do not silently change it.
+                    if cells == candidates[-1]:
                         raise ValueError('TauDEM no genera tramos conectados al cierre, incluso '
                             'con un umbral reducido. Revisa la correspondencia del cierre, '
                             'las direcciones D8 y la cobertura del MDT.') from None
