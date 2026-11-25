@@ -261,6 +261,10 @@ jobs:
           done
           echo "El índice QGIS no está disponible en la API tras la espera; se puede reintentar." >&2
           exit 1
+      - name: Esperar propagación del artefacto Pages a la API interna de despliegue
+        # La API REST de Actions ve el ZIP antes que la API de deploy-pages;
+        # sin esta pausa el despliegue falla aunque el artefacto esté íntegro.
+        run: sleep 45
       - name: Publicar Pages
         id: deployment
         uses: actions/deploy-pages@v4
