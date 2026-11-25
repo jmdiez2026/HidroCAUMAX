@@ -1,4 +1,4 @@
-"""Basin window opened from CAUMAX's own maximum-flow query dialog."""
+"""Shared basin tools for native CAUMAX raster and rational-method contexts."""
 import traceback
 import hashlib
 import json
@@ -26,6 +26,7 @@ from .parameter_schema import METRICS, format_value
 from .metrics import shape_metrics
 from .morphology_table import ActionGroupBox, InterpretationDelegate, InterpretationHeader, fit_morphology_rows
 from .drainage_panel import DrainageControls, DrainageStatusLabel
+from .flow_quantiles import is_rational_query, rational_flow_text
 
 
 BLUE_BUTTON_STYLE = '''
@@ -80,6 +81,9 @@ class AnalysisTask(QgsTask):
                 self.query.directions_path, self.query.dem_path,
                 *self.outlet, cancelled=self.isCanceled, upstream_only=False,
             )
+            if is_rational_query(self.query):
+                from .rational_basin import validate_rational_analysis
+                self.result = validate_rational_analysis(self.result, self.query)
             return not self.isCanceled()
         except InterruptedError:
             return False
@@ -95,7 +99,7 @@ class BasinDialog(QDialog):
     def __init__(self, query, iface, parent=None, saved_session=None):
         super().__init__(parent)
         self.setObjectName('CaumaxCuencaHidrograficaDialog')
-        self.setWindowTitle('HidroCAUMAX v1.2.11 · Cuenca hidrográfica')
+        self.setWindowTitle('HidroCAUMAX v1.2.12 · Cuenca hidrográfica')
         self.setStyleSheet(BLUE_BUTTON_STYLE)
         self.setAttribute(Qt.WA_DeleteOnClose)
         self.setModal(False)
@@ -200,7 +204,6 @@ class BasinDialog(QDialog):
         self.context = QLabel(self)
         self.context.setTextFormat(Qt.PlainText)
         self.context.setWordWrap(True)
-        self._update_context()
         group = QGroupBox('Morfología de la Cuenca', self)
         self.morphology_group = group
         box = QVBoxLayout(group)
@@ -314,6 +317,7 @@ class BasinDialog(QDialog):
         resolution_group.set_header_action(self.analysis_ai_button)
         resolution_help = QLabel('La aplicación CAUMAX original utiliza MDT de tamaño de celda 500mx500m. Aquí puede seleccionar una resolución mejorada con MDT oficiales (www.cnig.es). Todos los cálculos se actualizarán automáticamente', resolution_group)
         self.resolution_help = resolution_help
+        self._update_context()
         resolution_help.setWordWrap(True)
         resolution_layout.addWidget(resolution_help)
         self._resolution_checks_widget = QWidget(resolution_group)
@@ -541,7 +545,23 @@ class BasinDialog(QDialog):
             f'{query.crs.authid() or query.crs.description()}')
         if analysis is not None:
             self.context_mdt.setText('MDT activo: '+_compact_resolution(analysis.cell_width,analysis.cell_height))
-        context = f'Caudal CAUMAX original: {query.flow:g} m³/s · T={query.period} años'
+        if is_rational_query(query):
+            native = getattr(query, 'rational_context', None) or {}
+            transform = native.get('geotransform')
+            resolution = (_compact_resolution(abs(float(transform[1])), abs(float(transform[5])))
+                          if isinstance(transform, (list, tuple)) and len(transform) == 6 else 'nativo')
+            self.resolution_help.setText(
+                'El método racional utiliza el MDT ' + resolution + '. Aquí puede seleccionar '
+                'otros MDT oficiales (www.cnig.es) para actualizar la morfología, la hipsometría '
+                'y las medias de P₀ y Pd de la cuenca. El caudal conserva su cálculo nativo.')
+            context = ('Origen: Método racional · Red de drenaje ≤50 km²\n'
+                       + rational_flow_text(query))
+        else:
+            self.resolution_help.setText(
+                'La aplicación CAUMAX original utiliza MDT de tamaño de celda 500mx500m. '
+                'Aquí puede seleccionar una resolución mejorada con MDT oficiales (www.cnig.es). '
+                'Todos los cálculos se actualizarán automáticamente')
+            context = f'Caudal CAUMAX original: {query.flow:g} m³/s · T={query.period} años'
         snap = analysis.diagnostics.get('outlet_snap') if analysis is not None else None
         if snap:
             crs = QgsCoordinateReferenceSystem.fromWkt(analysis.crs_wkt)
@@ -835,12 +855,12 @@ class BasinDialog(QDialog):
 
     def _setup_resolutions(self, resolution_state=None):
         self._close_outlet_selection()
-        from .resolution_controller import ResolutionController
+        from .resolution_controller import ResolutionController, base_variant_key
         if self._resolution_controller is not None:
             self._resolution_controller.dispose()
         if resolution_state:
             variants = resolution_state['variants']
-            base_key = '500' if '500' in variants else resolution_state['active_key']
+            base_key = base_variant_key(variants, resolution_state['active_key'])
             base = variants[base_key]
             base_analysis, base_query = base['analysis'], base['query']
         else:
@@ -1487,9 +1507,10 @@ class BasinDialog(QDialog):
                 ('input_period', 'input_precipitation', 'extrapolate') if k in previous_hydrology})
             self.basin_hydrology_widget.set_analysis(self.analysis, state=hydrology)
             quantiles = self.quantiles_widget.snapshot()
-            quantiles.update({k:previous_quantiles[k] for k in
-                ('input_period', 'input_flow', 'extrapolate') if k in previous_quantiles})
-            self.quantiles_widget.restore(quantiles)
+            if quantiles is not None:
+                quantiles.update({k:previous_quantiles[k] for k in
+                    ('input_period', 'input_flow', 'extrapolate') if k in previous_quantiles})
+                self.quantiles_widget.restore(quantiles)
             self._basin_hydrology_loading = self._quantiles_loading = False
             self._map_data = {}
             self._restored = False
@@ -1541,7 +1562,7 @@ class BasinDialog(QDialog):
         if snapshot:
             self._surface_preferences = {k:snapshot[k] for k in
                 ('input_period', 'input_precipitation', 'extrapolate')}
-        self._surface_flow_preferences = {k:v for k,v in self.quantiles_widget.snapshot().items()
+        self._surface_flow_preferences = {k:v for k,v in (self.quantiles_widget.snapshot() or {}).items()
                                          if k in ('input_period', 'input_flow', 'extrapolate')}
         self._basin_hydrology_loading = True
         self.basin_hydrology_widget.set_analysis(None)
@@ -1627,10 +1648,11 @@ class BasinDialog(QDialog):
         geometry = self.preview_geometries.get('suavizada') if self.smooth_check.isChecked() else None
         surface = bytes(geometry.asWkb()) if geometry is not None else None
         flow_query = SimpleNamespace(x=self.query.x, y=self.query.y, period=self.query.period,
-            flow=self.query.flow, crs_wkt=self.query.crs.toWkt())
+            flow=self.query.flow, crs_wkt=self.query.crs.toWkt(),
+            source_kind=getattr(self.query,'source_kind','caumax_raster'))
         task = SurfaceTask(self._surface_generation, self.analysis, self.query,
             surface, self.smoothing_degree.value(), source_paths(self.query),
-            flow_query, _source_paths(self.query), self._surface_finished,
+            flow_query, [] if is_rational_query(self.query) else _source_paths(self.query), self._surface_finished,
             drainage_source=deepcopy(self._base_drainage_state or self._drainage_state))
         task.update.connect(self._surface_status)
         self._surface_task = task
@@ -1671,7 +1693,8 @@ class BasinDialog(QDialog):
         if task.result.get('drainage') is not None:
             self._drainage_state = task.result['drainage']
         self._surface_valid = True
-        quantiles = dict(task.result['quantiles'], **self._surface_flow_preferences)
+        quantiles = (dict(task.result['quantiles'], **self._surface_flow_preferences)
+                     if task.result.get('quantiles') is not None else None)
         self._display_analysis(quantile_snapshot=quantiles)
         self._basin_hydrology_loading = True
         state = self.basin_hydrology_widget.snapshot()
@@ -1691,7 +1714,7 @@ class BasinDialog(QDialog):
                 (f'Pd T={period}', result) for period,result in task.result['rainfall'].items()]:
             if result.get('status') != 'ok':
                 issues.append(label + (' parcial' if result.get('status') == 'partial' else ' no disponible'))
-        if any(value is None for value in quantiles['flows']):
+        if quantiles is not None and any(value is None for value in quantiles['flows']):
             issues.append('cuantiles CAUMAX incompletos')
         self.resolution_status.setText(
             'Recálculo terminado con incidencias: ' + '; '.join(issues) + '.' if issues else
@@ -1763,7 +1786,9 @@ class BasinDialog(QDialog):
                     course_visibility=self._course_layers.visibility() if self._course_layers else {'main':True,'central':False},
                     resolution_metadata=self._resolution_metadata(), **self._map_data)
         state['hypsometric_dimensionless'] = self.hypsometry_widget.is_dimensionless()
-        state['flow_quantiles'] = deepcopy(self.quantiles_widget.snapshot())
+        quantiles = self.quantiles_widget.snapshot()
+        if quantiles is not None:
+            state['flow_quantiles'] = deepcopy(quantiles)
         if self.analysis is not None:
             hydrology = self.basin_hydrology_widget.snapshot()
             if hydrology is not None:
@@ -2000,7 +2025,7 @@ class BasinDialog(QDialog):
         try:
             from .basin_hydrology import source_paths
             from .flow_quantiles import _source_paths
-            flow_preferences = {key:value for key,value in self.quantiles_widget.snapshot().items()
+            flow_preferences = {key:value for key,value in (self.quantiles_widget.snapshot() or {}).items()
                                 if key in ('input_period','input_flow','extrapolate')}
             hydrology = self.basin_hydrology_widget.snapshot() or {}
             hydro_preferences = dict(input_period=hydrology.get('input_period',100.),
@@ -2016,7 +2041,8 @@ class BasinDialog(QDialog):
                 analysis,query = variant['analysis'],variant['query']
                 state = self._new_resolution_state(key,analysis)
                 self._save_surface_queue.append(dict(key=key,analysis=analysis,query=query,state=state,
-                    sources=source_paths(query),flow_sources=_source_paths(query),
+                    sources=source_paths(query),
+                    flow_sources=[] if is_rational_query(query) else _source_paths(query),
                     flow_preferences=dict(flow_preferences),hydro_preferences=dict(hydro_preferences)))
             self._next_save_surface()
         except Exception as error:
@@ -2032,7 +2058,8 @@ class BasinDialog(QDialog):
         item = self._save_surface_queue.pop(0)
         query,state = item['query'],item['state']
         flow_query = SimpleNamespace(x=query.x,y=query.y,period=query.period,
-            flow=query.flow,crs_wkt=query.crs.toWkt())
+            flow=query.flow,crs_wkt=query.crs.toWkt(),
+            source_kind=getattr(query,'source_kind','caumax_raster'))
         surface = state['geometry_wkb'].get('suavizada') if state['smooth_checked'] else None
         task = SurfaceTask(self._save_surface_generation,item['analysis'],query,surface,state['degree'],
             item['sources'],flow_query,item['flow_sources'],self._save_surface_finished)
@@ -2064,7 +2091,8 @@ class BasinDialog(QDialog):
             from .basin_hydrology_widget import METHOD, _normalise
             item,result = task.save_item,task.result
             analysis,state = result['analysis'],item['state']
-            state['flow_quantiles'] = dict(result['quantiles'],**item['flow_preferences'])
+            if result.get('quantiles') is not None:
+                state['flow_quantiles'] = dict(result['quantiles'],**item['flow_preferences'])
             state['basin_hydrology'] = _normalise(dict(version=1,
                 basin_fingerprint=basin_fingerprint(analysis),basin_area_m2=analysis.area_m2,
                 p0_result=result['p0'],rainfall_results=result['rainfall'],method=METHOD,
@@ -2152,7 +2180,7 @@ class BasinDialog(QDialog):
         state = saved.smoothing_state
         self._drainage_state = deepcopy(state.get('drainage_state'))
         self._base_drainage_state = deepcopy(state.get('base_drainage_state') or self._drainage_state)
-        self._display_analysis()
+        self._display_analysis(quantile_snapshot=state.get('flow_quantiles'))
         self._apply_smoothing_snapshot(state)
         self._setup_resolutions(getattr(saved,'resolution_state',None))
 
@@ -2168,7 +2196,9 @@ class BasinDialog(QDialog):
         self.smooth_check.setChecked(state['smooth_checked'])
         self.smoothing_degree.setValue(max(1, round(state['degree'])))
         self.hypsometry_widget.set_dimensionless(state.get('hypsometric_dimensionless',False))
-        if state.get('flow_quantiles'):
+        if is_rational_query(self.query):
+            self.quantiles_widget.set_query(self.query)
+        elif state.get('flow_quantiles'):
             self.quantiles_widget.restore(state['flow_quantiles'])
         self.basin_hydrology_widget.set_analysis(self.analysis, state=state.get('basin_hydrology'))
         self._smoothing_loading = False

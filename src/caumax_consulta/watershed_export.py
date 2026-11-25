@@ -58,7 +58,10 @@ def make_layer(result, query):
     if query.cell is None:
         raise ValueError("No se conocen la fila y la columna de la celda consultada.")
     metrics = shape_metrics(area, perimeter)
-    layer = QgsVectorLayer("MultiPolygon", "Cuenca CAUMAX · T = %s años" % query.period, "memory")
+    rational = getattr(query, 'source_kind', 'caumax_raster') == 'rational'
+    origin = 'Método racional' if rational else 'CAUMAX'
+    period_text = 'T pendiente' if query.period is None else 'T = %s años' % query.period
+    layer = QgsVectorLayer("MultiPolygon", "Cuenca %s · %s" % (origin, period_text), "memory")
     if not layer.isValid():
         raise ValueError("No se ha podido crear la capa de la cuenca.")
     layer.setCrs(crs)
@@ -67,23 +70,29 @@ def make_layer(result, query):
         _double_field("X_CIERRE"), _double_field("Y_CIERRE"),
         _double_field("AREA_KM2"), _double_field("PERIM_KM"),
         _double_field("KC_GRAV"), _double_field("IC_CIRC"),
-        QgsField("FILA_Q", QVariant.LongLong, "", 20),
-        QgsField("COL_Q", QVariant.LongLong, "", 20),
+        QgsField("FILA_MDT" if rational else "FILA_Q", QVariant.LongLong, "", 20),
+        QgsField("COL_MDT" if rational else "COL_Q", QVariant.LongLong, "", 20),
         QgsField("N_CELDAS", QVariant.LongLong, "", 20),
         _double_field("RES_X_M"), _double_field("RES_Y_M"),
     ]
+    if rational:
+        fields.extend([QgsField('ORIGEN', QVariant.String, '', 24),
+                       QgsField('ESTADO_Q', QVariant.String, '', 16)])
     provider = layer.dataProvider()
     if not provider.addAttributes(fields):
         raise ValueError("No se han podido crear los atributos de la cuenca.")
     layer.updateFields()
     feature = QgsFeature(layer.fields())
     feature.setGeometry(geometry)
-    feature.setAttributes([
+    attributes = [
         query.flow, query.period, result.outlet_x, result.outlet_y,
         area / 1e6, perimeter / 1000, metrics.compactness, metrics.circularity,
         int(query.cell.row) + 1, int(query.cell.col) + 1, int(result.cell_count),
         result.cell_width, result.cell_height,
-    ])
+    ]
+    if rational:
+        attributes.extend(['Metodo racional', 'pendiente' if query.flow is None else 'calculado'])
+    feature.setAttributes(attributes)
     added, _ = provider.addFeatures([feature])
     if not added:
         raise ValueError("No se ha podido añadir la geometría a la capa de la cuenca.")
@@ -144,10 +153,16 @@ def write_layer(layer, destination):
     return saved
 
 
+def suggested_filename(query):
+    origin = 'Racional' if getattr(query, 'source_kind', 'caumax_raster') == 'rational' else 'CAUMAX'
+    period = '' if query.period is None else '_T%s' % format(query.period, 'g')
+    return 'cuenca_' + origin + period + '.shp'
+
+
 def save_result(parent, result, query):
     """Ask for a destination, save the basin, and add it to the current project."""
     directory = QStandardPaths.writableLocation(QStandardPaths.DocumentsLocation)
-    suggested = os.path.join(directory, "cuenca_CAUMAX_T%s.shp" % query.period)
+    suggested = os.path.join(directory, suggested_filename(query))
     destination, selected_filter = QFileDialog.getSaveFileName(
         parent, "Guardar cuenca CAUMAX", suggested,
         "Shapefile (*.shp);;GeoPackage (*.gpkg)",

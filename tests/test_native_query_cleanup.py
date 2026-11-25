@@ -5,9 +5,11 @@ import unittest
 from unittest.mock import Mock, patch
 
 from osgeo import gdal
+from qgis.PyQt import sip
 from qgis.PyQt.QtCore import QObject, Qt
 from qgis.PyQt.QtWidgets import QDialog
-from qgis.core import QgsProject, QgsVectorLayer
+from qgis.core import QgsGeometry, QgsProject, QgsVectorLayer, QgsWkbTypes
+from qgis.gui import QgsRubberBand
 
 import test_drainage_dialog as fixture
 from caumax_consulta.basin_dialog import AnalysisTask
@@ -107,6 +109,44 @@ class NativeQueryCleanupTests(unittest.TestCase):
         late.finished(True)
         self.assertEqual(set(QgsProject.instance().mapLayers()),published)
         self.assertIs(self.plugin._dialogs[self.native],current)
+
+    def test_rational_identity_distinguishes_origin_and_native_basin_fingerprint(self):
+        original=self.helper.query
+        rational=replace(original,source_kind='rational',rational_context={'fingerprint':'basin-a'})
+        changed=replace(rational,rational_context={'fingerprint':'basin-b'})
+        self.assertNotEqual(self.plugin._key(original),self.plugin._key(rational))
+        self.assertNotEqual(self.plugin._key(rational),self.plugin._key(changed))
+        self.assertEqual(self.plugin._key(rational),self.plugin._key(replace(rational)))
+        self.assertNotEqual(self.plugin._key(rational),self.plugin._key(replace(rational,flow=None,period=None)))
+
+    def test_rational_open_keeps_the_native_boundary_and_calculator_and_forgets_destroyed_child(self):
+        class RationalMethodDialog(QDialog):
+            pass
+        RationalMethodDialog.__module__='_cleanup_native.rationalmethoddialog'
+        native=RationalMethodDialog()
+        self.addCleanup(native.deleteLater)
+        self.addCleanup(native.close)
+        geometry=QgsGeometry.fromWkt('POLYGON ((0 0,25 0,25 25,0 25,0 0))')
+        native.basinCalc=SimpleNamespace(basinGeometry=[geometry],area=625)
+        native.rubberBand=QgsRubberBand(self.helper.canvas,QgsWkbTypes.PolygonGeometry)
+        native.rubberBand.setToGeometry(geometry,None)
+        rubber=native.rubberBand;calculator=native.basinCalc
+        native_wkb=bytes(rubber.asGeometry().asWkb())
+        self.addCleanup(lambda:None if sip.isdeleted(rubber) else sip.delete(rubber))
+        query=replace(self.helper.query,source_kind='rational',rational_context={'fingerprint':'native'},flow=None,period=None)
+        child=QDialog(native)
+        child.query=query
+        child.dispose=Mock()
+        with patch('caumax_consulta.native_plugin.BasinDialog',return_value=child) as factory:
+            self.plugin._open_basin(native,query)
+        factory.assert_called_once_with(query,self.helper.iface,native)
+        self.assertIs(native.basinCalc,calculator)
+        self.assertIs(native.rubberBand,rubber)
+        self.assertFalse(sip.isdeleted(rubber))
+        self.assertEqual(bytes(rubber.asGeometry().asWkb()),native_wkb)
+        self.assertIs(self.plugin._dialogs[native],child)
+        sip.delete(child)
+        self.assertNotIn(native,self.plugin._dialogs)
 
 
 if __name__=='__main__':

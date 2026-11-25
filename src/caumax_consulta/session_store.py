@@ -1266,12 +1266,37 @@ def _decode_single(document):
     analysis = Analysis(basin, values, notes, diagnostics, main_raw, grid_raw, selected_x, selected_y)
 
     query_fields = {field.name for field in fields(NativeQuery)} - {'crs'} | {'crs_wkt'}
-    _keys(qdata, query_fields, 'consulta nativa')
+    origin_fields = {'source_kind', 'rational_context'}
+    _keys(qdata, query_fields - origin_fields, 'consulta nativa', origin_fields)
     qdata = dict(qdata)
-    qdata['flow'] = _float(qdata['flow'], 'caudal')
-    if qdata['flow'] < 0:
+    qdata.setdefault('source_kind', 'caumax_raster')
+    qdata.setdefault('rational_context', None)
+    if qdata['source_kind'] not in ('caumax_raster', 'rational'):
+        _fail('origen de la consulta', 'origen desconocido')
+    rational = qdata['source_kind'] == 'rational'
+    if rational:
+        from .rational_basin import validate_rational_context
+        qdata['rational_context'] = validate_rational_context(qdata['rational_context'])
+    elif qdata['rational_context'] is not None:
+        _fail('origen de la consulta', 'contexto racional en una consulta de capas de caudales')
+    qdata['flow'] = _float(qdata['flow'], 'caudal', nullable=rational)
+    if qdata['flow'] is not None and qdata['flow'] < 0:
         _fail('caudal', 'valor negativo')
-    qdata['period'] = _int(qdata['period'], 'periodo', 1)
+    if rational:
+        qdata['period'] = _float(qdata['period'], 'periodo racional', nullable=True)
+        if qdata['period'] is not None and not 2 <= qdata['period'] <= 500:
+            _fail('periodo racional', 'fuera del intervalo 2–500 años')
+        if qdata['flow'] is not None and qdata['period'] is None:
+            _fail('caudal racional', 'falta el periodo de retorno del resultado')
+        recorded = qdata['rational_context']['flow_result']
+        if recorded is None:
+            if qdata['flow'] is not None:
+                _fail('caudal racional', 'el contexto registra un caudal pendiente')
+        else:
+            _close(qdata['flow'], recorded['flow'], 'caudal racional conservado')
+            _close(qdata['period'], recorded['period'], 'periodo racional conservado')
+    else:
+        qdata['period'] = _int(qdata['period'], 'periodo', 1)
     for key in ('x', 'y'):
         qdata[key] = _float(qdata[key], 'consulta ' + key)
     query_crs = _crs(qdata.pop('crs_wkt'), 'CRS de consulta')
@@ -1298,6 +1323,16 @@ def _decode_single(document):
             _fail('celda consultada', 'el punto nativo queda fuera de su celda')
         qdata['cell'] = Cell(**cell)
     query = NativeQuery(**qdata)
+    if rational:
+        native_context = query.rational_context
+        native_crs = _crs(native_context['crs_wkt'], 'CRS del cálculo racional', metre_projection=True)
+        if query.crs != native_crs:
+            _fail('consulta racional', 'el CRS no coincide con el cálculo nativo')
+        for key in ('x', 'y'):
+            _point_close(getattr(query, key), native_context['outlet'][key],
+                         'punto racional original ' + key)
+        if query.flow_layer_path:
+            _fail('consulta racional', 'el caudal no procede de una capa de caudales')
 
     _keys(state, _STATE_REQUIRED, 'estado de suavizado', _STATE_OPTIONAL)
     state = dict(state)
@@ -1607,6 +1642,8 @@ def _hypsometric_curve(value, basin, values):
 
 
 def _flow_quantiles(value, query):
+    if getattr(query, 'source_kind', 'caumax_raster') == 'rational':
+        _fail('cuantiles CAUMAX', 'las capas de caudales no son resultados del método racional')
     required = {'version', 'periods', 'flows', 'source_paths', 'point',
                 'input_period', 'input_flow', 'extrapolate', 'method'}
     _keys(value, required, 'cuantiles CAUMAX')
@@ -1740,8 +1777,16 @@ def _decode(document):
             _fail('metadatos de la variante ' + key, 'clave de resolución diferente')
         if restored.query.period != top.query.period:
             _fail('consulta de la variante ' + key, 'el periodo no coincide con la consulta del proyecto')
+        if (restored.query.source_kind != top.query.source_kind
+                or restored.query.rational_context != top.query.rational_context):
+            _fail('consulta de la variante ' + key, 'el origen no coincide con la consulta del proyecto')
         for field in ('flow', 'x', 'y'):
-            _close(getattr(restored.query, field), getattr(top.query, field), 'consulta ' + field + ' de ' + key)
+            actual, expected = getattr(restored.query, field), getattr(top.query, field)
+            if actual is None or expected is None:
+                if actual is not None or expected is not None:
+                    _fail('consulta ' + field + ' de ' + key, 'el resultado pendiente no coincide')
+            else:
+                _close(actual, expected, 'consulta ' + field + ' de ' + key)
         if restored.query.crs != top.query.crs:
             reference, expected = osr.SpatialReference(), osr.SpatialReference()
             reference.ImportFromWkt(restored.query.crs.toWkt())
@@ -1750,8 +1795,14 @@ def _decode(document):
                 _fail('consulta de la variante ' + key, 'CRS diferente de la consulta del proyecto')
         variants[key] = dict(analysis=restored.analysis, query=restored.query,
                              smoothing_state=restored.smoothing_state)
-    if '500' in variants:
-        reference_analysis = variants['500']['analysis']
+    rational = top.query.source_kind == 'rational'
+    if rational:
+        from .resolution_controller import base_variant_key
+        reference_key = base_variant_key(variants, active)
+    else:
+        reference_key = '500' if '500' in variants else None
+    if reference_key is not None:
+        reference_analysis = variants[reference_key]['analysis']
         reference_area = (reference_analysis.diagnostics.get('analysis_surface') or {}).get(
             'original_area_m2', reference_analysis.area_m2)
         reference_snap = reference_analysis.diagnostics.get('outlet_snap') or {}
@@ -1762,6 +1813,8 @@ def _decode(document):
             # checks above. Explicitly moving the 500m closure changes its basin,
             # not the original statistical reference used by the other variants.
             reference_area = reference_snap['reference_area_m2']
+        if rational:
+            reference_area = top.query.rational_context['area_m2']
         for key, variant in variants.items():
             snap = variant['analysis'].diagnostics.get('outlet_snap')
             if snap is not None:

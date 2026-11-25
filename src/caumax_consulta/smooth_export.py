@@ -20,7 +20,7 @@ from qgis.core import (
 from qgis.gui import QgsMapCanvas, QgsMapToolPan
 
 from .metrics import shape_metrics
-from .watershed_export import make_layer, write_layer, _check_new_destination
+from .watershed_export import make_layer, write_layer, _check_new_destination, suggested_filename
 
 
 BUTTON_STYLE = '''
@@ -138,7 +138,8 @@ def export_layer(analysis, query, geometry, kind, iterations=0):
     if _topology(geometry) != _topology(original):
         raise ValueError('La geometría mostrada tiene otra estructura de partes o huecos.')
     layer = make_layer(analysis, query)
-    layer.setName('Cuenca CAUMAX · ' + kind)
+    origin = 'Método racional' if getattr(query, 'source_kind', 'caumax_raster') == 'rational' else 'CAUMAX'
+    layer.setName('Cuenca ' + origin + ' · ' + kind)
     provider = layer.dataProvider()
     extras = [QgsField(name, QVariant.Double, '', 32, 10) for _, name in _EXTRA_METRICS]
     extras.extend([
@@ -237,7 +238,7 @@ def choose_export_destination(parent, analysis, query, geometries, degree):
                             'Selecciona una divisoria mostrada en el mapa.')
         return []
     directory = QStandardPaths.writableLocation(QStandardPaths.DocumentsLocation)
-    suggested = str(Path(directory) / f'cuenca_CAUMAX_T{query.period}.shp')
+    suggested = str(Path(directory) / suggested_filename(query))
     destination, selected = QFileDialog.getSaveFileName(
         parent, 'Guardar divisoria', suggested,
         'Shapefile (*.shp);;GeoPackage (*.gpkg)', options=QFileDialog.DontConfirmOverwrite,
@@ -463,7 +464,7 @@ class SmoothExportDialog(QDialog):
         if not self._preview_ready:
             return
         directory = QStandardPaths.writableLocation(QStandardPaths.DocumentsLocation)
-        suggested = str(Path(directory) / f'cuenca_CAUMAX_T{self.query.period}.shp')
+        suggested = str(Path(directory) / suggested_filename(self.query))
         destination, selected = QFileDialog.getSaveFileName(
             self, 'Guardar divisoria', suggested,
             'Shapefile (*.shp);;GeoPackage (*.gpkg)', options=QFileDialog.DontConfirmOverwrite,

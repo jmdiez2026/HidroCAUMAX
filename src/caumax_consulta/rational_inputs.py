@@ -11,7 +11,7 @@ import types
 import weakref
 
 from osgeo import gdal
-from qgis.PyQt.QtCore import QObject, QTimer
+from qgis.PyQt.QtCore import QObject, QTimer, pyqtSignal
 from qgis.PyQt.QtWidgets import QApplication, QDialog
 
 
@@ -134,10 +134,15 @@ class _DialogBinding:
     replacement: object
     connections: list = field(default_factory=list)
     calculators: list = field(default_factory=list)
+    flow_previous: object = _MISSING
+    flow_replacement: object = None
 
 
 class RationalInputsBridge(QObject):
     """Watch native rational dialogs without changing any module-level binding."""
+    calculation_started = pyqtSignal(object, str)
+    calculation_finished = pyqtSignal(object, str, object)
+
     def __init__(self, iface):
         super().__init__(iface.mainWindow())
         self.iface = iface
@@ -179,6 +184,66 @@ class RationalInputsBridge(QObject):
             return calculator
         return create
 
+    def _observe(self, binding, stage, original):
+        """Observe completed native writes, including an unchanged accepted Q.
+
+        Qt's textChanged signal omits identical writes. Recording the native
+        setText call distinguishes a newly accepted result from an old result
+        left visible after validation or confirmation was cancelled. Every
+        call still reaches the original widget method without altering its
+        arguments, return value, signals or the native calculation.
+        """
+        @functools.wraps(original)
+        def observed(owner, *args, **kwargs):
+            if not self._running or self._bindings.get(id(owner)) is not binding:
+                return original(*args, **kwargs)
+            event = dict(completed=False, ready_writes=[], flow_writes=[], period_writes=[])
+            restorations = []
+
+            def record(attribute, method_name, key):
+                widget = getattr(owner, attribute, None)
+                method = getattr(widget, method_name, None)
+                if not callable(method):
+                    return
+                previous = vars(widget).get(method_name, _MISSING)
+
+                def recording(*call_args, **call_kwargs):
+                    result = method(*call_args, **call_kwargs)
+                    if call_args:
+                        event[key].append(call_args[0])
+                    return result
+
+                try:
+                    setattr(widget, method_name, recording)
+                    restorations.append((widget, method_name, previous, recording))
+                except (AttributeError, RuntimeError, TypeError):
+                    return
+
+            self.calculation_started.emit(owner, stage)
+            if stage == 'parameters':
+                record('btnCalculate', 'setEnabled', 'ready_writes')
+            else:
+                record('txtResultFlow', 'setText', 'flow_writes')
+                record('txtResultReturnPeriod', 'setText', 'period_writes')
+            try:
+                result = original(*args, **kwargs)
+                event['completed'] = True
+                return result
+            finally:
+                for widget, name, previous, replacement in reversed(restorations):
+                    try:
+                        if vars(widget).get(name) is replacement:
+                            if previous is _MISSING:
+                                delattr(widget, name)
+                            else:
+                                setattr(widget, name, previous)
+                    except (AttributeError, RuntimeError, TypeError):
+                        pass
+                if self._running and self._bindings.get(id(owner)) is binding:
+                    self.calculation_finished.emit(owner, stage, event)
+
+        return types.MethodType(observed, binding.dialog)
+
     def scan(self):
         if not self._running:
             return
@@ -196,11 +261,16 @@ class RationalInputsBridge(QObject):
                 previous = dialog.calculateParameters
                 binding = _DialogBinding(dialog, _MISSING, None)
                 try:
-                    replacement = _clone_calculation(previous, lambda cls: self._factory(cls, binding))
+                    adapted = _clone_calculation(previous, lambda cls: self._factory(cls, binding))
                 except ValueError:
                     continue
+                replacement = self._observe(binding, 'parameters', adapted)
                 binding.replacement = replacement
                 dialog.calculateParameters = replacement
+                original_flow = getattr(dialog, 'calculate', None)
+                if callable(original_flow) and 'calculate' not in vars(dialog):
+                    binding.flow_replacement = self._observe(binding, 'flow', original_flow)
+                    dialog.calculate = binding.flow_replacement
                 key = id(dialog)
                 closed = lambda *args, current=key: self._detach(current)
                 for signal in (dialog.finished, dialog.destroyed):
@@ -225,6 +295,12 @@ class RationalInputsBridge(QObject):
                     del binding.dialog.calculateParameters
                 else:
                     binding.dialog.calculateParameters = binding.previous
+            if (binding.flow_replacement is not None
+                    and vars(binding.dialog).get('calculate') is binding.flow_replacement):
+                if binding.flow_previous is _MISSING:
+                    del binding.dialog.calculate
+                else:
+                    binding.dialog.calculate = binding.flow_previous
         except RuntimeError:
             pass
         for owned in binding.calculators:

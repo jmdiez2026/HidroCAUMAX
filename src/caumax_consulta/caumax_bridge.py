@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import sys
 import types
+from typing import Optional, Union
 
 from qgis.PyQt.QtCore import QObject, QEvent, QSize, QTimer, QUrl
 from qgis.PyQt.QtGui import QDesktopServices, QFont, QFontInfo, QIcon, QPixmap
@@ -101,8 +102,8 @@ class _LogoBasinButton(QPushButton):
 
 @dataclass(frozen=True)
 class NativeQuery:
-    flow: float
-    period: int
+    flow: Optional[float]
+    period: Optional[Union[int, float]]
     x: float
     y: float
     crs: QgsCoordinateReferenceSystem
@@ -112,6 +113,8 @@ class NativeQuery:
     layer_id: str = ''
     flow_layer_path: str = ''
     cell: object = None
+    source_kind: str = 'caumax_raster'
+    rational_context: object = None
 
 
 def _number(text):

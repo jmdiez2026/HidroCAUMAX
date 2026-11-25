@@ -190,9 +190,10 @@ class CourseLayers:
             self._group.setCustomProperty(_OWNER_PROPERTY, self.owner_key)
         cell = getattr(query, 'cell', None)
         cell_text = (f'{cell.row + 1},{cell.col + 1}' if cell is not None else '—')
+        cell_kind = 'MDT' if getattr(query, 'source_kind', 'caumax_raster') == 'rational' else 'Q'
         self._group.setName(
             f'HidroCAUMAX · Curso principal [X={analysis.outlet_x:g}; Y={analysis.outlet_y:g}; '
-            f'celda Q {cell_text}; {analysis.cell_width:g}×{analysis.cell_height:g} m]')
+            f'celda {cell_kind} {cell_text}; {analysis.cell_width:g}×{analysis.cell_height:g} m]')
         for kind in _KINDS:
             layer = self.layers[kind]
             if kind in new_layers:

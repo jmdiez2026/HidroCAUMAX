@@ -1,3 +1,33 @@
+# HidroCAUMAX 1.2.12
+
+## Cargar capas HidroCAUMAX
+
+Nuevo comando en **Complementos → HidroCAUMAX → Cargar capas HidroCAUMAX**. Crea un grupo de referencia con los servicios oficiales de ocupación del suelo (CLC/SIOSE), tramos de ríos Pfafstetter, las 17 variables de Caracterización AgroClimática, los calados fluviales del SNCZI para T10, T100 y T500, y las tres capas del Mapa Hidrogeológico del IGME a escala 1:1.000.000.
+
+Los nombres de capa, estilos y CRS se han contrastado con GetCapabilities y peticiones GetMap reales. Se mantiene el estilo azul oficial de calados y la representación multiescala del endpoint de ocupación del suelo facilitado. Las capas son WMS; se mantiene la extensión y CRS del proyecto. Las cargas repetidas evitan duplicados y los errores de una fuente no impiden cargar las restantes. Los grupos de referencia no se borran al limpiar un delineado.
+
+## Red estaciones AEMET
+
+El grupo de referencia incorpora una capa de puntos **Red estaciones AEMET**, almacenada como SHP real en el perfil de QGIS y disponible sin conexión. Incluye **3.249 indicativos únicos** con precipitación diaria, horaria o mensual documentada, fusionando tipos de estación y conservando los ceros iniciales.
+
+Los círculos diferencian **859 estaciones identificadas en los inventarios OpenData consultados** y **2.390 que no figuran en ellos**. Se cruzan por indicativo los 104 selectores públicos oficiales de climatología y observación convencional consultados el 25/11/2026. La ausencia no se presenta como prueba de inexistencia de cualquier dato abierto, ni se utiliza la condición automática como sustituto de esa comprobación.
+
+Se documenta que la base geométrica es una copia pública de Esri España publicada en 2017, atribuida a AEMET y coherente con el catálogo MITECO actualizado en 2016. No es una relación completa de la red activa de 2026: 133 indicativos OpenData consultados no tienen geometría en esa base. Se incluyen procedencia, fechas, atribución y alcance de la clasificación. Los datos persistentes quedan fuera de la carpeta del complemento y no se sobrescriben al actualizarlo.
+
+## Cuenca hidrográfica en Método racional
+
+El diálogo nativo **Método Racional → Método Racional** incorpora el botón **Cuenca hidrográfica**, con el mismo logotipo, estilo y proporciones del acceso desde las capas de caudales. Se sitúa inmediatamente a la izquierda de **Generar capas resolución mejorada**.
+
+Abre el mismo componente de cuenca sobre la delineación nativa válida, de área igual o inferior a 50 km². El cálculo inicial debe reproducir su máscara, geometría, punto de cierre y CRS; se verifican las fuentes MDT/D8 utilizadas por el calculador. No se une el fondo de la polygonización nativa ni se desplaza el cierre hacia otra red.
+
+La cuenca puede consultarse después de calcular las variables intermedias, aunque todavía falte Q. En ese caso se muestra **pendiente de cálculo**. Los resultados de caudal solo se incorporan tras un cálculo racional aceptado y se invalidan al cambiar sus entradas. No se muestrean las seis capas ráster de caudales para completar ese resultado ni para crear una curva racional inexistente.
+
+Se conservan morfología, hipsometría, MDT mejorados, ajuste del cierre, suavizado, exportación, P₀, precipitación, consultas Pd(T)/T(Pd), PDF, proyectos e interpretación IA. El selector permite **volver a delinear con MDT de 25 × 25 m y 5 × 5 m**, con la misma descarga de terreno, generación D8 y correspondencia de cuenca que el diálogo de consulta de capas, según cobertura oficial. Los proyectos guardan la procedencia racional y admiten Q pendiente; el cargador mantiene la compatibilidad con los proyectos anteriores. El caudal nativo no se recalcula al cambiar el MDT o la divisoria.
+
+Los controles originales de CAUMAX siguen vigentes. En CAUMAX 3.0, el cálculo de variables intermedias rechaza áreas exactamente iguales a 50 km² aunque el cálculo final solo rechaza áreas mayores; esta integración no modifica ese comportamiento del complemento original.
+
+---
+
 # HidroCAUMAX 1.2.11
 
 ## Gráficos y pie de la ventana más compactos

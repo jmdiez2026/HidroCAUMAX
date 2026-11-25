@@ -11,6 +11,7 @@ from .rational_layers_bridge import RationalLayersBridge
 from .visible_dem import VisibleDemController
 from .update_ui import UpdateNotifier
 from .delineation_cleanup import clear_delineations
+from .map_services import ReferenceLayerLoader
 
 
 class NativeCaumaxPlugin(QObject):
@@ -25,9 +26,12 @@ class NativeCaumaxPlugin(QObject):
         self._bridge = CaumaxBridge(iface, self._open_basin, self._new_query_started)
         self._rational = RationalExportBridge(iface)
         self._rational_inputs = RationalInputsBridge(iface)
-        self._rational_layers = RationalLayersBridge(iface)
+        self._rational_layers = RationalLayersBridge(iface, self._open_basin, self._new_query_started)
+        self._rational_inputs.calculation_started.connect(self._rational_layers.calculation_started)
+        self._rational_inputs.calculation_finished.connect(self._rational_layers.calculation_finished)
         self._visible_dem = VisibleDemController(iface, self)
         self._updates = UpdateNotifier(iface, self)
+        self._map_services = ReferenceLayerLoader(iface, self)
 
     def initGui(self):
         self.action = QAction('Activar herramientas HidroCAUMAX', self.iface.mainWindow())
@@ -38,6 +42,10 @@ class NativeCaumaxPlugin(QObject):
         self.open_action = QAction('Abrir proyecto de cuenca…', self.iface.mainWindow())
         self.open_action.triggered.connect(self._open_saved_project)
         self.iface.addPluginToMenu(self.MENU, self.open_action)
+        self.reference_action = QAction('Cargar capas HidroCAUMAX', self.iface.mainWindow())
+        self.reference_action.triggered.connect(self._map_services.load)
+        self._map_services.busy_changed.connect(self.reference_action.setDisabled)
+        self.iface.addPluginToMenu(self.MENU, self.reference_action)
         self.update_action = QAction('Buscar actualizaciones…', self.iface.mainWindow())
         self.update_action.triggered.connect(self._check_updates)
         self.iface.addPluginToMenu(self.MENU, self.update_action)
@@ -91,7 +99,9 @@ class NativeCaumaxPlugin(QObject):
 
     @staticmethod
     def _key(query):
-        return (query.x, query.y, query.period, query.flow,
+        context = getattr(query, 'rational_context', None) or {}
+        return (getattr(query, 'source_kind', 'caumax_raster'), context.get('fingerprint'),
+                query.x, query.y, query.period, query.flow,
                 str(query.directions_path), str(query.dem_path), query.crs.toWkt())
 
     def _new_query_started(self, native_dialog):
@@ -114,11 +124,15 @@ class NativeCaumaxPlugin(QObject):
                 self._dialogs.pop(native_dialog, None)
         # Also cover layers from closed dialogs or a restored QGIS project.
         # Dispose live computations before deleting their published results.
+        # Cleanup owns only HidroCAUMAX results and MaxFlowDialog's tracked
+        # marker. A rational dialog's authoritative rubberBand/basinCalc is
+        # deliberately neither registered nor removed here.
         clear_delineations(close_dialogs=True)
         dialog = BasinDialog(query, self.iface, native_dialog)
         dialog._native_query = query
         self._dialogs[native_dialog] = dialog
         dialog.finished.connect(lambda result, parent=native_dialog, current=dialog: self._forget(parent, current))
+        dialog.destroyed.connect(lambda *args, parent=native_dialog, current=dialog: self._forget(parent, current))
         dialog.show()
         dialog.raise_()
         dialog.activateWindow()
@@ -140,6 +154,7 @@ class NativeCaumaxPlugin(QObject):
 
     def unload(self):
         self._enabled = False
+        self._map_services.dispose()
         self._updates.dispose()
         self._close_dialogs()
         self._bridge.stop()
@@ -168,3 +183,11 @@ class NativeCaumaxPlugin(QObject):
                 pass
             self.iface.removePluginMenu(self.MENU, self.update_action)
             self.update_action.deleteLater()
+        if hasattr(self, 'reference_action'):
+            try:
+                self.reference_action.triggered.disconnect(self._map_services.load)
+                self._map_services.busy_changed.disconnect(self.reference_action.setDisabled)
+            except (RuntimeError, TypeError):
+                pass
+            self.iface.removePluginMenu(self.MENU, self.reference_action)
+            self.reference_action.deleteLater()

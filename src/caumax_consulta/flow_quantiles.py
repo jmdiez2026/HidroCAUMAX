@@ -229,7 +229,28 @@ def describe_estimates(snapshot):
     return dict(forward_text=forward_text,inverse_text=inverse_text,method_note=note)
 
 
+def is_rational_query(query):
+    return getattr(query, 'source_kind', 'caumax_raster') == 'rational'
+
+
+def rational_flow_text(query):
+    """Describe only the frozen native calculation; a missing Q stays pending."""
+    flow, period = getattr(query, 'flow', None), getattr(query, 'period', None)
+    number = lambda value: format(float(value), '.10g').replace('.', ',')
+    if flow is None:
+        result = 'Caudal del método racional: pendiente de cálculo.'
+    else:
+        result = 'Caudal del método racional: ' + number(flow) + ' m³/s'
+        if period is not None:
+            result += ' · T = ' + number(period) + ' años'
+        result += '.'
+    return (result + '\nResultado de la cuenca nativa: no se recalcula al cambiar '
+            'el MDT, el cierre o el suavizado.')
+
+
 def _source_paths(query, paths=None):
+    if is_rational_query(query):
+        return [''] * len(PERIODS)
     if paths is not None:
         if isinstance(paths, dict):
             return [str(paths.get(period,paths.get(str(period),paths.get('q'+str(period),
@@ -295,6 +316,8 @@ def _sample(path,x,y,crs_wkt):
 
 
 def sample_quantiles(query, paths=None):
+    if is_rational_query(query):
+        return None
     x,y = _finite(query.x),_finite(query.y)
     wkt = _query_wkt(query)
     sources = _source_paths(query,paths)
@@ -351,6 +374,11 @@ class FlowQuantileWidget(QWidget):
         super().__init__(parent)
         self._state=None;self._updating=False
         layout=QVBoxLayout(self);layout.setContentsMargins(0,0,0,0)
+        self.rational_label=QLabel(self)
+        self.rational_label.setTextFormat(Qt.PlainText)
+        self.rational_label.setWordWrap(True)
+        self.rational_label.hide()
+        layout.addWidget(self.rational_label)
         self.table=QTableWidget(6,2,self)
         self.table.setHorizontalHeader(CompactTableHeader(self.table))
         self.table.setHorizontalHeaderLabels(['Periodo de retorno T (años)','Caudal máximo instantáneo (Qci) [m3/s]'])
@@ -391,8 +419,27 @@ class FlowQuantileWidget(QWidget):
         self.flow_spin.valueChanged.connect(lambda value:self._changed('input_flow',float(value)))
         self.extrapolate_check.toggled.connect(lambda value:self._changed('extrapolate',bool(value)))
 
+    def _set_rational_mode(self, active):
+        self.rational_label.setVisible(active)
+        self.table.setVisible(not active)
+        self.plots.setVisible(not active)
+        for index in range(self.controls_layout.count()):
+            widget=self.controls_layout.itemAt(index).widget()
+            if widget is not None:widget.setVisible(not active)
+        if active:
+            self._table_timer.stop()
+            self._state=None
+            self.table.clearContents()
+            self.plots.state=None
+            self.rational_label.setText(rational_flow_text(self._query))
+
     def set_query(self,query,paths=None,snapshot=None):
         self._query=query
+        if is_rational_query(query):
+            self._set_rational_mode(True)
+            self.changed.emit()
+            return
+        self._set_rational_mode(False)
         self.restore(snapshot if snapshot is not None else sample_quantiles(query,paths))
 
     def resizeEvent(self,event):
@@ -424,6 +471,10 @@ class FlowQuantileWidget(QWidget):
         self.table.horizontalHeader()._fit_height()
 
     def restore(self,snapshot):
+        if is_rational_query(getattr(self,'_query',None)):
+            self._set_rational_mode(True)
+            self.changed.emit()
+            return
         state=_normalise(snapshot)
         self._updating=True
         try:

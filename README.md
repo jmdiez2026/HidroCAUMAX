@@ -1,6 +1,6 @@
 # HidroCAUMAX
 
-Complemento para **QGIS 3** que amplía **CAUMAX 3.0** con delimitación y análisis de cuencas, selección de MDT, morfología, curva hipsométrica, umbral de escorrentía P₀, precipitación diaria máxima Pd y consultas de cuantiles. Versión actual: **1.2.11**. Repositorio: **jmdiez2026/HidroCAUMAX**.
+Complemento para **QGIS 3** que amplía **CAUMAX 3.0** con delimitación y análisis de cuencas, selección de MDT, morfología, curva hipsométrica, umbral de escorrentía P₀, precipitación diaria máxima Pd y consultas de cuantiles. Versión actual: **1.2.12**. Repositorio: **jmdiez2026/HidroCAUMAX**.
 
 El diálogo integra los estadísticos de cuenca y recalcula los resultados al cambiar la resolución del MDT o el grado de suavizado. Conserva el punto original consultado y los caudales oficiales de CAUMAX: cambiar el MDT modifica la delimitación y los parámetros de la cuenca, sin inventar nuevos caudales de avenida.
 
@@ -13,16 +13,63 @@ El diálogo integra los estadísticos de cuenca y recalcula los resultados al ca
 - Conexión a **Pollinations Classic** para el botón **Análisis IA**, gratuito y sin credenciales. No se requiere una cuenta, una clave ni una biblioteca adicional. La disponibilidad y los límites temporales dependen de ese servicio externo.
 - En **Windows de 64 bits**, TauDEM 5.5.0, MPI y sus bibliotecas y datos de GDAL/PROJ están incluidos en el ZIP y se preparan automáticamente. **CAUMAX es el único complemento previo**; el usuario no instala otro complemento ni un motor hidrológico adicional. Se reutilizan las bibliotecas de ejecución de C++ de QGIS/Windows. El paquete de ejecutables integrado es para Windows: en Linux/macOS se requieren los motores GRASS o TauDEM/MPI ya disponibles en esa instalación; no se presenta el ZIP de Windows como un runtime multiplataforma.
 
-La versión 1.2.11 se distribuye en el canal **estable** (`experimental=False`). El código contiene controles de cobertura, NoData y errores; sus resultados deben revisarse con las fuentes y la resolución de cada proyecto.
+La versión 1.2.12 se distribuye en el canal **estable** (`experimental=False`). El código contiene controles de cobertura, NoData y errores; sus resultados deben revisarse con las fuentes y la resolución de cada proyecto.
 
 ## Instalación
 
-1. Utiliza el archivo instalable **HidroCAUMAX_v1_2_11.zip** de esta entrega. El ZIP de código fuente que ofrece GitHub no es el instalable de QGIS.
+1. Utiliza el archivo instalable **HidroCAUMAX_v1_2_12.zip** de esta entrega. El ZIP de código fuente que ofrece GitHub no es el instalable de QGIS.
 2. En QGIS abre **Complementos → Administrar e instalar complementos → Instalar a partir de ZIP** y selecciona el instalable, sin descomprimirlo.
 3. Si ya utilizas HidroCAUMAX, acepta sustituir el complemento anterior y reinicia QGIS para cargar juntos todos los módulos de la nueva versión. La carpeta interna permanece como **caumax_consulta** para conservar la identidad de instalación.
 4. Activa CAUMAX 3.0, carga sus capas y realiza una consulta válida. Pulsa **Cuenca hidrográfica** para abrir las herramientas ampliadas.
 
 La [guía detallada del complemento](src/caumax_consulta/README.md) describe las funciones, los cálculos y las limitaciones de cada sección.
+
+## Capas de referencia
+
+En **Complementos → HidroCAUMAX → Cargar capas HidroCAUMAX**, el complemento añade **HidroCAUMAX · Capas de referencia** al proyecto. Contiene seis subgrupos:
+
+| Subgrupo | Contenido |
+|---|---|
+| Corine Land Cover · Ocupación del suelo | Servicio multiescala oficial del IGN/SCNE: CLC2018, SIOSE2014 y SIOSE AR2017, según la escala de visualización. |
+| Clasificación Pfafstetter | Tramos de ríos clasificados según Pfafstetter modificado, MITECO. |
+| Caracterización AgroClimática | Las 17 variables del servicio MAPA, incluida la clasificación de Papadakis. |
+| Peligrosidad de inundación · SNCZI | Calados fluviales en tonos azules para T = 10, 100 y 500 años. |
+| IGME · Mapa Hidrogeológico | Mapa a escala 1:1.000.000 con hidrogeología, cuencas y unidades hidrogeológicas. |
+| Red estaciones AEMET | SHP de 3.249 estaciones con precipitación documentada, con círculos diferenciados por su presencia en los catálogos OpenData consultados. |
+
+Las 25 capas de los cinco primeros subgrupos son conexiones **WMS**, con imagen PNG transparente: se solicitan al servidor al visualizar el mapa y requieren conexión. El comando conserva el CRS y la extensión actual del proyecto. Repetirlo incorpora únicamente las capas que falten. Las capas de referencia permanecen al borrar los delineados de HidroCAUMAX.
+
+Los tres escenarios SNCZI se cargan por separado, con **T100 como escenario inicial**. Las variables agroclimáticas se agrupan para elegirlas; su grupo empieza desactivado y conserva Papadakis como selección inicial. El grupo IGME empieza desactivado y conserva sus tres componentes preparados para mostrarse juntos. Si un servicio no responde, se comunican las capas fallidas y las demás pueden seguir cargándose.
+
+El endpoint de ocupación del suelo indicado no muestra CORINE a todas las escalas: utiliza CLC2018 a escala menos detallada que 1:50.000, SIOSE2014 entre 1:50.000 y 1:10.000 y SIOSE AR2017 al acercar más. Esa procedencia se registra en la descripción de la capa.
+
+### Red estaciones AEMET
+
+La capa contiene **3.249 estaciones con precipitación diaria, horaria o mensual documentada**, deduplicadas por indicativo. Se conserva el indicativo como texto, incluidos sus ceros iniciales. Se genera un **Shapefile real de puntos**, con sus archivos auxiliares, en una carpeta persistente del perfil QGIS; puede consultarse sin conexión una vez instalado el complemento. La ruta figura en las propiedades de la capa. Para trasladar un proyecto a otro equipo, copia también todos los archivos del SHP o exporta la capa a un GeoPackage del proyecto.
+
+Los círculos distinguen **859 estaciones identificadas en OpenData** y **2.390 que no figuran en los inventarios consultados**. El cruce usa el indicativo y la unión de los selectores oficiales de climatología y observación convencional de AEMET, comprobados el **25/11/2026**. La ausencia en estos selectores no acredita que una estación carezca de cualquier dato abierto; tampoco se deduce disponibilidad a partir de su condición automática o manual. La clasificación y su alcance quedan registrados en los atributos y la descripción.
+
+La geometría procede de una **copia pública publicada por Esri España en 2017 y atribuida a AEMET**, coherente con los tipos y campos del catálogo MITECO actualizado el **16/04/2016**. No se presenta como inventario completo de estaciones activas en 2026: hay 133 indicativos de los selectores OpenData consultados que no tienen geometría en esta base histórica. Se conservan la atribución a MITECO, las fuentes y las fechas.
+
+Fuentes y procedencia verificadas:
+
+- [IDEE: servicio de Ocupación del suelo](https://www.idee.es/csw-codsi-idee/srv/api/records/spaignwms_OcupacionSuelo).
+- [MITECO: red hidrográfica y Pfafstetter](https://www.miteco.gob.es/es/cartografia-y-sig/ide/descargas/agua/red-hidrografica.html).
+- [MAPA: servicios de Agricultura](https://www.mapa.gob.es/es/cartografia-y-sig/ide/directorio_datos_servicios/agricultura/wms-inspire-agricultura).
+- [MITECO: catálogo WMS de Agua, mapas de peligrosidad](https://www.miteco.gob.es/es/cartografia-y-sig/ide/directorio_datos_servicios/agua/wms-inspire-agua.html).
+- [IGME: Mapa Hidrogeológico de España a escala 1:1.000.000](https://info.igme.es/cartografiadigital/geologica/mapa.aspx?Id=19).
+- [MITECO: estaciones climatológicas AEMET y condiciones de uso](https://www.miteco.gob.es/es/cartografia-y-sig/ide/descargas/otros.html).
+- [Esri España: copia cartográfica AEMET publicada en 2017](https://www.arcgis.com/home/item.html?id=20e0ab17fcf249d1a03a4b5c7b083cb1).
+- [AEMET OpenData: centro de descargas](https://opendata.aemet.es/centrodedescargas/inicio).
+
+## Cambios incluidos en 1.2.12
+
+- **Cargar capas HidroCAUMAX:** nuevo comando en **Complementos → HidroCAUMAX** para incorporar un grupo de referencia con CORINE/ocupación del suelo, clasificación Pfafstetter, las 17 variables agroclimáticas, los calados fluviales SNCZI de T10, T100 y T500 el Mapa Hidrogeológico del IGME y la red de estaciones AEMET. Son 25 WMS oficiales y un SHP local de estaciones; no se duplican al repetir el comando.
+- **Cuenca hidrográfica en Método racional:** el botón con el logotipo GEA-UVa aparece a la izquierda de **Generar capas resolución mejorada**, en la misma fila inferior del diálogo nativo.
+- **La misma cuenca nativa:** se abre el diálogo completo de morfología, hipsometría, MDT, suavizado, P₀ y precipitación a partir de la delineación válida del método racional, hasta 50 km². Se comprueban máscara, cierre, CRS y fuentes de terreno antes de aceptar el análisis.
+- **Acceso desde las variables intermedias:** no es necesario haber calculado todavía el caudal final. El resultado Q se presenta como pendiente y solo se incorpora después de un cálculo nativo aceptado y vigente. Cambiar las entradas invalida el Q anterior.
+- **Delineación racional con MDT de 25 × 25 m y 5 × 5 m:** el selector de resolución utiliza las mismas herramientas de descarga, direcciones D8, ajuste del cierre, delineación y suavizado que el diálogo de consulta de capas de caudales máximos, según la cobertura oficial disponible.
+- **Origen conservado:** los proyectos, informes, exportaciones e interpretaciones distinguen el método racional de la consulta de capas de caudales máximos. Las capas ráster Q no se utilizan como sustituto del cálculo racional. Cambiar MDT, cierre o suavizado recalcula las propiedades de la cuenca, sin modificar el Q nativo.
 
 ## Cambios incluidos en 1.2.11
 
@@ -111,7 +158,7 @@ No se incluyen capas de proyectos, sesiones guardadas, cachés, credenciales ni 
 El empaquetado utiliza **Python 3.10 o posterior** y su biblioteca estándar; no necesita iniciar QGIS:
 
 ```text
-python scripts/build_release.py --output dist --tag v1.2.11
+python scripts/build_release.py --output dist --tag v1.2.12
 ```
 
 Genera el ZIP instalable, sus sumas SHA-256 y el índice XML de distribución. Los archivos resultantes quedan fuera del control de versiones mediante `.gitignore`.

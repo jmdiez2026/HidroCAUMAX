@@ -27,11 +27,28 @@ def _key(resolution):
     return format(number,'.12g')
 
 
-def _reference_area_m2(analysis):
-    """Keep the original 500 m reference when its outlet was chosen manually."""
+def base_variant_key(variants, active, fallback=None):
+    """Recover the actual native terrain reference, including rational custom MDTs."""
+    query = variants[active]['query']
+    if getattr(query, 'source_kind', 'caumax_raster') == 'rational':
+        context = getattr(query, 'rational_context', None) or {}
+        transform = context.get('geotransform')
+        if not isinstance(transform, (list, tuple)) or len(transform) != 6:
+            raise ValueError('Falta la resolución del MDT nativo del método racional.')
+        key = _key(min(abs(float(transform[1])), abs(float(transform[5]))))
+        if key not in variants:
+            raise ValueError('El proyecto no contiene el MDT nativo del método racional.')
+        return key
+    return '500' if '500' in variants else fallback if fallback in variants else active
+
+
+def _reference_area_m2(analysis, query=None):
+    """Keep the native area reference after an explicitly adjusted closure."""
     diagnostic=analysis.diagnostics or {}
     snap=diagnostic.get('outlet_snap') or {}
-    if (min(analysis.cell_width,analysis.cell_height)==500.0
+    if getattr(query, 'source_kind', 'caumax_raster') == 'rational':
+        area=float((getattr(query, 'rational_context', None) or {})['area_m2'])
+    elif (min(analysis.cell_width,analysis.cell_height)==500.0
             and snap.get('method')=='manual_cell_d8'
             and snap.get('selection_mode')=='user_selected_cell'
             and snap.get('explicit_user_choice') is True):
@@ -252,7 +269,7 @@ class ResolutionController(QObject):
 
     def _set_base(self,analysis,query):
         self.base_analysis,self.base_query=analysis,query
-        self.reference_area_m2=_reference_area_m2(analysis)
+        self.reference_area_m2=_reference_area_m2(analysis,query)
         self._base_key=_key(min(analysis.cell_width,analysis.cell_height))
         self.bounds=_buffered_bounds(analysis)
         self.crs_wkt=str(analysis.crs_wkt)
@@ -268,8 +285,10 @@ class ResolutionController(QObject):
         self.cache_dir=Path(directory)/'HidroCAUMAX'/'dem_variants'/hashlib.sha256(raw).hexdigest()[:20]
 
     def _base_option(self):
+        rational = getattr(self.base_query, 'source_kind', 'caumax_raster') == 'rational'
+        label = 'Original método racional' if rational else 'Original CAUMAX'
         return {'key':self._base_key,'resolution':float(self._base_key),
-                'label':f'Original CAUMAX · {self._base_key} m','provider':'CAUMAX',
+                'label':f'{label} · {self._base_key} m','provider':'CAUMAX',
                 'available':True,'status':'Cálculo original disponible','metadata_url':'','url':''}
 
     @property
@@ -632,7 +651,7 @@ class ResolutionController(QObject):
         self.variants={str(key):dict(value) for key,value in variants.items()}
         self.options=options
         self.active_key=active
-        base=self.variants.get('500') or self.variants.get(self._base_key) or self.variants[active]
+        base=self.variants[base_variant_key(self.variants, active, self._base_key)]
         self._set_base(base['analysis'],base['query'])
         self._option_objects={}
         self._on_options(deepcopy(self.options))

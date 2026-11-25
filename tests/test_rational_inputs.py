@@ -14,17 +14,18 @@ os.environ.setdefault('QT_QPA_PLATFORM','offscreen')
 import numpy as np
 from osgeo import gdal, ogr, osr
 from qgis.PyQt.QtCore import Qt
-from qgis.PyQt.QtWidgets import QDialog, QMainWindow
+from qgis.PyQt.QtWidgets import QDialog, QLineEdit, QMainWindow, QPushButton
 from qgis.core import QgsApplication, QgsGeometry, QgsPointXY
 
 ROOT=Path(__file__).resolve().parents[1]
+NATIVE_SOURCE=Path(os.environ.get('HIDROCAUMAX_CAUMAX_SOURCE',str(ROOT.parent/'inputs/caumax/caumax')))
 sys.path.insert(0,str(ROOT/'src'))
 from caumax_consulta.rational_inputs import RationalInputsBridge, _process_cell_iterative
 
 
 def native_class():
     """Compile the actual native class with isolated dependencies, not its settings."""
-    source=ROOT.parent/'inputs/caumax/caumax/basincalculator.py'
+    source=NATIVE_SOURCE/'basincalculator.py'
     tree=ast.parse(source.read_text(encoding='utf-8-sig'))
     node=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='BasinCalculator')
     namespace=dict(gdal=gdal,ogr=ogr,np=np,statistics=statistics,math=math,
@@ -33,7 +34,7 @@ def native_class():
     return namespace['BasinCalculator']
 
 
-NATIVE = native_class() if (ROOT.parent/'inputs/caumax/caumax/basincalculator.py').is_file() else None
+NATIVE = native_class() if (NATIVE_SOURCE/'basincalculator.py').is_file() else None
 
 
 def calculator(dem,dirs,resolution=25):
@@ -129,14 +130,30 @@ class BridgeTests(unittest.TestCase):
         self.Calculator=Calculator;sys.modules[module.__name__]=module
         namespace={'BasinCalculator':Calculator}
         exec('def calculateParameters(self):\n'
+             '    self.btnCalculate.setEnabled(False)\n'
              '    if self.basinCalc is None:\n'
              '        self.basinCalc=BasinCalculator()\n'
+             '    self.btnCalculate.setEnabled(True)\n'
              '    return self.basinCalc\n',namespace)
         def waitcursor(method):
             def wrapped(*args,**kwargs):return method(*args,**kwargs)
             return wrapped
         class RationalMethodDialog(QDialog):
-            def __init__(self,parent):super().__init__(parent);self.basinCalc=None
+            def __init__(self,parent):
+                super().__init__(parent);self.basinCalc=None
+                self.btnCalculate=QPushButton(self)
+                self.txtResultFlow=QLineEdit('27',self)
+                self.txtResultReturnPeriod=QLineEdit('100',self)
+                self.flow_behavior='accept'
+
+            def calculate(self):
+                if self.flow_behavior=='abort':
+                    return
+                if self.flow_behavior=='raise':
+                    raise ValueError('native failure')
+                self.txtResultReturnPeriod.setText('100')
+                self.txtResultFlow.setText('27')
+                return 'native accepted'
         RationalMethodDialog.__module__='_test.rationalmethoddialog'
         RationalMethodDialog.calculateParameters=waitcursor(namespace['calculateParameters'])
         self.dialog=RationalMethodDialog(self.window)
@@ -194,6 +211,54 @@ class BridgeTests(unittest.TestCase):
         self.bridge.start()
         self.assertFalse(self.bridge._bindings)
         self.bridge.stop();self.assertIs(self.dialog.calculateParameters,foreign)
+
+    def test_observer_records_accepted_unchanged_output_without_changing_native_signals(self):
+        events=[];starts=[];text_changes=[]
+        self.bridge.calculation_started.connect(lambda dialog,stage:starts.append((dialog,stage)))
+        self.bridge.calculation_finished.connect(lambda dialog,stage,event:events.append((dialog,stage,event)))
+        self.dialog.txtResultFlow.textChanged.connect(text_changes.append)
+        original_flow=self.dialog.calculate.__func__
+        self.bridge.start()
+        self.dialog.calculateParameters()
+        self.assertEqual(events[-1][2]['ready_writes'],[False,True])
+        self.assertEqual(self.dialog.calculate(),'native accepted')
+        self.assertEqual(text_changes,[])
+        self.assertEqual(events[-1][1],'flow')
+        self.assertTrue(events[-1][2]['completed'])
+        self.assertEqual(events[-1][2]['flow_writes'],['27'])
+        self.assertEqual(events[-1][2]['period_writes'],['100'])
+        self.assertEqual([stage for _,stage in starts],['parameters','flow'])
+        self.assertNotIn('setText',vars(self.dialog.txtResultFlow))
+        self.assertNotIn('setEnabled',vars(self.dialog.btnCalculate))
+        self.bridge.stop()
+        self.assertIs(self.dialog.calculate.__func__,original_flow)
+        self.assertNotIn('calculate',vars(self.dialog))
+
+    def test_observer_rejects_cancelled_or_failed_calculation_with_old_results_visible(self):
+        events=[]
+        self.bridge.calculation_finished.connect(lambda dialog,stage,event:events.append(event))
+        self.bridge.start()
+        self.dialog.flow_behavior='abort'
+        self.dialog.calculate()
+        self.assertTrue(events[-1]['completed'])
+        self.assertEqual(events[-1]['flow_writes'],[])
+        self.assertEqual(self.dialog.txtResultFlow.text(),'27')
+        self.dialog.flow_behavior='raise'
+        with self.assertRaisesRegex(ValueError,'native failure'):
+            self.dialog.calculate()
+        self.assertFalse(events[-1]['completed'])
+        self.assertEqual(events[-1]['flow_writes'],[])
+        self.assertNotIn('setText',vars(self.dialog.txtResultFlow))
+        self.assertNotIn('setText',vars(self.dialog.txtResultReturnPeriod))
+
+    def test_foreign_flow_method_is_not_adopted_or_replaced(self):
+        foreign=lambda:'foreign flow'
+        self.dialog.calculate=foreign
+        self.bridge.start()
+        self.dialog.calculateParameters()
+        self.assertIs(self.dialog.calculate,foreign)
+        self.bridge.stop()
+        self.assertIs(self.dialog.calculate,foreign)
 
 
 if __name__=='__main__':unittest.main()

@@ -1,6 +1,56 @@
-# HidroCAUMAX v1.2.11
+# HidroCAUMAX v1.2.12
 
-Complemento auxiliar para **CAUMAX 3.0 y QGIS 3 con Qt 5**. La versión del paquete y del diálogo es **1.2.11**. Conserva procesamiento con TauDEM, exportación de MDT, direcciones y red, curva hipsométrica, los seis cuantiles originales y **P₀ y precipitación máxima diaria de la cuenca**. Conserva el punto original de consulta y permite ajustar el cierre manualmente. Incluye comprobación de actualizaciones, interfaz compacta y **Análisis IA gratuito sin credenciales**. Esta revisión se verifica en Linux con QGIS 3.40.6 y GDAL 3.10.3; las pruebas históricas en Windows/QGIS 3.44.15 corresponden a la entrega anterior. Las pruebas reproducibles se encuentran en la carpeta `tests` del repositorio; los registros locales de sesiones no se publican.
+Complemento auxiliar para **CAUMAX 3.0 y QGIS 3 con Qt 5**. La versión del paquete y del diálogo es **1.2.12**. Conserva procesamiento con TauDEM, exportación de MDT, direcciones y red, curva hipsométrica, los seis cuantiles originales y **P₀ y precipitación máxima diaria de la cuenca**. Conserva el punto original de consulta y permite ajustar el cierre manualmente. Incluye comprobación de actualizaciones, interfaz compacta y **Análisis IA gratuito sin credenciales**. Esta revisión se verifica en Linux con QGIS 3.40.6 y GDAL 3.10.3; las pruebas históricas en Windows/QGIS 3.44.15 corresponden a la entrega anterior. Las pruebas reproducibles se encuentran en la carpeta `tests` del repositorio; los registros locales de sesiones no se publican.
+
+## Capas de referencia
+
+En **Complementos → HidroCAUMAX → Cargar capas HidroCAUMAX**, el complemento añade **HidroCAUMAX · Capas de referencia** al proyecto. Contiene seis subgrupos:
+
+| Subgrupo | Contenido |
+|---|---|
+| Corine Land Cover · Ocupación del suelo | Servicio multiescala oficial del IGN/SCNE: CLC2018, SIOSE2014 y SIOSE AR2017, según la escala de visualización. |
+| Clasificación Pfafstetter | Tramos de ríos clasificados según Pfafstetter modificado, MITECO. |
+| Caracterización AgroClimática | Las 17 variables del servicio MAPA, incluida la clasificación de Papadakis. |
+| Peligrosidad de inundación · SNCZI | Calados fluviales en tonos azules para T = 10, 100 y 500 años. |
+| IGME · Mapa Hidrogeológico | Mapa a escala 1:1.000.000 con hidrogeología, cuencas y unidades hidrogeológicas. |
+| Red estaciones AEMET | SHP de 3.249 estaciones con precipitación documentada, con círculos diferenciados por su presencia en los catálogos OpenData consultados. |
+
+Las 25 capas de los cinco primeros subgrupos son conexiones **WMS**, con imagen PNG transparente: se solicitan al servidor al visualizar el mapa y requieren conexión. El comando conserva el CRS y la extensión actual del proyecto. Repetirlo incorpora únicamente las capas que falten. Las capas de referencia permanecen al borrar los delineados de HidroCAUMAX.
+
+Los tres escenarios SNCZI se cargan por separado, con **T100 como escenario inicial**. Las variables agroclimáticas se agrupan para elegirlas; su grupo empieza desactivado y conserva Papadakis como selección inicial. El grupo IGME empieza desactivado y conserva sus tres componentes preparados para mostrarse juntos. Si un servicio no responde, se comunican las capas fallidas y las demás pueden seguir cargándose.
+
+El endpoint de ocupación del suelo indicado no muestra CORINE a todas las escalas: utiliza CLC2018 a escala menos detallada que 1:50.000, SIOSE2014 entre 1:50.000 y 1:10.000 y SIOSE AR2017 al acercar más. Esa procedencia se registra en la descripción de la capa.
+
+### Red estaciones AEMET
+
+La capa contiene **3.249 estaciones con precipitación diaria, horaria o mensual documentada**, deduplicadas por indicativo. Se conserva el indicativo como texto, incluidos sus ceros iniciales. Se genera un **Shapefile real de puntos**, con sus archivos auxiliares, en una carpeta persistente del perfil QGIS; puede consultarse sin conexión una vez instalado el complemento. La ruta figura en las propiedades de la capa. Para trasladar un proyecto a otro equipo, copia también todos los archivos del SHP o exporta la capa a un GeoPackage del proyecto.
+
+Los círculos distinguen **859 estaciones identificadas en OpenData** y **2.390 que no figuran en los inventarios consultados**. El cruce usa el indicativo y la unión de los selectores oficiales de climatología y observación convencional de AEMET, comprobados el **25/11/2026**. La ausencia en estos selectores no acredita que una estación carezca de cualquier dato abierto; tampoco se deduce disponibilidad a partir de su condición automática o manual. La clasificación y su alcance quedan registrados en los atributos y la descripción.
+
+La geometría procede de una **copia pública publicada por Esri España en 2017 y atribuida a AEMET**, coherente con los tipos y campos del catálogo MITECO actualizado el **16/04/2016**. No se presenta como inventario completo de estaciones activas en 2026: hay 133 indicativos de los selectores OpenData consultados que no tienen geometría en esta base histórica. Se conservan la atribución a MITECO, las fuentes y las fechas.
+
+Fuentes y procedencia verificadas:
+
+- [IDEE: servicio de Ocupación del suelo](https://www.idee.es/csw-codsi-idee/srv/api/records/spaignwms_OcupacionSuelo).
+- [MITECO: red hidrográfica y Pfafstetter](https://www.miteco.gob.es/es/cartografia-y-sig/ide/descargas/agua/red-hidrografica.html).
+- [MAPA: servicios de Agricultura](https://www.mapa.gob.es/es/cartografia-y-sig/ide/directorio_datos_servicios/agricultura/wms-inspire-agricultura).
+- [MITECO: catálogo WMS de Agua, mapas de peligrosidad](https://www.miteco.gob.es/es/cartografia-y-sig/ide/directorio_datos_servicios/agua/wms-inspire-agua.html).
+- [IGME: Mapa Hidrogeológico de España a escala 1:1.000.000](https://info.igme.es/cartografiadigital/geologica/mapa.aspx?Id=19).
+- [MITECO: estaciones climatológicas AEMET y condiciones de uso](https://www.miteco.gob.es/es/cartografia-y-sig/ide/descargas/otros.html).
+- [Esri España: copia cartográfica AEMET publicada en 2017](https://www.arcgis.com/home/item.html?id=20e0ab17fcf249d1a03a4b5c7b083cb1).
+- [AEMET OpenData: centro de descargas](https://opendata.aemet.es/centrodedescargas/inicio).
+
+## Cuenca del Método racional
+
+En **Método Racional → Método Racional**, selecciona el punto y calcula las **variables intermedias**. El botón **Cuenca hidrográfica**, situado a la izquierda de **Generar capas resolución mejorada**, abre el mismo diálogo utilizado desde la consulta de capas de caudales máximos.
+
+La cuenca inicial es la delineada por el calculador racional. Se conservan el punto y su CRS, y se contrastan la máscara, la geometría, el área y las fuentes MDT/D8. El área nativa debe ser como máximo 50 km²; la red negra sirve como referencia cartográfica, sin mover el cierre automáticamente hacia otro tramo. Los controles nativos de CAUMAX permanecen: CAUMAX 3.0 rechaza exactamente 50 km² durante las variables intermedias.
+
+Puedes utilizar las herramientas de cuenca antes de calcular Q. **Pendiente de cálculo** significa que aún no hay un caudal racional vigente. Después de pulsar **Calcular** en CAUMAX, vuelve a abrir la cuenca para incorporar el resultado aceptado. Una edición de las entradas invalida el Q anterior aunque CAUMAX siga mostrando su texto. Las capas de caudales máximos no se muestrean en este modo y no se fabrica una curva Q(T) a partir de ellas.
+
+En **Resolución MDT** puedes seleccionar **25 × 25 m** y **5 × 5 m**, cuando exista cobertura oficial. Se utilizan la misma descarga, generación de direcciones D8, correspondencia con la cuenca original y delineación que en la consulta de capas de caudales máximos. También están disponibles **Ajuste Punto de Cierre**, **Malla de celdas**, suavizado de la divisoria y exportación. La resolución se aplica al terreno y al nuevo delineado; no se limita a cambiar la apariencia de la malla.
+
+Morfología, hipsometría, resolución, ajuste del cierre, suavizado, P₀, Pd y sus gráficos, exportación, informes, proyectos e IA funcionan sobre la cuenca activa. El caudal conserva su relación con el cálculo racional nativo: cambiar la resolución o la divisoria en este diálogo no recalcula sus coeficientes ni el resultado Q. Los informes y proyectos conservan esta procedencia y distinguen los datos pendientes.
 
 ## Dependencias de instalación
 
@@ -12,7 +62,7 @@ El runtime empaquetado es para Windows de 64 bits. Linux/macOS pueden utilizar m
 
 ## Instalación y uso
 
-1. Instala **HidroCAUMAX_v1_2_11.zip**, sin descomprimir, desde **Complementos → Administrar e instalar complementos → Instalar a partir de ZIP**. Acepta sustituir la instalación auxiliar anterior y reinicia QGIS después de actualizar para cargar todos los módulos de esta revisión. El nombre visible es **HidroCAUMAX v1.2.11**; la carpeta interna sigue siendo **caumax_consulta** para conservar la continuidad de la actualización.
+1. Instala **HidroCAUMAX_v1_2_12.zip**, sin descomprimir, desde **Complementos → Administrar e instalar complementos → Instalar a partir de ZIP**. Acepta sustituir la instalación auxiliar anterior y reinicia QGIS después de actualizar para cargar todos los módulos de esta revisión. El nombre visible es **HidroCAUMAX v1.2.12**; la carpeta interna sigue siendo **caumax_consulta** para conservar la continuidad de la actualización.
 2. Activa CAUMAX, carga sus capas y abre **Mapa de caudales máximos → Consulta de capas de caudales máximos**. Selecciona periodo y punto; pulsa **Consultar**.
 3. Una consulta válida habilita **Cuenca hidrográfica**, a la izquierda del informe nativo. Su texto conserva el **110 %** del tamaño de los botones de la derecha; en esta revisión la altura del botón aumenta otro **10 %** respecto a 1.2.10, con redondeo al píxel más cercano. La anchura reserva espacio para el texto completo y el logotipo **GEA-UVa**.
 4. Pulsa el botón para calcular la cuenca. El diálogo se alinea con el borde derecho de QGIS, usa toda su altura y aproximadamente el **36 %** de su anchura. Sigue los cambios de posición y tamaño de QGIS. **Morfología de la Cuenca** presenta la tabla blanca de 19 parámetros: **Parámetro, Valor, Unidad e Interpretación**, con anchuras orientativas **40/13/9/38 %** y espacio mínimo para leer la cabecera Unidad. Valor y Unidad se centran. Interpretación empieza vacía y se rellena al pulsar **Análisis IA** en su encabezado; cada texto ocupa como máximo tres líneas y se conserva completo en su ayuda. Las observaciones técnicas se conservan en los resultados y el informe; se retira su recuadro bajo la tabla.
@@ -325,5 +375,5 @@ El ZIP conserva además el script original íntegro del usuario en **extras/CAUM
 - [GDAL: TRI Riley y Wilson](https://gdal.org/en/stable/programs/gdal_raster_tri.html) y [Riley, DeGloria y Elliot (1999)](https://arc.lib.montana.edu/ojs/index.php/IJS/article/view/2914).
 
 - [Pollinations Classic: documentación](https://github.com/pollinations/hive/blob/main/POLLINATIONS_APIDOCS.md) y [catálogo público de modelos anónimos](https://text.pollinations.ai/models). La integración usa el servicio Classic comprobado, no la API de pago gen.pollinations.ai.
-El repositorio incluye pruebas reproducibles de cálculo, interfaz, recuperación de resultados y exportación. Los registros históricos locales se mantienen fuera de esta publicación porque contienen rutas y referencias a sesiones de trabajo. HidroCAUMAX v1.2.11 se distribuye en el canal **estable**; la comprobación de un proyecto concreto debe realizarse en su instalación de QGIS y con sus fuentes de datos.
+El repositorio incluye pruebas reproducibles de cálculo, interfaz, recuperación de resultados y exportación. Los registros históricos locales se mantienen fuera de esta publicación porque contienen rutas y referencias a sesiones de trabajo. HidroCAUMAX v1.2.12 se distribuye en el canal **estable**; la comprobación de un proyecto concreto debe realizarse en su instalación de QGIS y con sus fuentes de datos.
 

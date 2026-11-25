@@ -6,18 +6,19 @@ import tempfile
 from types import ModuleType, SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
+import numpy as np
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 from qgis.PyQt import sip, uic
 from qgis.PyQt.QtCore import QObject, QRect, Qt, pyqtSignal
 from qgis.PyQt.QtWidgets import (
-    QDialog, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QPushButton,
+    QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QPushButton,
     QVBoxLayout, QWidget,
 )
-from qgis.core import QgsApplication, QgsCoordinateReferenceSystem, QgsPointXY
+from qgis.core import QgsApplication, QgsCoordinateReferenceSystem, QgsGeometry, QgsPointXY
 from qgis.gui import QgsMapCanvas
 
-from caumax_consulta.rational_layers_bridge import BUTTON_NAME, PANEL_NAME, RationalLayersBridge
+from caumax_consulta.rational_layers_bridge import BASIN_BUTTON_NAME, BUTTON_NAME, PANEL_NAME, RationalLayersBridge
 
 
 class _PointTool(QObject):
@@ -40,6 +41,19 @@ class RationalMethodDialog(QDialog):
         self.horizontalLayout_2.addWidget(self.btnClose)
         root.addLayout(self.horizontalLayout_2)
         self.basinCalc = None
+        self.btnCalculate = QPushButton('Calcular caudal', self)
+        self.btnCalculate.hide()
+        self.txtP0, self.txtResultFlow, self.txtResultReturnPeriod = (QLineEdit(text,self)
+                                                                  for text in ('12','27','100'))
+        for field in (self.txtP0,self.txtResultFlow,self.txtResultReturnPeriod):
+            field.hide()
+        self.comboReturnPeriod = QComboBox(self)
+        self.comboReturnPeriod.addItems(['5','100'])
+        self.comboReturnPeriod.setCurrentText('100')
+        self.comboReturnPeriod.hide()
+        self.comboReturnPeriod.currentTextChanged.connect(lambda *_:self.btnCalculate.setEnabled(False))
+        self.chkOrdinaryMaxFlood = QCheckBox(self)
+        self.chkOrdinaryMaxFlood.hide()
         self.tool = _PointTool(self)
         self.tool.canvasClicked.connect(self.updatePoint)
 
@@ -119,6 +133,16 @@ class RationalLayersBridgeTests(unittest.TestCase):
             binding.button.click()
             self.app.processEvents()
         return binding
+
+    def complete_parameters(self, binding):
+        self.bridge.calculation_started(self.dialog,'parameters')
+        x,y=map(float,(self.dialog.txtX.text(),self.dialog.txtY.text()))
+        self.dialog.basinCalc=SimpleNamespace(
+            pt=QgsPointXY(x,y),area=5625.,basinCells=np.ones((3,3),dtype=np.uint8),
+            basinGeometry=[QgsGeometry.fromWkt('POLYGON ((0 0,75 0,75 75,0 75,0 0))')],
+            geoTransform=(x-37.5,25.,0.,y+37.5,0.,-25.))
+        self.dialog.btnCalculate.setEnabled(True)
+        self.bridge.calculation_finished(self.dialog,'parameters',dict(completed=True,ready_writes=[False,True]))
 
     def test_lazy_idempotent_binding_and_independent_current_query(self):
         original_items = [self.dialog.layout().itemAt(i) for i in range(self.dialog.layout().count())]
@@ -270,6 +294,93 @@ class RationalLayersBridgeTests(unittest.TestCase):
                     self.app.processEvents()
                     for index, item in enumerate(original):
                         self.assertIs(self.dialog.layout().itemAt(index), item)
+
+    def test_basin_button_precedes_generation_and_opens_native_basin_before_flow_exists(self):
+        requested=Mock();self.bridge.on_basin_requested=requested
+        binding=self.attach()
+        self.assertFalse(binding.basin_button.isEnabled())
+        self.complete_parameters(binding)
+        self.app.processEvents()
+        self.assertTrue(binding.basin_button.isEnabled())
+        self.assertEqual(binding.basin_button.text(),'Cuenca hidrográfica')
+        self.assertFalse(binding.basin_button.icon().isNull())
+        self.assertEqual(binding.action_row.indexOf(binding.basin_button),0)
+        self.assertEqual(binding.action_row.indexOf(binding.button),1)
+        self.assertEqual(len(self.dialog.findChildren(QPushButton,BASIN_BUTTON_NAME)),1)
+        query=object();calculator=self.dialog.basinCalc
+        with patch('caumax_consulta.rational_basin.capture_rational_query',return_value=query) as capture:
+            binding.basin_button.click()
+        capture.assert_called_once_with(self.dialog,flow_result=None,parameters_validated=True)
+        requested.assert_called_once_with(self.dialog,query)
+        self.assertIs(self.dialog.basinCalc,calculator)
+        self.assertIsNone(binding.panel)
+
+    def test_only_new_accepted_flow_with_unchanged_inputs_is_attached_to_the_basin(self):
+        self.bridge.on_basin_requested=Mock()
+        binding=self.attach();self.complete_parameters(binding)
+        self.bridge.calculation_started(self.dialog,'flow')
+        self.bridge.calculation_finished(self.dialog,'flow',dict(completed=True,flow_writes=[],period_writes=[]))
+        self.assertIsNone(binding.flow_result)
+        self.assertTrue(binding.basin_ready)
+        self.assertEqual(self.dialog.txtResultFlow.text(),'27')
+        self.bridge.calculation_started(self.dialog,'flow')
+        self.bridge.calculation_finished(self.dialog,'flow',dict(completed=True,flow_writes=['27'],period_writes=['100']))
+        self.assertEqual(binding.flow_result,dict(flow=27.,period=100.))
+        with patch('caumax_consulta.rational_basin.capture_rational_query',return_value=object()) as capture:
+            binding.basin_button.click()
+        self.assertEqual(capture.call_args.kwargs['flow_result'],dict(flow=27.,period=100.))
+        changed=Mock();self.bridge.on_query_started=changed
+        self.dialog.txtP0.setText('13')
+        changed.assert_called_once_with(self.dialog)
+        self.assertIsNone(binding.flow_result)
+        self.assertTrue(binding.basin_ready)
+        self.dialog.comboReturnPeriod.setCurrentText('5')
+        self.assertFalse(self.dialog.btnCalculate.isEnabled())
+        self.assertTrue(binding.basin_button.isEnabled())
+        with patch('caumax_consulta.rational_basin.capture_rational_query',return_value=object()) as capture:
+            binding.basin_button.click()
+        capture.assert_called_once_with(self.dialog,flow_result=None,parameters_validated=True)
+        self.dialog.txtResultReturnPeriod.setText('5')
+        self.bridge.calculation_started(self.dialog,'flow')
+        self.dialog.txtP0.setText('14')
+        self.bridge.calculation_finished(self.dialog,'flow',dict(completed=True,flow_writes=['27'],period_writes=['5']))
+        self.assertIsNone(binding.flow_result)
+        self.assertTrue(binding.basin_ready)
+
+    def test_recalculation_coordinates_and_source_changes_invalidate_the_native_basin(self):
+        self.bridge.on_basin_requested=Mock()
+        changed=Mock();self.bridge.on_query_started=changed
+        binding=self.attach();self.complete_parameters(binding)
+        binding.query_opened=True
+        self.bridge.calculation_started(self.dialog,'parameters')
+        changed.assert_called_once_with(self.dialog)
+        self.assertFalse(binding.basin_button.isEnabled())
+        self.bridge.calculation_finished(self.dialog,'parameters',dict(completed=True,ready_writes=[False]))
+        self.assertFalse(binding.basin_ready)
+        self.bridge.scan()
+        self.assertFalse(binding.basin_button.isEnabled())
+        self.complete_parameters(binding)
+        self.dialog.txtX.setText('342400')
+        self.assertFalse(binding.basin_ready)
+        self.complete_parameters(binding)
+        binding.query_opened=True;changed.reset_mock()
+        replacement=Path(self.temp.name)/'new-source.tif'
+        replacement.write_bytes(b'New configured source')
+        self.paths['MDT']=str(replacement)
+        self.bridge.scan()
+        changed.assert_called_once_with(self.dialog)
+        self.assertFalse(binding.basin_ready)
+        self.assertFalse(binding.basin_button.isEnabled())
+        self.assertTrue(binding.button.isEnabled())
+
+    def test_repeated_attachment_and_close_remove_both_owned_controls(self):
+        self.bridge.on_basin_requested=Mock()
+        binding=self.attach();self.complete_parameters(binding)
+        self.bridge.scan();self.bridge.start()
+        self.assertEqual(len(self.dialog.findChildren(QPushButton,BASIN_BUTTON_NAME)),1)
+        self.bridge.stop()
+        self.assertIsNone(self.dialog.findChild(QPushButton,BASIN_BUTTON_NAME))
+        self.assertIsNone(self.dialog.findChild(QPushButton,BUTTON_NAME))
 
 
 if __name__ == '__main__':

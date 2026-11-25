@@ -17,10 +17,15 @@ from qgis.PyQt.QtWidgets import (
 from qgis.core import QgsCoordinateReferenceSystem
 
 from .rational_export import BUTTON_STYLE
+from .caumax_bridge import _LogoBasinButton, BUTTON_STYLE as BASIN_BUTTON_STYLE
 
 
 BUTTON_NAME = 'btnGenerarCapasResolucionMejoradaHidroCAUMAX'
 PANEL_NAME = 'HidroCAUMAXRationalLayersContainer'
+BASIN_BUTTON_NAME = 'btnCuencaHidrograficaRacionalHidroCAUMAX'
+_FLOW_INPUTS = ('txtArea', 'txtConcentrationTime', 'txtI1Id', 'txtRainfall',
+                'txtIntensityFactor', 'txtP0', 'txtP0Corrector', 'txtUniformity',
+                'txtCorrectedRainfall', 'txtP0CorrectorReturnPeriod', 'txtRainfallCorrection')
 
 
 @dataclass(frozen=True)
@@ -90,13 +95,29 @@ class _Binding:
     collapsed_geometry: object = None
     auto_geometry: object = None
     fitting: bool = False
+    basin_button: object = None
+    action_row: object = None
+    basin_ready: bool = False
+    parameters_validated: bool = False
+    basin_stamp: object = None
+    source_signature: object = None
+    generation: int = 0
+    calculating: set = field(default_factory=set)
+    parameter_start: object = None
+    flow_start: object = None
+    flow_result: object = None
+    flow_signature: object = None
+    query_opened: bool = False
+    basin_message: str = 'Primero calcula las variables intermedias en Método racional.'
 
 
 class RationalLayersBridge(QObject):
     """Own only this bridge's controls and temporary body-scroll wrapper."""
-    def __init__(self, iface):
+    def __init__(self, iface, on_basin_requested=None, on_query_started=None):
         super().__init__(iface.mainWindow())
         self.iface = iface
+        self.on_basin_requested = on_basin_requested
+        self.on_query_started = on_query_started
         self._running = False
         self._bindings = {}
         self.timer = QTimer(self)
@@ -139,6 +160,7 @@ class RationalLayersBridge(QObject):
     def _coordinates_changed(self, binding):
         binding.exact_point = binding.exact_fields = None
         binding.input_crs = self._canvas_crs()
+        self._invalidate_basin(binding, 'Las coordenadas han cambiado. Vuelve a calcular las variables intermedias.')
         self._refresh(binding)
 
     def _point_clicked(self, binding, point, *unused):
@@ -160,11 +182,176 @@ class RationalLayersBridge(QObject):
         if binding.panel is not None:
             binding.panel.refresh_context()
 
+    @staticmethod
+    def _source_signature(dialog):
+        result = []
+        for path in _layer_paths(dialog):
+            info = Path(path).stat()
+            result.append((path, info.st_size, info.st_mtime_ns))
+        return tuple(result)
+
+    @staticmethod
+    def _basin_stamp(dialog):
+        calculator = getattr(dialog, 'basinCalc', None)
+        point = getattr(calculator, 'pt', None)
+        mask = getattr(calculator, 'basinCells', None)
+        geometries = getattr(calculator, 'basinGeometry', None)
+        if calculator is None or point is None or mask is None or geometries is None:
+            raise ValueError('Todavía no hay una cuenca calculada por Método racional.')
+        x, y = float(point.x()), float(point.y())
+        entered = tuple(map(_number, (dialog.txtX.text(), dialog.txtY.text())))
+        if not all(math.isclose(a, b, rel_tol=0, abs_tol=1e-7) for a, b in zip(entered, (x, y))):
+            raise ValueError('El punto actual no coincide con la cuenca calculada. Recalcula las variables intermedias.')
+        area = float(calculator.area)
+        if not math.isfinite(area) or not 0 < area <= 50e6:
+            raise ValueError('La cuenca calculada debe tener una superficie positiva de hasta 50 km².')
+        return (id(calculator), id(mask), id(geometries), x, y, area,
+                tuple(getattr(mask, 'shape', ())), tuple(calculator.geoTransform))
+
+    def _flow_signature(self, binding):
+        dialog = binding.dialog
+        fields = tuple((name, getattr(dialog, name).text()) for name in _FLOW_INPUTS
+                       if callable(getattr(getattr(dialog, name, None), 'text', None)))
+        period = getattr(dialog, 'comboReturnPeriod', None)
+        ordinary = getattr(dialog, 'chkOrdinaryMaxFlood', None)
+        return (binding.generation, self._fields(dialog), self._source_signature(dialog), fields,
+                period.currentText() if period is not None else None,
+                ordinary.isChecked() if ordinary is not None else None)
+
+    def _notify_query_changed(self, binding):
+        if binding.query_opened:
+            binding.query_opened = False
+            if self.on_query_started is not None:
+                self.on_query_started(binding.dialog)
+
+    def _invalidate_flow(self, binding):
+        binding.flow_result = binding.flow_signature = None
+        self._notify_query_changed(binding)
+
+    def _invalidate_basin(self, binding, message):
+        binding.basin_ready = binding.parameters_validated = False
+        binding.basin_stamp = binding.source_signature = None
+        binding.generation += 1
+        binding.basin_message = message
+        self._invalidate_flow(binding)
+        if binding.basin_button is not None:
+            binding.basin_button.setEnabled(False)
+            binding.basin_button.setToolTip(message)
+
+    def _hydrology_changed(self, binding):
+        if not binding.calculating:
+            self._invalidate_flow(binding)
+            self._sync_basin(binding)
+
+    def _accept_parameters(self, binding, *, observed):
+        button = getattr(binding.dialog, 'btnCalculate', None)
+        if button is None or not button.isEnabled():
+            raise ValueError('Primero completa el cálculo de variables intermedias en Método racional.')
+        binding.basin_stamp = self._basin_stamp(binding.dialog)
+        binding.source_signature = self._source_signature(binding.dialog)
+        binding.basin_ready = True
+        binding.parameters_validated = observed
+        binding.basin_message = ('Abrir la cuenca delineada por Método racional. '
+                                 'El caudal queda pendiente hasta completar su cálculo.')
+
+    def _sync_basin(self, binding):
+        if binding.calculating:
+            binding.basin_button.setEnabled(False)
+            return
+        if binding.basin_ready:
+            try:
+                if (self._source_signature(binding.dialog) != binding.source_signature
+                        or self._basin_stamp(binding.dialog) != binding.basin_stamp):
+                    raise ValueError('La cuenca o las capas de cálculo han cambiado. Recalcula las variables intermedias.')
+                if binding.flow_result is not None and self._flow_signature(binding) != binding.flow_signature:
+                    self._invalidate_flow(binding)
+            except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as error:
+                self._invalidate_basin(binding, str(error))
+        binding.basin_button.setEnabled(binding.basin_ready and self.on_basin_requested is not None)
+        binding.basin_button.setToolTip(binding.basin_message)
+
+    def calculation_started(self, dialog, stage):
+        """Receive the reversible native-calculation observer's start signal."""
+        binding = self._bindings.get(id(dialog))
+        if binding is None or not self._running:
+            return
+        if stage == 'parameters':
+            self._invalidate_basin(binding, 'Calculando las variables intermedias de la cuenca…')
+            try:
+                binding.parameter_start = (binding.generation, self._fields(dialog), self._source_signature(dialog))
+            except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
+                binding.parameter_start = None
+        elif stage == 'flow':
+            self._invalidate_flow(binding)
+            try:
+                self._sync_basin(binding)
+                binding.flow_start = self._flow_signature(binding) if binding.basin_ready else None
+            except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
+                binding.flow_start = None
+        else:
+            return
+        binding.calculating.add(stage)
+        binding.basin_button.setEnabled(False)
+
+    def calculation_finished(self, dialog, stage, event):
+        binding = self._bindings.get(id(dialog))
+        if binding is None or not self._running:
+            return
+        binding.calculating.discard(stage)
+        try:
+            if stage == 'parameters':
+                current = (binding.generation, self._fields(dialog), self._source_signature(dialog))
+                if (event.get('completed') and event.get('ready_writes')
+                        and event['ready_writes'][-1] is True and current == binding.parameter_start):
+                    self._accept_parameters(binding, observed=True)
+                else:
+                    self._invalidate_basin(binding, 'El cálculo de variables intermedias no se ha completado. Vuelve a calcularlo.')
+                binding.parameter_start = None
+            elif stage == 'flow':
+                signature = self._flow_signature(binding)
+                flow_writes, period_writes = event.get('flow_writes', []), event.get('period_writes', [])
+                if (binding.basin_ready and event.get('completed') and flow_writes and period_writes
+                        and signature == binding.flow_start
+                        and str(flow_writes[-1]) == dialog.txtResultFlow.text()
+                        and str(period_writes[-1]) == dialog.txtResultReturnPeriod.text()):
+                    flow, period = _number(flow_writes[-1]), _number(period_writes[-1])
+                    if flow >= 0 and 1 < period <= 500:
+                        binding.flow_result = dict(flow=flow, period=period)
+                        binding.flow_signature = signature
+                binding.flow_start = None
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as error:
+            if stage == 'parameters':
+                self._invalidate_basin(binding, str(error))
+            else:
+                self._invalidate_flow(binding)
+        self._sync_basin(binding)
+
+    def _request_basin(self, binding):
+        if not self._running or self._bindings.get(id(binding.dialog)) is not binding:
+            return
+        self._sync_basin(binding)
+        if not binding.basin_ready or binding.calculating or self.on_basin_requested is None:
+            return
+        try:
+            from .rational_basin import capture_rational_query
+            query = capture_rational_query(binding.dialog, flow_result=binding.flow_result,
+                                           parameters_validated=binding.parameters_validated)
+            self._sync_basin(binding)
+            if not binding.basin_ready:
+                raise ValueError(binding.basin_message)
+            self.on_basin_requested(binding.dialog, query)
+            binding.query_opened = True
+            binding.error.hide()
+        except Exception as error:
+            binding.error.setText('No se pudo abrir la cuenca de Método racional: ' + str(error))
+            binding.error.show()
+
     def scan(self):
         if not self._running:
             return
         for key, binding in tuple(self._bindings.items()):
             try:
+                self._sync_basin(binding)
                 if binding.button.isChecked():
                     self._refresh(binding)
                     self._fit_panel(binding)
@@ -190,6 +377,14 @@ class RationalLayersBridge(QObject):
         layout.setContentsMargins(0, 0, 0, 0)
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
+        basin_button = _LogoBasinButton('Cuenca hidrográfica', container)
+        basin_button.setObjectName(BASIN_BUTTON_NAME)
+        basin_button.setStyleSheet(BASIN_BUTTON_STYLE)
+        basin_button.setEnabled(False)
+        basin_button.match_reference_buttons(
+            candidate for candidate in (getattr(dialog, 'btnReport', None), getattr(dialog, 'btnClose', None))
+            if isinstance(candidate, QPushButton))
+        row.addWidget(basin_button, 0, Qt.AlignLeft)
         button = QPushButton('Generar capas resolución mejorada', container)
         button.setObjectName(BUTTON_NAME)
         button.setStyleSheet(BUTTON_STYLE)
@@ -211,11 +406,21 @@ class RationalLayersBridge(QObject):
         layout.addWidget(scroll)
         dialog.layout().addWidget(container)
         binding = _Binding(dialog, container, button, scroll, error, self._canvas_crs())
+        binding.basin_button, binding.action_row = basin_button, row
         key = id(dialog)
         self._bindings[key] = binding
         self._connect(binding, button.toggled, lambda checked: self._toggle(binding, checked))
+        self._connect(binding, basin_button.clicked, lambda checked=False: self._request_basin(binding))
         for field_widget in (dialog.txtX, dialog.txtY):
             self._connect(binding, field_widget.textChanged, lambda *unused: self._coordinates_changed(binding))
+        for name in _FLOW_INPUTS:
+            signal = getattr(getattr(dialog, name, None), 'textChanged', None)
+            if signal is not None:
+                self._connect(binding, signal, lambda *unused: self._hydrology_changed(binding))
+        for name, signal_name in (('comboReturnPeriod', 'currentTextChanged'), ('chkOrdinaryMaxFlood', 'toggled')):
+            signal = getattr(getattr(dialog, name, None), signal_name, None)
+            if signal is not None:
+                self._connect(binding, signal, lambda *unused: self._hydrology_changed(binding))
         canvas_signal = getattr(self.iface.mapCanvas(), 'destinationCrsChanged', None)
         if canvas_signal is not None:
             self._connect(binding, canvas_signal, lambda *unused: self._refresh(binding))
@@ -226,6 +431,12 @@ class RationalLayersBridge(QObject):
         self._connect(binding, dialog.finished, closed)
         self._connect(binding, dialog.destroyed, closed)
         dialog.installEventFilter(self)
+        try:
+            self._accept_parameters(binding, observed=False)
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
+            pass
+        self._sync_basin(binding)
+        QTimer.singleShot(0, basin_button.install_logo)
 
     @staticmethod
     def _connect(binding, signal, slot):
@@ -332,7 +543,7 @@ class RationalLayersBridge(QObject):
                 item = root.itemAt(index)
                 if item.widget() not in (binding.container, binding.body_scroll):
                     fixed += item.minimumSize().height()
-            fixed += binding.button.sizeHint().height()+binding.container.layout().spacing()
+            fixed += binding.action_row.sizeHint().height()+binding.container.layout().spacing()
             room = max(0, dialog.height()-fixed)
             preferred = max(120, binding.panel.sizeHint().height())
             panel_height = min(preferred, max(0, round(room*.45)))

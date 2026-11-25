@@ -82,6 +82,10 @@ el estado erosivo de una cuenca. La desviación típica de Pd es ESPACIAL entre 
 celdas de la cuenca, nunca variabilidad interanual ni error de la media.
 Los cuantiles CAUMAX corresponden al punto ORIGINAL; cambiar MDT o cierre no los
 recalcula. Interpolación/extrapolación describe la consulta, no una nueva serie.
+Si source_kind es rational, rational_query contiene el resultado del método
+racional sobre su cuenca nativa, o un caudal pendiente. No procede de las capas
+ráster Q ni acredita caudales de otras resoluciones o divisorias. No inventes una
+curva Q(T); conserva la distinción entre el cálculo nativo y la morfología activa.
 No supongas coincidencia entre el cauce cartográfico y D8. Comenta la precisión del
 cierre, cobertura, fracciones válidas y cualquier ajuste que figure en los datos.
 La sección elegida por el usuario es el límite: un cierre aguas abajo añade área
@@ -176,6 +180,17 @@ def build_context(analysis, query, smoothing_state=None):
                    basin_touches_dem_boundary=bool(analysis.touches_boundary),
                    original_caumax_query=dict(flow_m3_s=_number(getattr(query, 'flow', None)),
                                              return_period_years=_number(getattr(query, 'period', None))))
+    rational = getattr(query, 'source_kind', 'caumax_raster') == 'rational'
+    context['source_kind'] = 'rational' if rational else 'caumax_raster'
+    if rational:
+        original = context.pop('original_caumax_query')
+        original['status'] = 'pending' if original['flow_m3_s'] is None else 'calculated'
+        original['applies_to'] = 'native_rational_basin'
+        native = (getattr(query, 'rational_context', None) or {}).get('native') or {}
+        original['native_area_km2'] = (_number(native.get('area_m2')) / 1e6
+                                     if _number(native.get('area_m2')) is not None else None)
+        original['native_tc_h'] = _number(native.get('tc_h'))
+        context['rational_query'] = original
     snap = diagnostics.get('outlet_snap')
     if isinstance(snap, dict):
         numeric = ('distance_m', 'search_radius_m', 'required_area_km2',
@@ -226,9 +241,10 @@ def build_context(analysis, query, smoothing_state=None):
             direct = context['precipitation_query'].get('direct')
             if direct and direct.get('flow') is not None:
                 direct['flow'] = context['precipitation_query']['spatial_statistics_mm']['mean_mm']
-    quantiles = state.get('flow_quantiles') or {}
+    quantiles = {} if rational else state.get('flow_quantiles') or {}
     flows = [_number(value) for value in quantiles.get('flows', ())]
-    context['original_caumax_quantiles_m3_s'] = dict(zip(map(str, periods), flows))
+    if not rational:
+        context['original_caumax_quantiles_m3_s'] = dict(zip(map(str, periods), flows))
     if quantiles:
         context['flow_query'] = _estimates(quantiles, flows, 'input_flow')
     return context
@@ -405,14 +421,25 @@ def _structured_analysis(content, context):
         if statistics:
             output.append('Consulta Pd(T), desviación típica espacial: '+
                           number(statistics.get('stddev_mm'))+' mm.')
-    output += ['',reviewed('daily_precipitation',result['daily_precipitation']), '## Caudales CAUMAX del punto original',
-               '| T (años) | Qci (m³/s) |', '|---:|---:|']
-    flows = context.get('original_caumax_quantiles_m3_s',{})
-    for period in periods:
-        output.append('| '+str(period)+' | '+number(flows.get(str(period)))+' |')
-    original = context.get('original_caumax_query') or {}
-    output += ['', 'Consulta original CAUMAX: T = '+number(original.get('return_period_years'))+
-               ' años; Q = '+number(original.get('flow_m3_s'))+' m³/s.']
+    output += ['',reviewed('daily_precipitation',result['daily_precipitation'])]
+    if context.get('source_kind') == 'rational':
+        original = context.get('rational_query') or {}
+        flow_text = ('pendiente de cálculo' if original.get('flow_m3_s') is None
+                     else number(original.get('flow_m3_s'))+' m³/s')
+        output += ['## Caudal del método racional',
+                   'Cálculo nativo: T = '+number(original.get('return_period_years'))+
+                   ' años; Q = '+flow_text+'.',
+                   'Este resultado corresponde a la cuenca nativa. Los cambios de MDT, cierre '
+                   'o suavizado no recalculan el caudal del método racional.']
+    else:
+        output += ['## Caudales CAUMAX del punto original',
+                   '| T (años) | Qci (m³/s) |', '|---:|---:|']
+        flows = context.get('original_caumax_quantiles_m3_s',{})
+        for period in periods:
+            output.append('| '+str(period)+' | '+number(flows.get(str(period)))+' |')
+        original = context.get('original_caumax_query') or {}
+        output += ['', 'Consulta original CAUMAX: T = '+number(original.get('return_period_years'))+
+                   ' años; Q = '+number(original.get('flow_m3_s'))+' m³/s.']
     if context.get('flow_query'):
         output += query_lines('Q','m³/s',context['flow_query'])
     output += ['', reviewed('caumax_flows',result['caumax_flows']), '## Decisiones para la Norma 5.2-IC',
@@ -434,7 +461,7 @@ def network_request():
     request = QNetworkRequest(url)
     request.setHeader(QNetworkRequest.ContentTypeHeader, 'application/json')
     request.setRawHeader(b'Accept', b'application/json')
-    request.setRawHeader(b'User-Agent', b'HidroCAUMAX/1.2.11')
+    request.setRawHeader(b'User-Agent', b'HidroCAUMAX/1.2.12')
     request.setRawHeader(b'Cache-Control', b'no-store')
     request.setAttribute(QNetworkRequest.CacheLoadControlAttribute, QNetworkRequest.AlwaysNetwork)
     request.setAttribute(QNetworkRequest.CacheSaveControlAttribute, False)

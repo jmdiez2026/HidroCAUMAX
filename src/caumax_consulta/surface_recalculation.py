@@ -86,8 +86,12 @@ class SurfaceTask(QgsTask):
                     cancelled=self.isCanceled,
                     progress=lambda p, i=index, t=period: self.publish(
                         f'Recalculando Pd · T = {t} años…', 40+(i+p/100)*9.5))
-            self.publish('Actualizando cuantiles CAUMAX…', 98)
-            quantiles = sample_quantiles(self.flow_query, self.flow_sources)
+            if getattr(self.query, 'source_kind', 'caumax_raster') == 'rational':
+                self.publish('Conservando el contexto del método racional…', 98)
+                quantiles = None
+            else:
+                self.publish('Actualizando cuantiles CAUMAX…', 98)
+                quantiles = sample_quantiles(self.flow_query, self.flow_sources)
             from .surface_drainage import clip_network
             drainage = clip_network(self.drainage_source, analysis, self.isCanceled)
             self.result = dict(analysis=analysis, p0=p0, rainfall=rainfall, quantiles=quantiles,

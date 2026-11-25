@@ -120,6 +120,7 @@ def _map_report_html(state):
 def _resolution_report_html(analysis, query, state):
     """Report only the active terrain model; alternatives are not results."""
     metadata = (state or {}).get('resolution_metadata') or {}
+    rational = getattr(query, 'source_kind', 'caumax_raster') == 'rational'
     if not metadata:
         return ''
     effective = (_number(analysis.cell_width, 2) + ' × '
@@ -136,6 +137,19 @@ def _resolution_report_html(analysis, query, state):
             )
     except (TypeError, ValueError, OverflowError):
         pass
+    flow_note = (
+        'El caudal del método racional corresponde al cálculo nativo conservado; '
+        'permanece pendiente si no se había calculado. Cambiar el MDT, el cierre o el '
+        'suavizado no recalcula ese caudal.' if rational else
+        'El caudal consultado (' + _number(getattr(query, 'flow', None), 6)
+        + ' m³/s) es el dato CAUMAX original; no se recalcula al descargar o seleccionar otro MDT.')
+    if rational:
+        context = getattr(query, 'rational_context', None) or {}
+        transform = context.get('geotransform') or []
+        if len(transform) == 6:
+            detail = ('La cuenca nativa del método racional se delineó con celdas de '
+                      + _number(abs(transform[1]), 2) + ' × '
+                      + _number(abs(transform[5]), 2) + ' m.')
     return (
         '<h2>Resolución MDT seleccionada</h2><p class="small"><b>'
         + _text(metadata.get('label') or 'MDT activo') + '</b> · Resolución nominal: '
@@ -143,8 +157,7 @@ def _resolution_report_html(analysis, query, state):
         + _text(detail) + '<br>Proveedor: ' + _text(metadata.get('provider') or 'No disponible')
         + '. Fuente: ' + _text(metadata.get('source') or 'No disponible')
         + '.<br>Los resultados y el mapa corresponden exclusivamente al MDT activo. '
-          'El caudal consultado (' + _text(_number(getattr(query, 'flow', None), 6))
-        + ' m³/s) es el dato CAUMAX original; no se recalcula al descargar o seleccionar otro MDT.</p>'
+        + _text(flow_note) + '</p>'
     )
 
 
@@ -471,12 +484,19 @@ def build_report_html(analysis, query, smoothing_state=None):
     x = getattr(query, 'x', getattr(analysis, 'selected_x', None))
     y = getattr(query, 'y', getattr(analysis, 'selected_y', None))
     has_resolution = bool((smoothing_state or {}).get('resolution_metadata'))
+    rational = getattr(query, 'source_kind', 'caumax_raster') == 'rational'
+    flow = getattr(query, 'flow', None)
+    period = getattr(query, 'period', None)
     metadata = [
         ('Fecha', datetime.now().strftime('%d/%m/%Y %H:%M')),
-        ('Capa de caudales', getattr(query, 'layername', 'CAUMAX')),
-        ('Caudal CAUMAX original' if has_resolution else 'Caudal consultado',
-         _number(getattr(query, 'flow', None), 6) + ' m³/s'),
-        ('Periodo de retorno', _number(getattr(query, 'period', None), 0) + ' años'),
+        ('Origen de la cuenca' if rational else 'Capa de caudales',
+         'Método racional de CAUMAX · cuenca nativa ≤50 km²' if rational
+         else getattr(query, 'layername', 'CAUMAX')),
+        ('Caudal del método racional' if rational else
+         'Caudal CAUMAX original' if has_resolution else 'Caudal consultado',
+         'Pendiente de cálculo' if rational and flow is None else _number(flow, 6) + ' m³/s'),
+        ('Periodo de retorno', 'Pendiente' if period is None else
+         (_number(period, 6).rstrip('0').rstrip('.') if rational else _number(period, 0)) + ' años'),
         ('Punto seleccionado', 'X = ' + _number(x) + '; Y = ' + _number(y)),
         ('CRS del punto seleccionado', _crs_text(query_crs)),
         ('Centro efectivo de la celda de cierre',
@@ -540,9 +560,12 @@ def build_report_html(analysis, query, smoothing_state=None):
     resolution_html = _resolution_report_html(analysis, query, smoothing_state)
     outlet_snap_html = _outlet_snap_report_html(analysis)
     hypsometric_html = _hypsometric_report_html(analysis, smoothing_state)
-    quantiles_html = _flow_quantiles_report_html(smoothing_state)
+    quantiles_html = '' if rational else _flow_quantiles_report_html(smoothing_state)
     basin_hydrology_html = _basin_hydrology_report_html(analysis, smoothing_state)
-    source_summary = 'Caudal original: CAUMAX 3.0, CEDEX / MITECO. '
+    source_summary = ('Cuenca y resultado nativos: método racional de CAUMAX 3.0. '
+                      'El caudal conserva las entradas del cálculo original y no se recalcula al modificar '
+                      'la resolución, el cierre o el suavizado en este diálogo. ' if rational else
+                      'Caudal original: CAUMAX 3.0, CEDEX / MITECO. ')
     resolution_metadata = (smoothing_state or {}).get('resolution_metadata') or {}
     engine = str((diagnostics.get('dem_hydrology') or {}).get('engine') or '').strip()
     if resolution_metadata:
@@ -568,6 +591,9 @@ def build_report_html(analysis, query, smoothing_state=None):
         'Los parámetros corresponden a la cuenca ORIGINAL de celdas. '
         'La resolución del modelo condiciona la delimitación, el perímetro y los índices. '
         'Hmed es la altitud mediana (percentil 50); el índice hipsométrico utiliza la media aritmética de cotas.')
+    if rational:
+        surface_description = surface_description.replace(
+            'los caudales oficiales del punto', 'el resultado nativo del método racional')
     return '''<!DOCTYPE html><html><head><meta charset="utf-8"><style>
 body {font-size: 9pt; color: #1e2d38;}
 h1 {font-size: 19pt; color: #154e72; margin-bottom: 3pt;}
@@ -581,7 +607,7 @@ td {vertical-align: top;}
 .method {font-size: 8pt;}
 </style></head><body>
 <h1>''' + title + '''</h1>
-<p><b>HidroCAUMAX v1.2.11 - Parámetros morfológicos e hidrológicos</b></p>
+<p><b>HidroCAUMAX v1.2.12 - Parámetros morfológicos e hidrológicos</b></p>
 <table width="100%" cellspacing="0" cellpadding="3">''' + metadata_rows + '''</table>
 ''' + resolution_html + '''
 ''' + outlet_snap_html + '''
@@ -671,8 +697,8 @@ def _write_document(path, content):
     printer = QPrinter(QPrinter.HighResolution)
     printer.setOutputFormat(QPrinter.PdfFormat)
     printer.setOutputFileName(str(path))
-    printer.setDocName('HidroCAUMAX v1.2.11 - Cuenca hidrográfica')
-    printer.setCreator('HidroCAUMAX v1.2.11')
+    printer.setDocName('HidroCAUMAX v1.2.12 - Cuenca hidrográfica')
+    printer.setCreator('HidroCAUMAX v1.2.12')
     printer.setFontEmbeddingEnabled(True)
     printer.setPaperSize(QPrinter.A4)
     printer.setOrientation(QPrinter.Landscape)
