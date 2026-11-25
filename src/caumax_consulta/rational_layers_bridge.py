@@ -403,6 +403,10 @@ class RationalLayersBridge(QObject):
         save_action.setEnabled(native_save is not None and native_save.isEnabled())
         row.addWidget(save_action, 0, Qt.AlignLeft)
         if native_save is not None:
+            # Keep the original exporter alive for the GEA-logo proxy, but take
+            # its duplicate blue button out of the native action layout.
+            # Hiding alone is not sufficient if Qt later re-shows the layout.
+            dialog.horizontalLayout_2.removeWidget(native_save)
             native_save.hide()
         basin_button = _LogoBasinButton('Cuenca hidrográfica', container)
         basin_button.setObjectName(BASIN_BUTTON_NAME)
@@ -711,6 +715,7 @@ class RationalLayersBridge(QObject):
             if binding.native_save_button is not None:
                 from qgis.PyQt import sip
                 if not sip.isdeleted(binding.native_save_button):
+                    binding.dialog.horizontalLayout_2.insertWidget(2, binding.native_save_button)
                     binding.native_save_button.show()
             binding.dialog.layout().removeWidget(binding.container)
             binding.container.setParent(None)
