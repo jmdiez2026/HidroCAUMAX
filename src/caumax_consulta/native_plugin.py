@@ -26,7 +26,8 @@ class NativeCaumaxPlugin(QObject):
         self._bridge = CaumaxBridge(iface, self._open_basin, self._new_query_started)
         self._rational = RationalExportBridge(iface)
         self._rational_inputs = RationalInputsBridge(iface)
-        self._rational_layers = RationalLayersBridge(iface, self._open_basin, self._new_query_started)
+        self._rational_layers = RationalLayersBridge(iface, self._open_basin,
+            self._new_query_started, self._rational_basin_refined)
         self._rational_inputs.calculation_started.connect(self._rational_layers.calculation_started)
         self._rational_inputs.calculation_finished.connect(self._rational_layers.calculation_finished)
         self._visible_dem = VisibleDemController(iface, self)
@@ -127,15 +128,37 @@ class NativeCaumaxPlugin(QObject):
         # Cleanup owns only HidroCAUMAX results and MaxFlowDialog's tracked
         # marker. A rational dialog's authoritative rubberBand/basinCalc is
         # deliberately neither registered nor removed here.
-        clear_delineations(close_dialogs=True)
+        if getattr(query, 'source_kind', 'caumax_raster') == 'rational':
+            # The native calculator is already the source of this reference.
+            # Do not erase its active improved-D8 panel and owned outlines when
+            # opening the detailed basin dialog for the *same* native point.
+            if previous is not None:
+                try:
+                    previous.dispose()
+                    previous.close()
+                except RuntimeError:
+                    pass
+        else:
+            clear_delineations(close_dialogs=True)
         dialog = BasinDialog(query, self.iface, native_dialog)
         dialog._native_query = query
         self._dialogs[native_dialog] = dialog
+        if getattr(query, 'source_kind', None) == 'rational':
+            binding = self._rational_layers._bindings.get(id(native_dialog))
+            basin = getattr(getattr(binding, 'panel', None), '_basin', None)
+            if basin is not None:
+                dialog.adopt_refined_basin(*basin)
         dialog.finished.connect(lambda result, parent=native_dialog, current=dialog: self._forget(parent, current))
         dialog.destroyed.connect(lambda *args, parent=native_dialog, current=dialog: self._forget(parent, current))
         dialog.show()
         dialog.raise_()
         dialog.activateWindow()
+
+    def _rational_basin_refined(self, native_dialog, key, analysis, query):
+        """Keep an already-open detailed basin window on the panel's MDT."""
+        dialog = self._dialogs.get(native_dialog)
+        if dialog is not None and getattr(query, 'source_kind', None) == 'rational':
+            dialog.adopt_refined_basin(key, analysis, query)
 
     def _forget(self, parent, dialog):
         if self._dialogs.get(parent) is dialog:
