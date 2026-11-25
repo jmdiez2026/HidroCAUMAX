@@ -104,10 +104,10 @@ class RationalLayersPanelTests(unittest.TestCase):
         resolution = self.discovered()
         panel = self.panel
         self.assertEqual(panel._selected_key(), '25')
-        self.assertEqual([panel.resolution_combo.itemData(i) for i in range(2)], ['25', '5'])
+        self.assertEqual([panel.resolution_combo.itemData(i) for i in range(3)], ['500', '25', '5'])
         options = resolution.options + [dict(key='2', resolution=2, available=False)]
         resolution.on_options(options)
-        self.assertFalse(panel.resolution_combo.model().item(2).isEnabled())
+        self.assertFalse(panel.resolution_combo.model().item(panel.resolution_combo.findData('2')).isEnabled())
         panel.resolution_combo.setCurrentIndex(panel.resolution_combo.findData('5'))
         panel.drainage_prepare_button.click()
         self.assertEqual(resolution.selections, ['5'])
@@ -152,7 +152,8 @@ class RationalLayersPanelTests(unittest.TestCase):
         resolution = panel._controller.resolution
         unavailable = [dict(option, available=option['key'] == '500') for option in resolution.options]
         resolution.on_options(unavailable)
-        self.assertFalse(panel._selected_available())
+        self.assertEqual(panel._selected_key(), '500')
+        self.assertTrue(panel._selected_available())  # native reference remains available
         clear_delineations()
         self.assertFalse(panel.refresh_context())
         self.assertEqual(resolution.discoveries, 1)

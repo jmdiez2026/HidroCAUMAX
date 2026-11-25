@@ -229,12 +229,29 @@ class RationalLayersController(QObject):
             return False
         try:
             numeric = float(key)
-            if not math.isfinite(numeric) or not 0 < numeric < 500:
-                raise ValueError('Selecciona una resolución mejorada inferior a 500 m.')
+            if not math.isfinite(numeric) or not 0 < numeric <= 500:
+                raise ValueError('Selecciona la resolución original o un MDT mejorado.')
             key = format(numeric, '.12g')
             if _query_signature(self.query) != self.signature:
                 self.set_context(self.query)
                 return False
+            base_key = format(min(self.base_analysis.cell_width, self.base_analysis.cell_height), '.12g')
+            if key == base_key:
+                # Reuse the CAUMAX native-resolution reference: do not download
+                # or generate another terrain. During coverage discovery do not
+                # cancel that task, so finer options can still become available.
+                discovery = (self.resolution.busy and
+                             getattr(self.resolution._task, 'kind', None) == 'discover')
+                if not discovery:
+                    self.cancel()
+                else:
+                    self._pending = self._basin_pending = None
+                    if self.drainage is not None:
+                        self.drainage.cancel()
+                self.active_key = key
+                self._on_basin(key, self.resolution.base_analysis,
+                               self.resolution.base_query)
+                return True
             self.cancel()
             self._basin_pending = key
             accepted = self.resolution.select(key)

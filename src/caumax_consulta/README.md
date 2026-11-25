@@ -2,6 +2,12 @@
 
 Complemento auxiliar para **CAUMAX 3.0 y QGIS 3 con Qt 5**. La versión del paquete y del diálogo es **1.2.13**. Conserva procesamiento con TauDEM, exportación de MDT, direcciones y red, curva hipsométrica, los seis cuantiles originales y **P₀ y precipitación máxima diaria de la cuenca**. Conserva el punto original de consulta y permite ajustar el cierre manualmente. Incluye comprobación de actualizaciones, interfaz compacta y **Análisis IA gratuito sin credenciales**. Esta revisión se verifica en Linux con QGIS 3.40.6 y GDAL 3.10.3; las pruebas históricas en Windows/QGIS 3.44.15 corresponden a la entrega anterior. Las pruebas reproducibles se encuentran en la carpeta `tests` del repositorio; los registros locales de sesiones no se publican.
 
+## Selección de resolución en Método racional
+
+La fila «Resolución MDT» permite comparar **500 × 500 m · original CAUMAX** (referencia, sin nueva descarga ni red TauDEM) con los MDT finos disponibles de 25 × 25 m y 5 × 5 m. Seleccionar una resolución actualiza la divisoria visible de QGIS sin requerir «Generar capas D8». El cierre calculado por CAUMAX se conserva como referencia; el botón «Ajustar punto de cierre» ofrece un ajuste manual opcional para las resoluciones finas. Los controles Original, Suavizada y Grado utilizan el procedimiento de suavizado ya disponible. La selección de 500 m restaura la geometría de referencia del Método racional y no modifica el caudal nativo.
+
+Los botones «Guardar cuenca», «Cuenca hidrográfica» y «Generar capas resolución mejorada» se encuentran en una misma fila, con logotipo GEA. El mensaje de estado de «Análisis IA» se muestra bajo la tabla, además de la ayuda emergente, para informar de peticiones en curso y errores del servicio.
+
 ## Capas de referencia
 
 En **Complementos → HidroCAUMAX → Cargar capas HidroCAUMAX**, el complemento añade **HidroCAUMAX · Capas de referencia** como **primer subgrupo dentro de CAUMAX_CAPAS**, por encima de **Red 10 km²**, **Ríos** y las demás capas de CAUMAX. Si CAUMAX_CAPAS aún no existe, se coloca en la primera posición del árbol. Al repetir el comando se recoloca también un grupo ya cargado, sin duplicarlo. Se respeta esta prioridad de dibujo aunque el proyecto utilice un orden de capas personalizado. Contiene siete subgrupos, en este orden:

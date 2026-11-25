@@ -18,6 +18,7 @@ from qgis.core import QgsCoordinateReferenceSystem
 
 from .rational_export import BUTTON_STYLE
 from .caumax_bridge import _LogoBasinButton, BUTTON_STYLE as BASIN_BUTTON_STYLE
+from .rational_export import BUTTON_NAME as EXPORT_BUTTON_NAME
 
 
 BUTTON_NAME = 'btnGenerarCapasResolucionMejoradaHidroCAUMAX'
@@ -101,6 +102,10 @@ class _Binding:
     auto_geometry: object = None
     fitting: bool = False
     basin_button: object = None
+    save_action: object = None
+    native_save_button: object = None
+    hidden_native_outline: object = None
+    native_outline_visibility: object = None
     action_row: object = None
     basin_ready: bool = False
     parameters_validated: bool = False
@@ -360,6 +365,9 @@ class RationalLayersBridge(QObject):
         for key, binding in tuple(self._bindings.items()):
             try:
                 self._sync_basin(binding)
+                if binding.save_action is not None:
+                    original = binding.native_save_button
+                    binding.save_action.setEnabled(original is not None and original.isEnabled())
                 if binding.button.isChecked():
                     self._refresh(binding)
                     self._fit_panel(binding)
@@ -385,6 +393,17 @@ class RationalLayersBridge(QObject):
         layout.setContentsMargins(0, 0, 0, 0)
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
+        # The existing exporter keeps ownership of its save operation. A
+        # proxy action in this row avoids reparenting/deleting the native button.
+        native_save = dialog.findChild(QPushButton, EXPORT_BUTTON_NAME)
+        save_action = _LogoBasinButton('Guardar cuenca...', container)
+        save_action.setObjectName('btnGuardarCuencaRacionalHidroCAUMAX')
+        save_action.setStyleSheet(BASIN_BUTTON_STYLE)
+        save_action.setToolTip('Guardar la cuenca original calculada por CAUMAX.')
+        save_action.setEnabled(native_save is not None and native_save.isEnabled())
+        row.addWidget(save_action, 0, Qt.AlignLeft)
+        if native_save is not None:
+            native_save.hide()
         basin_button = _LogoBasinButton('Cuenca hidrográfica', container)
         basin_button.setObjectName(BASIN_BUTTON_NAME)
         basin_button.setStyleSheet(BASIN_BUTTON_STYLE)
@@ -393,9 +412,9 @@ class RationalLayersBridge(QObject):
             candidate for candidate in (getattr(dialog, 'btnReport', None), getattr(dialog, 'btnClose', None))
             if isinstance(candidate, QPushButton))
         row.addWidget(basin_button, 0, Qt.AlignLeft)
-        button = QPushButton('Generar capas resolución mejorada', container)
+        button = _LogoBasinButton('Generar capas resolución mejorada', container)
         button.setObjectName(BUTTON_NAME)
-        button.setStyleSheet(BUTTON_STYLE)
+        button.setStyleSheet(BASIN_BUTTON_STYLE)
         button.setCheckable(True)
         button.setToolTip('Desplegar las opciones de generación para el punto de cálculo actual.')
         row.addWidget(button, 0, Qt.AlignLeft)
@@ -415,10 +434,14 @@ class RationalLayersBridge(QObject):
         dialog.layout().addWidget(container)
         binding = _Binding(dialog, container, button, scroll, error, self._canvas_crs())
         binding.basin_button, binding.action_row = basin_button, row
+        binding.save_action, binding.native_save_button = save_action, native_save
         key = id(dialog)
         self._bindings[key] = binding
         self._connect(binding, button.toggled, lambda checked: self._toggle(binding, checked))
         self._connect(binding, basin_button.clicked, lambda checked=False: self._request_basin(binding))
+        if native_save is not None:
+            self._connect(binding, save_action.clicked,
+                          lambda checked=False, source=native_save: source.click())
         for field_widget in (dialog.txtX, dialog.txtY):
             self._connect(binding, field_widget.textChanged, lambda *unused: self._coordinates_changed(binding))
         for name in _FLOW_INPUTS:
@@ -444,7 +467,12 @@ class RationalLayersBridge(QObject):
         except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
             pass
         self._sync_basin(binding)
-        QTimer.singleShot(0, basin_button.install_logo)
+        for action in (save_action, basin_button, button):
+            action.match_reference_buttons(
+                candidate for candidate in (getattr(dialog, 'btnReport', None),
+                                            getattr(dialog, 'btnClose', None))
+                if isinstance(candidate, QPushButton))
+            QTimer.singleShot(0, action.install_logo)
 
     @staticmethod
     def _connect(binding, signal, slot):
@@ -517,8 +545,36 @@ class RationalLayersBridge(QObject):
     def _notify_basin_refined(self, binding, key, analysis, query):
         if self._bindings.get(id(binding.dialog)) is not binding:
             return
+        # CAUMAX retains its native red polygon after a fine delineation.
+        # Temporarily hide it so QGIS shows the selected improved watershed,
+        # not the superposition of a coarse and a fine basin. Preserve the
+        # user's native visibility and restore it on returning to 500 m.
+        original = getattr(binding.dialog, 'rubberBand', None)
+        try:
+            if (original is not None and callable(getattr(original, 'setVisible', None))
+                    and callable(getattr(original, 'isVisible', None))):
+                if str(key) == '500':
+                    self._restore_native_outline(binding)
+                else:
+                    if binding.hidden_native_outline is not original:
+                        self._restore_native_outline(binding)
+                        binding.hidden_native_outline = original
+                        binding.native_outline_visibility = bool(original.isVisible())
+                    original.setVisible(False)
+        except RuntimeError:
+            binding.hidden_native_outline = binding.native_outline_visibility = None
         if self.on_basin_refined is not None:
             self.on_basin_refined(binding.dialog, key, analysis, query)
+
+    @staticmethod
+    def _restore_native_outline(binding):
+        original, previous = binding.hidden_native_outline, binding.native_outline_visibility
+        binding.hidden_native_outline = binding.native_outline_visibility = None
+        if original is not None and previous is not None:
+            try:
+                original.setVisible(bool(previous))
+            except RuntimeError:
+                pass
 
     def _wrap_native_body(self, binding):
         root = binding.dialog.layout()
@@ -651,6 +707,11 @@ class RationalLayersBridge(QObject):
             binding.dialog.removeEventFilter(self)
             self._collapse(binding)
             self._restore_native_layout(binding)
+            self._restore_native_outline(binding)
+            if binding.native_save_button is not None:
+                from qgis.PyQt import sip
+                if not sip.isdeleted(binding.native_save_button):
+                    binding.native_save_button.show()
             binding.dialog.layout().removeWidget(binding.container)
             binding.container.setParent(None)
             binding.container.deleteLater()

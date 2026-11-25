@@ -31,6 +31,7 @@ class RationalLayersPanel(DrainageControls):
         self._outline_choices = {}
         self._outline_loading = False
         self._queued_resolution = None
+        self._resolution_explicit = False
         self._on_basin_refined = on_basin_refined
         self._layers = DrainageLayers(iface)
         self._boundary_layers = BoundaryLayers()
@@ -139,21 +140,28 @@ class RationalLayersPanel(DrainageControls):
         try:
             self.resolution_combo.clear()
             for option in options:
-                if not 0 < float(option['resolution']) < 500:
+                if not 0 < float(option['resolution']) <= 500:
                     continue
                 key = str(option['key'])
                 index = self.resolution_combo.count()
                 resolution = format(float(option['resolution']), 'g').replace('.', ',')
-                self.resolution_combo.addItem(f'{resolution}×{resolution} m', key)
+                label = (f'{resolution}×{resolution} m · original CAUMAX'
+                         if key == '500' else f'{resolution}×{resolution} m')
+                self.resolution_combo.addItem(label, key)
                 available = bool(option.get('available'))
                 self.resolution_combo.setItemData(index, available, Qt.UserRole + 1)
                 self.resolution_combo.setItemData(index, option.get('status', ''), Qt.ToolTipRole)
                 self.resolution_combo.model().item(index).setEnabled(available)
             available_indices = [index for index in range(self.resolution_combo.count())
                                  if self.resolution_combo.itemData(index, Qt.UserRole + 1)]
-            chosen = self.resolution_combo.findData(previous)
+            # Keep an explicit user choice (including 500 m). For an untouched
+            # selector, prefer 25 m as soon as official coverage is discovered.
+            # The initially available 500 m baseline is not an implicit lock.
+            chosen = self.resolution_combo.findData(previous) if self._resolution_explicit else -1
             if chosen not in available_indices:
                 chosen = self.resolution_combo.findData('25')
+            if chosen not in available_indices:
+                chosen = self.resolution_combo.findData('500')
             if chosen not in available_indices:
                 chosen = available_indices[0] if available_indices else -1
             self.resolution_combo.setCurrentIndex(chosen)
@@ -164,19 +172,28 @@ class RationalLayersPanel(DrainageControls):
         self._update_controls()
         if self._queued_prepare and self._selected_available():
             QTimer.singleShot(0, self._resume_prepare)
-        elif (self._basin is None and self._selected_available()
+        elif (self._selected_available()
+              and (self._basin is None or self._basin[0] != self._selected_key())
               and self._queued_resolution != self._selected_key()):
-            # Initial selection of 25 m must delineate without pressing D8.
+            # During discovery 500 m is the only initially enabled option.
+            # Avoid accidentally cancelling discovery just to display it.
+            # A deliberate 500 m selection is always honoured, however.
+            awaiting_coverage = any(
+                item.get('status') == 'Pendiente de consultar cobertura'
+                for item in options if str(item.get('key')) != '500')
             key = self._selected_key()
-            self._queued_resolution = key
-            QTimer.singleShot(0, lambda selected=key: self._start_delineation(selected))
+            if key != '500' or self._resolution_explicit or not awaiting_coverage:
+                self._queued_resolution = key
+                QTimer.singleShot(0, lambda selected=key: self._start_delineation(selected))
 
     def _default_threshold(self):
         if self._state is not None or not self.drainage_auto.isChecked():
             return
         key = self._selected_key()
         reference = self._controller.base_analysis
-        if key is None or reference is None:
+        if key is None or reference is None or key == '500':
+            # The original 500 m entry is informational and its native basin
+            # is not a TauDEM network product.
             return
         cell_area = float(key) ** 2
         recommended = recommended_threshold(reference.area_m2, cell_area)
@@ -196,15 +213,19 @@ class RationalLayersPanel(DrainageControls):
         if key != self._selected_key() or not self._selected_available():
             return
         self._queued_resolution = key
-        self._status(f'Delineando automáticamente la cuenca con MDT de {key} m…', 0)
+        label = ('Recuperando divisoria original de CAUMAX (500 m)…' if key == '500'
+                 else f'Delineando automáticamente la cuenca con MDT de {key} m…')
+        self._status(label, 0)
         self._controller.select_resolution(key)
         self._update_controls()
 
     def _resolution_changed(self, *args):
         if self._loading or self._disposed:
             return
+        self._resolution_explicit = True
         self._threshold_timer.stop()
-        self._controller.cancel()
+        # The selection itself cancels stale fine work. Do not cancel a fresh
+        # background coverage discovery when the user selects 500 m.
         self._discard_result()
         self._default_threshold()
         self._start_delineation()
@@ -220,16 +241,30 @@ class RationalLayersPanel(DrainageControls):
                                          and not (self._controller.drainage is not None
                                                   and self._controller.drainage.busy))
         self.outlet_button.setEnabled(context and not busy and
-                                      self._controller.resolution is not None)
+                                      self._controller.resolution is not None and
+                                      self._selected_key() != '500')
+        self.outlet_button.setToolTip(
+            'La referencia de 500 m conserva el cierre original de CAUMAX.'
+            if self._selected_key() == '500' else
+            'Corrección manual opcional del cierre del MDT seleccionado.')
         can_outline = self._basin is not None and not busy and self._basin[0] == self._selected_key()
         for control in (self.original_check, self.smooth_check, self.smoothing_degree):
             control.setEnabled(can_outline)
         self.export_boundary_button.setEnabled(can_outline and bool(self._outlines))
         # An explicit click can retry a failed reference or interrupted
         # coverage discovery; periodic context checks still never restart it.
-        self.drainage_prepare_button.setEnabled(context and not busy)
-        self.drainage_threshold.setEnabled(ready and not busy)
-        self.drainage_auto.setEnabled(ready and not busy)
+        # The 500 m option is a native CAUMAX reference, not a TauDEM
+        # high-resolution product. The delineation and smoothing remain usable.
+        refined = self._selected_key() != '500'
+        no_fine_coverage = not any(
+            option.get('available') and str(option.get('key')) != '500'
+            for option in self._controller.options)
+        # If official fine coverage is temporarily unavailable, keep the
+        # existing Generate action usable to retry its discovery from 500 m.
+        self.drainage_prepare_button.setEnabled(
+            context and not busy and (refined or no_fine_coverage))
+        self.drainage_threshold.setEnabled(ready and not busy and refined)
+        self.drainage_auto.setEnabled(ready and not busy and refined)
         self.drainage_visible.setEnabled(self._state is not None and not busy)
         exportable = self._state is not None and self._products is not None and not busy
         exportable = exportable and not self._threshold_timer.isActive()
@@ -248,6 +283,16 @@ class RationalLayersPanel(DrainageControls):
         if self._disposed:
             return
         self._threshold_timer.stop()
+        if self._selected_key() == '500':
+            resolution = self._controller.resolution
+            if (resolution is not None and not self._controller.busy and
+                    not any(option.get('available') and str(option.get('key')) != '500'
+                            for option in self._controller.options)):
+                self._status('Consultando de nuevo la cobertura de MDT mejorados…', 0)
+                resolution.discover()
+            else:
+                self._status('500×500 m: cuenca original CAUMAX. Para generar D8 elige 25 o 5 m.', 100)
+            return
         self.refresh_context()
         if self._controller.query is None:
             return
@@ -346,7 +391,9 @@ class RationalLayersPanel(DrainageControls):
             self._outlines = geometries
             self._outline_choices[key] = (self.original_check.isChecked(),
                 self.smooth_check.isChecked(), self.smoothing_degree.value())
-            self._status(f'Divisoria MDT {key} m: {analysis.area_m2 / 1e6:.3f} km². '
+            prefix = ('Divisoria original CAUMAX · 500 m' if key == '500'
+                      else f'Divisoria MDT mejorado · {key} m')
+            self._status(f'{prefix}: {analysis.area_m2 / 1e6:.3f} km². '
                          'Contorno original y suavizado disponibles en QGIS.', 100)
         except (RuntimeError, ValueError, TypeError) as error:
             self._status('No se puede mostrar/suavizar la divisoria: ' + str(error), 0)

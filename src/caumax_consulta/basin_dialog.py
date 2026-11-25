@@ -230,6 +230,12 @@ class BasinDialog(QDialog):
         self.table.horizontalHeader().setMinimumSectionSize(20)
         self.table.setItemDelegateForColumn(3, InterpretationDelegate(self.table))
         self.table.setMinimumHeight(280)
+        self.ai_status_label = QLabel(group)
+        self.ai_status_label.setObjectName('HidroCAUMAXAIStatus')
+        self.ai_status_label.setTextFormat(Qt.PlainText)
+        self.ai_status_label.setWordWrap(True)
+        self.ai_status_label.setStyleSheet('QLabel { color: #174D78; padding: 2px 4px; }')
+        self.ai_status_label.hide()
         for row, metric in enumerate(METRICS):
             for column, text in enumerate((metric.label, 'Calculando…', metric.unit, '')):
                 item = QTableWidgetItem(text)
@@ -243,6 +249,7 @@ class BasinDialog(QDialog):
         self.table.horizontalHeader().sectionResized.connect(lambda *args: self._row_timer.start(80))
         self.table.viewport().installEventFilter(self)
         box.addWidget(self.table)
+        box.addWidget(self.ai_status_label)
         layout.addWidget(group)
         from .hypsometry import HypsometricWidget
         self.hypsometry_widget = HypsometricWidget(self)
@@ -624,6 +631,11 @@ class BasinDialog(QDialog):
 
     def _set_ai_status(self, message):
         self._ai_status_message = str(message)
+        if hasattr(self, 'ai_status_label'):
+            self.ai_status_label.setText(self._ai_status_message)
+            self.ai_status_label.setVisible(
+                self._ai_status_message !=
+                'Generar las interpretaciones de la cuenca con IA gratuita.')
         for button in (self.analysis_ai_button,self.analysis_header_button):
             button.setToolTip(self._ai_status_message)
             button.setAccessibleDescription(self._ai_status_message)
@@ -697,6 +709,7 @@ class BasinDialog(QDialog):
     def _show_ai_analysis(self):
         """Fill the table asynchronously without opening any analysis window."""
         if not self._ai_available():
+            self._set_ai_status('Análisis IA no disponible hasta terminar los cálculos de la cuenca.')
             self._refresh_ai_button()
             return
         try:
@@ -1562,6 +1575,13 @@ class BasinDialog(QDialog):
             key = str(key)
             if key not in {item['key'] for item in controller.options}:
                 return False
+            if key == controller._base_key:
+                # The panel shows the 500 m reference for information. Restore
+                # our actual verified native rational basin; never replace it
+                # with the parallel terrain controller's re-polygonization.
+                if self._active_resolution_key != key:
+                    return bool(controller.select(key))
+                return True
             if (self._active_resolution_key == key and self.analysis is analysis):
                 return True
             # Independently check that the imported high-resolution watershed

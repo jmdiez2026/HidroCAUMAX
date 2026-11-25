@@ -304,8 +304,11 @@ class RationalLayersBridgeTests(unittest.TestCase):
         self.assertTrue(binding.basin_button.isEnabled())
         self.assertEqual(binding.basin_button.text(),'Cuenca hidrográfica')
         self.assertFalse(binding.basin_button.icon().isNull())
-        self.assertEqual(binding.action_row.indexOf(binding.basin_button),0)
-        self.assertEqual(binding.action_row.indexOf(binding.button),1)
+        self.assertEqual(binding.action_row.indexOf(binding.save_action),0)
+        self.assertEqual(binding.action_row.indexOf(binding.basin_button),1)
+        self.assertEqual(binding.action_row.indexOf(binding.button),2)
+        self.assertFalse(binding.save_action.icon().isNull())
+        self.assertFalse(binding.button.icon().isNull())
         self.assertEqual(len(self.dialog.findChildren(QPushButton,BASIN_BUTTON_NAME)),1)
         query=object();calculator=self.dialog.basinCalc
         with patch('caumax_consulta.rational_basin.capture_rational_query',return_value=query) as capture:
