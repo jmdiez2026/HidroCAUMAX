@@ -113,6 +113,7 @@ class BasinDialog(QDialog):
         self._ai_request = None
         self._ai_status_message = 'Generar las interpretaciones de la cuenca con IA gratuita.'
         self._base_geometry_wkb = None
+        self._pending_external_basin = None
         self._outlet_selector = None
         self._outlet_apply_pending = False
         self._outlet_offer_pending = False
@@ -796,6 +797,9 @@ class BasinDialog(QDialog):
         self.smoothing_degree.blockSignals(False)
         self._update_smoothing()
         self._setup_resolutions()
+        if self._pending_external_basin is not None:
+            pending, self._pending_external_basin = self._pending_external_basin, None
+            self.adopt_refined_basin(*pending)
 
     def _display_analysis(self, quantile_snapshot=None):
         key = f'{min(self.analysis.cell_width, self.analysis.cell_height):g}'
@@ -1536,6 +1540,71 @@ class BasinDialog(QDialog):
         if not self._resolution_loading:
             self._queue_smoothing()
         self._resume_outlet_selection()
+
+    def adopt_refined_basin(self, key, analysis, source_query):
+        """Reuse the panel's verified fine delineation in this rational dialog.
+
+        Preserve this dialog's native CAUMAX flow, period and cell provenance.
+        Never import a new flow estimate from the terrain-only panel.
+        """
+        if self._disposed or not is_rational_query(getattr(self, '_native_query', self.query)):
+            return False
+        controller = self._resolution_controller
+        if controller is None or self.analysis is None:
+            self._pending_external_basin = (key, analysis, source_query)
+            return False
+        try:
+            # The native calculator may have rounded its display point to 0.1 m.
+            if (abs(float(source_query.x) - float(controller.base_query.x)) > 0.11
+                    or abs(float(source_query.y) - float(controller.base_query.y)) > 0.11
+                    or source_query.crs.toWkt() != controller.base_query.crs.toWkt()):
+                return False
+            key = str(key)
+            if key not in {item['key'] for item in controller.options}:
+                return False
+            if (self._active_resolution_key == key and self.analysis is analysis):
+                return True
+            # Independently check that the imported high-resolution watershed
+            # overlaps the actual native Rational-method 500 m reference.
+            base_crs = QgsCoordinateReferenceSystem.fromWkt(controller.base_analysis.crs_wkt)
+            fine_crs = QgsCoordinateReferenceSystem.fromWkt(analysis.crs_wkt)
+            original = QgsGeometry()
+            original.fromWkb(bytes(controller.base_analysis.geometry_wkb))
+            refined = QgsGeometry()
+            refined.fromWkb(bytes(analysis.geometry_wkb))
+            if fine_crs != base_crs:
+                refined.transform(QgsCoordinateTransform(fine_crs, base_crs,
+                                                          QgsProject.instance()))
+            overlap = original.intersection(refined)
+            common_area = overlap.area() if not overlap.isNull() else 0
+            if (original.area() <= 0 or refined.area() <= 0
+                    or common_area <= .5 * original.area()
+                    or common_area <= .5 * refined.area()):
+                self.resolution_status.setText(
+                    'La divisoria refinada no acredita correspondencia espacial '
+                    'con la cuenca racional original. Selecciona el MDT aquí para recalcular.')
+                return False
+            query = replace(controller.base_query, dem_path=source_query.dem_path,
+                            directions_path=source_query.directions_path)
+            self._cancel_basin_hydrology()
+            self._cancel_drainage()
+            self._cancel_surface()
+            self._cache_variant_state()
+            controller.variants[key] = dict(analysis=analysis, query=query,
+                smoothing_state=None, metadata={'provider': 'HidroCAUMAX',
+                'source': 'panel racional; pendiente de comprobación D8 frente a la base nativa'})
+            # Do not pretend the raster-chain proof against the native CAUMAX
+            # base was executed. An explicit later selection reruns that proof.
+            controller._automatic_references.pop(key, None)
+            for item in controller.options:
+                if item['key'] == key:
+                    item['available'] = True
+                    item['status'] = 'Divisoria importada; revalidar al seleccionar de nuevo'
+            self._resolution_result(key, analysis, query)
+            return True
+        except (AttributeError, RuntimeError, TypeError, ValueError, OSError) as error:
+            self.resolution_status.setText('No se ha podido sincronizar la cuenca: ' + str(error))
+            return False
 
     def _resolution_metadata(self, key=None):
         controller = self._resolution_controller
