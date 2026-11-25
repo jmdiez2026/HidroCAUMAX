@@ -163,7 +163,10 @@ class RationalLayersPanel(DrainageControls):
             if chosen not in available_indices:
                 chosen = self.resolution_combo.findData('500')
             if chosen not in available_indices:
-                chosen = available_indices[0] if available_indices else -1
+                # Display the pending 25 m size instead of a blank selector;
+                # its disabled state prevents selection before verification.
+                chosen = (available_indices[0] if available_indices else
+                          self.resolution_combo.findData('25'))
             self.resolution_combo.setCurrentIndex(chosen)
         finally:
             self.resolution_combo.blockSignals(False)
