@@ -185,7 +185,8 @@ def build(source: Path, output: Path, tag: str | None = None,
         raise ValueError('Build output must be outside plugin source.')
     metadata = read_metadata(source)
     version = metadata['version']
-    expected_tag = 'v'+version
+    # Public reset v1.0; technical package metadata stays 1.0.0.
+    expected_tag = 'v1.0' if version == '1.0.0' else 'v'+version
     if tag is not None and tag != expected_tag:
         raise ValueError(f'Tag {tag!r} does not match metadata version {expected_tag}.')
     tag = expected_tag
@@ -224,7 +225,8 @@ def build(source: Path, output: Path, tag: str | None = None,
     channel = 'experimental' if manifest['experimental'] else 'estable'
     changelog = source/'CHANGELOG.md'
     changes = changelog.read_text(encoding='utf-8') if changelog.is_file() else ''
-    notes = (f'HidroCAUMAX {version} para QGIS 3.34–3.99.\n\n'
+    public_version = tag if tag == 'v1.0' else version
+    notes = (f'HidroCAUMAX {public_version} para QGIS 3.34–3.99.\n\n'
         f'Canal {channel}; requiere CAUMAX original.\n\n'
         + (changes.strip()+'\n\n' if changes else '') +
         f'Repositorio QGIS: {index_url}\n\n'
@@ -244,7 +246,7 @@ def build(source: Path, output: Path, tag: str | None = None,
 <html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>HidroCAUMAX — repositorio QGIS</title>
 <main style="max-width:52rem;margin:3rem auto;padding:0 1rem;font:1.1rem/1.6 system-ui">
-<h1>HidroCAUMAX {html.escape(version)}</h1>
+<h1>HidroCAUMAX {html.escape(public_version)}</h1>
 <p>Canal {channel} para QGIS 3.34–3.99. Requiere CAUMAX original.</p>
 <p>Añade este repositorio desde Complementos → Administrar e instalar complementos → Configuración:</p>
 <p><a href="plugins.xml">{html.escape(index_url)}</a></p>

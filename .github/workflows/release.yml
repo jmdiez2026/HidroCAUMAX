@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Etiqueta existente que coincide con metadata.txt (por ejemplo v1.2.13)'
+        description: 'Etiqueta existente que coincide con metadata.txt (v1.0 para paquete 1.0.0)'
         required: true
         type: string
 
@@ -266,3 +266,40 @@ jobs:
         uses: actions/deploy-pages@v4
         with:
           artifact_name: github-pages-${{ github.run_id }}-${{ github.run_attempt }}
+
+  retire-older-releases:
+    needs: [build, publish]
+    if: ${{ needs.build.result == 'success' && needs.publish.result == 'success' && needs.build.outputs.release_tag == 'v1.0' && github.repository == 'jmdiez2026/HidroCAUMAX' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Comprobar publicación v1.0 completa antes de retirar las once versiones históricas
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/$GH_REPO/releases/tags/v1.0" --jq '.tag_name' | grep -Fx 'v1.0'
+          gh api "repos/$GH_REPO/git/ref/tags/v1.0" --jq '.object.sha' | grep -Eq '^[0-9a-f]{40}$'
+          test -n "$(gh api "repos/$GH_REPO/releases/tags/v1.0" --jq '.assets[] | select(.name == "HidroCAUMAX_v1_0_0.zip") | .id')"
+          test -n "$(gh api "repos/$GH_REPO/releases/tags/v1.0" --jq '.assets[] | select(.name == "HidroCAUMAX_v1_0_0_Setup.exe") | .id')"
+      - name: Eliminar únicamente las once versiones previas expresamente solicitadas
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for old in v1.2.2 v1.2.3 v1.2.4 v1.2.5 v1.2.6 v1.2.7 v1.2.8 v1.2.10 v1.2.11 v1.2.12 v1.2.13; do
+            id="$(gh api "repos/$GH_REPO/releases/tags/$old" --jq '.id' 2>/dev/null || true)"
+            if [ -n "$id" ]; then
+              gh api -X DELETE "repos/$GH_REPO/releases/$id"
+            fi
+            if gh api "repos/$GH_REPO/git/ref/tags/$old" >/dev/null 2>&1; then
+              gh api -X DELETE "repos/$GH_REPO/git/refs/tags/$old"
+            fi
+            echo "Versión histórica $old retirada (si existía)."
+          done

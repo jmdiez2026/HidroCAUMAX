@@ -153,6 +153,18 @@ class ReleasePackagingTests(unittest.TestCase):
         manifest=self.build(reuse_zip=supplied)
         self.assertEqual(supplied.read_bytes(),(self.output/manifest['package']).read_bytes())
 
+    def test_public_v1_0_alias_preserves_qgis_three_part_version(self):
+        (self.source/'metadata.txt').write_text(
+            METADATA.replace('v1.2.2', 'v1.0').replace('version=1.2.2', 'version=1.0.0'),
+            encoding='utf-8')
+        manifest=self.build(tag='v1.0')
+        self.assertEqual((manifest['tag'], manifest['version']), ('v1.0', '1.0.0'))
+        self.assertEqual(manifest['package'], 'HidroCAUMAX_v1_0_0.zip')
+        plugin=ET.parse(self.output/'plugins.xml').getroot().find('pyqgis_plugin')
+        self.assertEqual(plugin.attrib, {'name':'HidroCAUMAX v1.0','version':'1.0.0'})
+        self.assertEqual(plugin.findtext('download_url'),
+            'https://github.com/jmdiez2026/HidroCAUMAX/releases/download/v1.0/HidroCAUMAX_v1_0_0.zip')
+
     def test_version_tag_mismatch_fails_before_output(self):
         with self.assertRaisesRegex(ValueError,'does not match'):
             self.build(tag='v1.2.1')

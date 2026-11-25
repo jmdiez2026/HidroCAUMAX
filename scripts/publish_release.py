@@ -145,7 +145,7 @@ def publish(output: Path, repository: str, dry_run: bool=False, verify_only: boo
             raise ValueError('Release does not exist; verification never creates it.')
         _unchanged_assets(assets,digests)
         command=['gh','release','create',tag,*map(str,assets),'--repo',repository,
-            '--verify-tag','--title','HidroCAUMAX '+manifest['version'],
+            '--verify-tag','--title',('HidroCAUMAX v1.0' if tag == 'v1.0' else 'HidroCAUMAX '+manifest['version']),
             '--notes-file',str(output/'release_notes.md')]
         if manifest['experimental']:
             command.append('--prerelease')

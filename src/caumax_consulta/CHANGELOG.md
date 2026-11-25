@@ -1,3 +1,14 @@
+# HidroCAUMAX v1.0 — reinicio de numeración (2026-11-25)
+
+- Nueva identificación pública **v1.0**; versión técnica QGIS **1.0.0** y etiqueta Git **v1.0**.
+- Método racional: selector **500 × 500 m · original CAUMAX**, restauración de la divisoria básica y recálculo automático 25/5 m; suavizado, cierre manual opcional y capa visible en QGIS.
+- Fila inferior: **Guardar cuenca**, **Cuenca hidrográfica** y **Generar capas resolución mejorada**, con iconos GEA. Controles nativos más compactos.
+- **Análisis IA** informa visiblemente del estado y errores. Su contenido depende de un servicio externo.
+- Umbral de inicio de drenaje dependiente de superficie, con ajustes finos y reducciones automáticas si TauDEM no produce tramos; no es un criterio normativo de nacimiento de cauces.
+- Se conserva el historial funcional de la serie 1.2.x a continuación.
+
+---
+
 # HidroCAUMAX 1.2.13
 
 ## Cierre automático de mínima distancia en Método racional
