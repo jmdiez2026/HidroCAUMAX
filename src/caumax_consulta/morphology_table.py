@@ -223,3 +223,18 @@ class InterpretationDelegate(QStyledItemDelegate):
         metrics=QFontMetrics(option.font)
         size.setHeight(min(size.height(), max(metrics.height(),metrics.lineSpacing()) * 3 + 6))
         return size
+
+
+def fit_morphology_rows(table):
+    """Fit body rows without the hidden vertical header's padded section size.
+
+    Keep six pixels of breathing room for a single line. Wrapped parameter
+    names and interpretations retain the height required by their delegates;
+    the interpretation delegate still limits the visible text to three lines.
+    This does not change the horizontal header or any font.
+    """
+    metrics = table.fontMetrics()
+    minimum = max(metrics.height(), metrics.lineSpacing()) + 6
+    table.verticalHeader().setMinimumSectionSize(minimum)
+    for row in range(table.rowCount()):
+        table.setRowHeight(row, max(minimum, table.sizeHintForRow(row)))

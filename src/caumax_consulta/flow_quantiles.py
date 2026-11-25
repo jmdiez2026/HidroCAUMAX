@@ -316,19 +316,20 @@ def render_quantile_plots(snapshot,width=1100,height=500,font_family=None,*,fit_
 
 class _Plots(QWidget):
     def __init__(self,parent):
-        super().__init__(parent);self.state=None;self.setMinimumHeight(324)
+        super().__init__(parent);self.state=None;self.setMinimumHeight(292)
         policy=QSizePolicy(QSizePolicy.Expanding,QSizePolicy.Preferred)
         policy.setHeightForWidth(True);self.setSizePolicy(policy)
-    def sizeHint(self):return QSize(640,324)
+    def sizeHint(self):return QSize(640,292)
     def heightForWidth(self,width):
+        # A further 10% reduction of the 1.2.10 screen height (0.9 * 0.9).
         base=680 if width<580 else 360
-        if self.state is None:return round(base*.9)
+        if self.state is None:return round(base*.81)
         from .quantile_graphics import geometry
         state=self.state
         height=geometry(state,_known(state['flows']),
             estimate_flow(state['input_period'],state['flows'],state['extrapolate']),
             estimate_period(state['input_flow'],state['flows'],state['extrapolate']),width,base)['height']
-        return round(height*.9)
+        return round(height*.81)
     def resizeEvent(self,event):
         super().resizeEvent(event)
         height=self.heightForWidth(self.width())

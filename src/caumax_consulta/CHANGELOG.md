@@ -1,3 +1,18 @@
+# HidroCAUMAX 1.2.11
+
+## Gráficos y pie de la ventana más compactos
+
+- Los bloques de gráficos Qci/T y Pd/T reducen su altura al 90 % de la que tenían en 1.2.10: 324 → 292 píxeles en la disposición horizontal habitual, y reducción proporcional en la disposición vertical. Se mantienen el ancho, las fuentes, los valores y la geometría de las figuras exportadas al informe.
+- El recuadro Informe ocupa una sola fila compacta: Informe (PDF), Guardar proyecto y Abrir proyecto a la izquierda; Cerrar a la derecha, con fondo rojo claro y altura alineada. El cierre conserva su conexión con la limpieza del diálogo.
+- **Consulta de precipitación:** Consultar T(Pd) comienza en 100 mm para una cuenca nueva. Los proyectos guardados conservan el valor elegido. La casilla Permitir extrapolación se coloca entre las entradas y los resultados, centrada entre las dos filas, igual que en la consulta de caudales.
+- **Tabla morfológica:** filas más compactas con un margen cómodo para el texto; el encabezado conserva su altura y las interpretaciones pueden ocupar varias líneas.
+
+
+- **Acceso a la cuenca:** el botón Cuenca hidrográfica aumenta su altura un 10 % respecto a 1.2.10.
+
+
+---
+
 # HidroCAUMAX 1.2.10
 
 ## CAUMAX como único complemento previo

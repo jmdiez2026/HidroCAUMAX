@@ -232,16 +232,17 @@ class _PrecipitationPlots(QWidget):
     def __init__(self,parent):
         super().__init__(parent)
         self.state=None
-        self.setMinimumHeight(324)
+        self.setMinimumHeight(292)
 
-    def sizeHint(self):return QSize(640,324)
+    def sizeHint(self):return QSize(640,292)
 
     def heightForWidth(self,width):
+        # A further 10% reduction of the 1.2.10 screen height (0.9 * 0.9).
         base=680 if width<580 else 360
-        if self.state is None:return round(base*.9)
+        if self.state is None:return round(base*.81)
         from .quantile_graphics import geometry
         state,known,forward,inverse=_precipitation_plot_inputs(self.state)
-        return round(geometry(state,known,forward,inverse,width,base)['height']*.9)
+        return round(geometry(state,known,forward,inverse,width,base)['height']*.81)
 
     def resizeEvent(self,event):
         super().resizeEvent(event)
@@ -332,6 +333,7 @@ class BasinHydrologyWidget(QWidget):
         self.precipitation_spin = QDoubleSpinBox(self)
         self.precipitation_spin.setDecimals(2)
         self.precipitation_spin.setRange(0,1e9)
+        self.precipitation_spin.setValue(100)
         self.precipitation_spin.setSuffix(' mm')
         control_width=max(110,self.precipitation_spin.fontMetrics().horizontalAdvance('9999,99 mm')+24)
         self.period_spin.setFixedWidth(control_width)
@@ -345,14 +347,14 @@ class BasinHydrologyWidget(QWidget):
             label.setFont(result_font)
         controls.addWidget(QLabel('Consultar Pd(T)',self),0,0)
         controls.addWidget(self.period_spin,0,1)
-        controls.addWidget(self.forward_label,0,2)
+        controls.addWidget(self.forward_label,0,3)
         controls.addWidget(QLabel('Consultar T(Pd)',self),1,0)
         controls.addWidget(self.precipitation_spin,1,1)
-        controls.addWidget(self.inverse_label,1,2)
-        controls.setColumnStretch(2,1)
-        self.extrapolate_check = QCheckBox('Permitir extrapolación',self)
+        controls.addWidget(self.inverse_label,1,3)
+        controls.setColumnStretch(3,1)
+        self.extrapolate_check = QCheckBox('Permitir\nextrapolación',self)
         self.extrapolate_check.setChecked(True)
-        controls.addWidget(self.extrapolate_check,2,0,1,3)
+        controls.addWidget(self.extrapolate_check,0,2,2,1,Qt.AlignVCenter)
         rainfall_layout.addLayout(controls)
         self.method_label = QLabel(self)
         self.method_label.setWordWrap(True)
@@ -469,7 +471,7 @@ class BasinHydrologyWidget(QWidget):
         else:
             restored = _normalise(dict(version=1,basin_fingerprint=fingerprint,basin_area_m2=area,
                 p0_result=None,rainfall_results={},input_period=100.,
-                input_precipitation=0.,extrapolate=True,method=METHOD))
+                input_precipitation=100.,extrapolate=True,method=METHOD))
         self._analysis = analysis
         self._apply(restored)
 

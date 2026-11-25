@@ -33,8 +33,9 @@ QPushButton:disabled { color: #7A8790; background-color: #EAF3F8; }
 
 
 class _LogoBasinButton(QPushButton):
-    """Size the label and height to 110% of the native buttons on the right."""
+    """Keep the label and logo size while making the existing button 10% taller."""
     SCALE = 1.10
+    HEIGHT_SCALE = 1.10
 
     def __init__(self, text, parent=None):
         self._reference_buttons = ()
@@ -61,9 +62,10 @@ class _LogoBasinButton(QPushButton):
             reference_height = max(
                 button.height() if button.isVisible() else button.sizeHint().height()
                 for button in self._reference_buttons)
-            self.setFixedHeight(max(1, round(reference_height * self.SCALE)))
+            original_height = max(1, round(reference_height * self.SCALE))
+            self.setFixedHeight(max(1, round(original_height * self.HEIGHT_SCALE)))
             if not self._logo.isNull():
-                height = max(1, min(self.fontMetrics().height(), self.height() - 4))
+                height = max(1, min(self.fontMetrics().height(), original_height - 4))
                 width = max(1, round(height * self._logo.width() / self._logo.height()))
                 self.setIconSize(QSize(width, height))
             # Native Qt painting keeps the font unchanged; the width includes

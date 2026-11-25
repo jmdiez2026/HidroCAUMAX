@@ -57,25 +57,39 @@ class DialogLayoutTests(unittest.TestCase):
                 self.assertLess(button.height(),30)
                 self.assertLess(button.width(),160)
 
-    def test_report_buttons_use_ninety_percent_natural_height_and_compact_centered_widths(self):
+    def test_report_buttons_are_compact_left_aligned_with_close_at_right_in_one_row(self):
         dialog=self.dialog
-        buttons=(dialog.report_button,dialog.save_project_button,dialog.open_project_button)
-        for button in buttons:
+        buttons=(dialog.report_button,dialog.save_project_button,dialog.open_project_button,dialog.close_button)
+        group=dialog.report_button.parentWidget()
+        self.assertTrue(group.isAncestorOf(dialog.close_button))
+        self.assertEqual(dialog.layout().indexOf(dialog.close_button.parentWidget()),-1)
+        for button in buttons[:3]:
             baseline=QPushButton(button.text(),button.parentWidget())
             baseline.ensurePolished()
             self.assertEqual(button.height(),round(baseline.sizeHint().height()*.90))
             self.assertGreaterEqual(button.height(),button.fontMetrics().height()+4)
             baseline.deleteLater()
+        self.assertEqual(dialog.close_button.height(),dialog.report_button.height())
         for width in (520,650,900):
-            dialog.resize(width,900)
-            self.fixture.app.processEvents()
-            group=buttons[0].parentWidget()
-            self.assertEqual(len({button.y() for button in buttons}),1)
-            self.assertLessEqual(abs((buttons[0].x()+buttons[-1].geometry().right())/2-group.width()/2),1)
-            for button in buttons:
-                self.assertLessEqual(button.width(),button.sizeHint().width()+1)
-                self.assertGreaterEqual(button.width(),button.fontMetrics().horizontalAdvance(button.text())+20)
-                self.assertLessEqual(button.geometry().right(),group.width())
+            with self.subTest(width=width):
+                dialog.resize(width,900)
+                self.fixture.app.processEvents()
+                self.assertEqual(dialog.width(),width)
+                row=group.layout()
+                margins=row.contentsMargins()
+                bounds=group.contentsRect().adjusted(margins.left(),margins.top(),-margins.right(),-margins.bottom())
+                self.assertEqual(len({button.mapTo(group,button.rect().center()).y() for button in buttons}),1)
+                self.assertLessEqual(abs(buttons[0].x()-bounds.left()),1)
+                close_right=dialog.close_button.mapTo(group,dialog.close_button.rect().topRight()).x()
+                self.assertLessEqual(abs(close_right-bounds.right()),1)
+                for left,right in zip(buttons[:2],buttons[1:3]):
+                    self.assertEqual(right.x()-left.geometry().right()-1,row.spacing())
+                close_left=dialog.close_button.mapTo(group,QPoint()).x()
+                self.assertGreater(close_left,dialog.open_project_button.geometry().right())
+                for button in buttons:
+                    self.assertLessEqual(button.width(),button.sizeHint().width()+1)
+                    self.assertGreaterEqual(button.width(),button.fontMetrics().horizontalAdvance(button.text())+12)
+                    self.assertLessEqual(button.mapTo(group,button.rect().topRight()).x(),bounds.right())
 
     def test_resolution_and_complete_smoothing_section_are_first(self):
         dialog = self.dialog

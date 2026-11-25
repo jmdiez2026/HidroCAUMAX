@@ -434,7 +434,7 @@ def network_request():
     request = QNetworkRequest(url)
     request.setHeader(QNetworkRequest.ContentTypeHeader, 'application/json')
     request.setRawHeader(b'Accept', b'application/json')
-    request.setRawHeader(b'User-Agent', b'HidroCAUMAX/1.2.10')
+    request.setRawHeader(b'User-Agent', b'HidroCAUMAX/1.2.11')
     request.setRawHeader(b'Cache-Control', b'no-store')
     request.setAttribute(QNetworkRequest.CacheLoadControlAttribute, QNetworkRequest.AlwaysNetwork)
     request.setAttribute(QNetworkRequest.CacheSaveControlAttribute, False)

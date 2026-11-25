@@ -24,7 +24,7 @@ from qgis.gui import QgsRubberBand, QgsVertexMarker
 
 from .parameter_schema import METRICS, format_value
 from .metrics import shape_metrics
-from .morphology_table import ActionGroupBox, InterpretationDelegate, InterpretationHeader
+from .morphology_table import ActionGroupBox, InterpretationDelegate, InterpretationHeader, fit_morphology_rows
 from .drainage_panel import DrainageControls, DrainageStatusLabel
 
 
@@ -95,7 +95,7 @@ class BasinDialog(QDialog):
     def __init__(self, query, iface, parent=None, saved_session=None):
         super().__init__(parent)
         self.setObjectName('CaumaxCuencaHidrograficaDialog')
-        self.setWindowTitle('HidroCAUMAX v1.2.10 · Cuenca hidrográfica')
+        self.setWindowTitle('HidroCAUMAX v1.2.11 · Cuenca hidrográfica')
         self.setStyleSheet(BLUE_BUTTON_STYLE)
         self.setAttribute(Qt.WA_DeleteOnClose)
         self.setModal(False)
@@ -385,7 +385,10 @@ class BasinDialog(QDialog):
         drainage_group.hide()
         self._refresh_drainage_controls()
         reports = QGroupBox('Informe', self)
+        reports.setSizePolicy(QSizePolicy.Preferred,QSizePolicy.Fixed)
         report_layout = QHBoxLayout(reports)
+        report_layout.setContentsMargins(6,4,6,4)
+        report_layout.setSpacing(4)
         self.report_button = QPushButton('Informe (PDF)', reports)
         self.report_button.setEnabled(False)
         self.report_button.clicked.connect(self._report)
@@ -398,19 +401,25 @@ class BasinDialog(QDialog):
         self.open_project_button = QPushButton('Abrir proyecto', reports)
         self.open_project_button.clicked.connect(self._choose_open_project)
         report_layout.addWidget(self.open_project_button)
-        for button in (self.report_button,self.save_project_button,self.open_project_button):
-            button.ensurePolished()
-            natural_height = button.sizeHint().height()
-            button.setStyleSheet('QPushButton { padding: 3px 10px; min-height: 0px; }')
-            button.setSizePolicy(QSizePolicy.Maximum,QSizePolicy.Fixed)
-            button.setFixedHeight(round(natural_height*.90))
-        report_layout.insertStretch(0)
-        report_layout.addStretch()
-        outer.addWidget(reports)
-        buttons = QDialogButtonBox(self)
+        buttons = QDialogButtonBox(reports)
+        buttons.setSizePolicy(QSizePolicy.Maximum,QSizePolicy.Fixed)
         self.close_button = buttons.addButton('Cerrar', QDialogButtonBox.RejectRole)
         buttons.rejected.connect(self.close)
-        outer.addWidget(buttons)
+        for button in (self.report_button,self.save_project_button,self.open_project_button,self.close_button):
+            button.ensurePolished()
+            natural_height = button.sizeHint().height()
+            button.setStyleSheet('QPushButton { padding: 3px 6px; min-height: 0px; }')
+            button.setSizePolicy(QSizePolicy.Maximum,QSizePolicy.Fixed)
+            button.setFixedHeight(round(natural_height*.90))
+        self.close_button.setStyleSheet('QPushButton { background-color: #FADBD8; color: #742A2A; '
+            'border: 1px solid #D69A9A; border-radius: 3px; padding: 3px 6px; min-height: 0px; } '
+            'QPushButton:hover { background-color: #F5C6C2; } '
+            'QPushButton:pressed { background-color: #EDB0AA; } '
+            'QPushButton:disabled { background-color: #F8ECEA; color: #A79390; border-color: #E3CBC7; }')
+        self.close_button.setFixedHeight(self.report_button.height())
+        report_layout.addStretch()
+        report_layout.addWidget(buttons)
+        outer.addWidget(reports)
         self.finished.connect(self.dispose)
         self.iface.mapCanvas().destinationCrsChanged.connect(self._preview)
         self.iface.mapCanvas().extentsChanged.connect(self._preview)
@@ -497,7 +506,7 @@ class BasinDialog(QDialog):
         finally:
             header.blockSignals(blocked)
         header.update_layout()
-        self.table.resizeRowsToContents()
+        fit_morphology_rows(self.table)
 
     def _fit_smoothing_controls(self):
         """Keep the complete controls together, including export beside the degree."""
