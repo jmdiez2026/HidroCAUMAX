@@ -213,10 +213,10 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - name: Obtener la misma revisión fuente del bundle
+      - name: Obtener la revisión publicadora verificada de main
         uses: actions/checkout@v7
         with:
-          ref: ${{ needs.build.outputs.source_commit }}
+          ref: ${{ github.workflow_sha }}
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-python@v7
@@ -277,9 +277,11 @@ jobs:
           expected_digest = os.environ['VERIFIED_ZIP_DIGEST']
           if repository != 'jmdiez2026/HidroCAUMAX':
               raise RuntimeError('La publicación preparada pertenece a otro repositorio.')
-          if run(['git', 'rev-parse', 'HEAD']).stdout.strip() != expected_commit:
-              raise RuntimeError('El checkout no coincide con el código verificado.')
           workflow_commit = os.environ['PUBLISHER_COMMIT']
+          if workflow_commit != os.environ['GITHUB_SHA']:
+              raise RuntimeError('La revisión publicadora no coincide con el push ejecutado.')
+          if run(['git', 'rev-parse', 'HEAD']).stdout.strip() != workflow_commit:
+              raise RuntimeError('El checkout no coincide con la revisión publicadora verificada.')
           run(['git', 'merge-base', '--is-ancestor', expected_commit, workflow_commit])
           changed = run(['git', 'diff', '--name-only', expected_commit, workflow_commit]).stdout.splitlines()
           if changed != ['.github/workflows/publish-1.2.13.yml']:
@@ -294,13 +296,19 @@ jobs:
           endpoint = f'repos/{repository}/git/ref/tags/{expected_tag}'
           reference = api(endpoint, missing_ok=True)
           if reference is None:
+              # Tag the current verified main commit with the existing contents
+              # permission. Its only difference from the tested source is this
+              # publisher workflow; no product/build/test file may differ.
+              branch = api(f'repos/{repository}/git/ref/heads/main')['object']
+              if branch['type'] != 'commit' or branch['sha'] != workflow_commit:
+                  raise RuntimeError('main ha avanzado; no se etiqueta una revisión distinta.')
               run(['gh', 'api', '--method', 'POST', f'repos/{repository}/git/refs',
-                   '-f', f'ref=refs/tags/{expected_tag}', '-f', f'sha={expected_commit}'])
+                   '-f', f'ref=refs/tags/{expected_tag}', '-f', f'sha={workflow_commit}'])
               reference = api(endpoint)
           target = reference['object']
           while target['type'] == 'tag':
               target = api(f'repos/{repository}/git/tags/{target["sha"]}')['object']
-          if target['type'] != 'commit' or target['sha'] != expected_commit:
+          if target['type'] != 'commit' or target['sha'] != workflow_commit:
               raise RuntimeError('La etiqueta existente apunta a otro commit; no se sustituye.')
           print('Etiqueta, ZIP e instalador Windows verificados para HidroCAUMAX 1.2.13.')
           PY
