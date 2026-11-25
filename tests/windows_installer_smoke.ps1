@@ -335,7 +335,12 @@ public static class HcauWin32 {
         foreach ($win in @(Get-OwnWindows)) {
             $controls = @([HcauWin32]::Children($win.Handle))
             if ((($controls | ForEach-Object Text) -join ' ') -match 'desinstalador corresponde a una copia anterior') {
-                $ok = @($controls | Where-Object { $_.ClassName -eq 'Button' -and $_.Id -eq 1 -and $_.Enabled })
+                # Native MB_OK is exposed as IDCANCEL (2) on some Windows builds.
+                # Identify its visible action only after the exact refusal was read.
+                $ok = @($controls | Where-Object {
+                    $_.ClassName -eq 'Button' -and $_.Id -in @(1, 2) -and $_.Enabled -and
+                    $_.Text.Replace('&', '').Trim() -match '^(?i:OK|Aceptar)$'
+                })
                 if ($ok.Count -eq 1) { return $ok[0] }
             }
         }
