@@ -105,6 +105,10 @@ class OutletSelectionDialog(QDialog):
         initial_x = context.get('initial_x', self.original_x)
         initial_y = context.get('initial_y', self.original_y)
         self._propose_point(initial_x,initial_y)
+        # Qt's automatic dialog height can clip wrapped explanations and the
+        # south button on smaller screens. Size from the complete layout.
+        width = max(520, self.sizeHint().width())
+        self.resize(width, layout.heightForWidth(width))
 
     def _load_context(self, context):
         """Open a complete replacement before releasing the previous rasters."""
