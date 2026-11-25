@@ -35,6 +35,10 @@ class RationalTerrainQuery:
     crs: QgsCoordinateReferenceSystem
     dem_path: str
     directions_path: str
+    source_kind: str = 'rational'
+    flow: float | None = None
+    period: float | None = None
+    cell: object = None
 
 
 def _native_module(dialog):
@@ -92,6 +96,7 @@ class _Binding:
     body_scroll: object = None
     body_host: object = None
     body_items: list = field(default_factory=list)
+    native_compact_layouts: list = field(default_factory=list)
     collapsed_geometry: object = None
     auto_geometry: object = None
     fitting: bool = False
@@ -113,11 +118,13 @@ class _Binding:
 
 class RationalLayersBridge(QObject):
     """Own only this bridge's controls and temporary body-scroll wrapper."""
-    def __init__(self, iface, on_basin_requested=None, on_query_started=None):
+    def __init__(self, iface, on_basin_requested=None, on_query_started=None,
+                 on_basin_refined=None):
         super().__init__(iface.mainWindow())
         self.iface = iface
         self.on_basin_requested = on_basin_requested
         self.on_query_started = on_query_started
+        self.on_basin_refined = on_basin_refined
         self._running = False
         self._bindings = {}
         self.timer = QTimer(self)
@@ -340,6 +347,7 @@ class RationalLayersBridge(QObject):
             if not binding.basin_ready:
                 raise ValueError(binding.basin_message)
             self.on_basin_requested(binding.dialog, query)
+            self._compact_native_layout(binding)
             binding.query_opened = True
             binding.error.hide()
         except Exception as error:
@@ -459,6 +467,59 @@ class RationalLayersBridge(QObject):
             layout.insertItem(index, item)
             layout.setStretch(index, stretch)
 
+    def _compact_native_layout(self, binding):
+        """Reduce vertical whitespace of native CAUMAX layouts, reversibly.
+
+        Do not change the native widgets' input values, font sizes or heights.
+        Only inherited layout spacing/margins change, and everything is restored
+        when the native dialog is detached.
+        """
+        if binding.native_compact_layouts:
+            return
+        root = binding.dialog.layout()
+        seen = set()
+
+        def visit(layout):
+            if layout is None or id(layout) in seen:
+                return
+            seen.add(id(layout))
+            m = layout.contentsMargins()
+            margins = (m.left(), m.top(), m.right(), m.bottom())
+            binding.native_compact_layouts.append((layout, layout.spacing(), margins))
+            layout.setSpacing(min(3, max(0, layout.spacing())))
+            if layout is not root:
+                layout.setContentsMargins(margins[0], min(margins[1], 2),
+                                          margins[2], min(margins[3], 2))
+            for index in range(layout.count()):
+                item = layout.itemAt(index)
+                widget = item.widget()
+                if widget is binding.container:
+                    continue
+                child = item.layout() or (widget.layout() if widget is not None else None)
+                if child is not None:
+                    visit(child)
+
+        visit(binding.body_host.layout() if binding.body_host is not None else root)
+        if binding.body_host is not None:
+            visit(root)
+        root.invalidate()
+        root.activate()
+
+    def _restore_native_layout(self, binding):
+        for layout, spacing, margins in reversed(binding.native_compact_layouts):
+            try:
+                layout.setSpacing(spacing)
+                layout.setContentsMargins(*margins)
+            except RuntimeError:
+                pass
+        binding.native_compact_layouts.clear()
+
+    def _notify_basin_refined(self, binding, key, analysis, query):
+        if self._bindings.get(id(binding.dialog)) is not binding:
+            return
+        if self.on_basin_refined is not None:
+            self.on_basin_refined(binding.dialog, key, analysis, query)
+
     def _wrap_native_body(self, binding):
         root = binding.dialog.layout()
         footer = binding.dialog.horizontalLayout_2
@@ -505,7 +566,9 @@ class RationalLayersBridge(QObject):
         try:
             if binding.panel is None:
                 from .rational_layers_panel import RationalLayersPanel
-                binding.panel = RationalLayersPanel(self.iface, lambda: self._context(binding), binding.scroll)
+                binding.panel = RationalLayersPanel(self.iface, lambda: self._context(binding),
+                    binding.scroll, on_basin_refined=lambda key, analysis, query:
+                    self._notify_basin_refined(binding, key, analysis, query))
                 binding.scroll.setWidget(binding.panel)
             binding.error.hide()
             binding.collapsed_geometry = QRect(binding.dialog.geometry())
@@ -587,6 +650,7 @@ class RationalLayersBridge(QObject):
         try:
             binding.dialog.removeEventFilter(self)
             self._collapse(binding)
+            self._restore_native_layout(binding)
             binding.dialog.layout().removeWidget(binding.container)
             binding.container.setParent(None)
             binding.container.deleteLater()
