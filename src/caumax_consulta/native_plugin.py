@@ -31,7 +31,8 @@ class NativeCaumaxPlugin(QObject):
         self._rational_inputs = RationalInputsBridge(iface)
         self._rational_frequency = RationalFrequencyBridge(iface, self)
         self._rational_layers = RationalLayersBridge(iface, self._open_basin,
-            self._new_query_started, self._rational_basin_refined)
+            self._new_query_started, self._rational_basin_refined,
+            self._rational_frequency.request_calculation)
         self._rational_inputs.calculation_started.connect(self._rational_layers.calculation_started)
         self._rational_inputs.calculation_finished.connect(self._rational_layers.calculation_finished)
         self._rational_inputs.calculation_started.connect(self._rational_frequency.calculation_started)

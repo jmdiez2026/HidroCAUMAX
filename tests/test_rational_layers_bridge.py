@@ -10,7 +10,9 @@ import numpy as np
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 from qgis.PyQt import sip, uic
-from qgis.PyQt.QtCore import QObject, QRect, Qt, pyqtSignal
+from qgis.PyQt.QtCore import QObject, QRect, QSize, Qt, pyqtSignal
+from qgis.PyQt.QtGui import QFont, QFontDatabase, QIcon, QPixmap
+from qgis.PyQt.QtTest import QTest
 from qgis.PyQt.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QPushButton,
     QVBoxLayout, QWidget,
@@ -18,7 +20,7 @@ from qgis.PyQt.QtWidgets import (
 from qgis.core import QgsApplication, QgsCoordinateReferenceSystem, QgsGeometry, QgsPointXY
 from qgis.gui import QgsMapCanvas
 
-from caumax_consulta.rational_layers_bridge import BASIN_BUTTON_NAME, BUTTON_NAME, PANEL_NAME, RationalLayersBridge
+from caumax_consulta.rational_layers_bridge import BASIN_BUTTON_NAME, BUTTON_NAME, FREQUENCY_BUTTON_NAME, PANEL_NAME, RationalLayersBridge
 
 
 class _PointTool(QObject):
@@ -84,9 +86,15 @@ class RationalLayersBridgeTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QgsApplication.instance() or QgsApplication([], False)
         cls.app.initQgis()
+        font_path = Path(os.environ.get('WINDIR', 'C:/Windows'))/'Fonts/segoeui.ttf'
+        if font_path.is_file():
+            QFontDatabase.addApplicationFont(str(font_path))
 
     def setUp(self):
         self.window = QMainWindow()
+        # Match the native QGIS Windows dialog and avoid a missing offscreen
+        # system font inflating the action row after its queued logo update.
+        self.window.setFont(QFont('Segoe UI', 8))
         self.canvas = QgsMapCanvas(self.window)
         self.canvas.setDestinationCrs(QgsCoordinateReferenceSystem('EPSG:25830'))
         self.iface = SimpleNamespace(mainWindow=lambda: self.window, mapCanvas=lambda: self.canvas)
@@ -135,6 +143,83 @@ class RationalLayersBridgeTests(unittest.TestCase):
             binding.button.click()
             self.app.processEvents()
         return binding
+
+    def test_separate_gea_calculate_leaves_native_button_unchanged_and_cleans_up(self):
+        button = self.dialog.btnCalculate
+        original_size = QSize(19, 13)
+        button.setIconSize(original_size)
+        text, style = button.text(), button.styleSheet()
+        clicked = Mock()
+        button.clicked.connect(clicked)
+        self.assertTrue(button.icon().isNull())
+        requested = Mock()
+        self.bridge.on_frequency_requested = requested
+        binding = self.attach()
+        self.app.processEvents()
+        self.assertIs(self.dialog.btnCalculate, button)
+        self.assertTrue(button.icon().isNull())
+        self.assertEqual(button.iconSize(), original_size)
+        self.assertFalse(binding.frequency_button.icon().isNull())
+        self.assertEqual(binding.frequency_button.text(), 'Calcular')
+        self.assertEqual(binding.action_row.indexOf(binding.frequency_button), 0)
+        self.assertEqual((button.text(), button.styleSheet()), (text, style))
+        button.setEnabled(True)
+        button.click()
+        clicked.assert_called_once()
+        self.bridge.scan()
+        binding.frequency_button.click()
+        requested.assert_called_once_with(self.dialog)
+        clicked.assert_called_once()
+        button.setEnabled(False)
+        self.bridge.scan()
+        self.assertFalse(binding.frequency_button.isEnabled())
+        self.bridge.stop()
+        self.assertIsNone(self.dialog.findChild(QPushButton, FREQUENCY_BUTTON_NAME))
+        self.assertTrue(button.icon().isNull())
+        self.assertEqual(button.iconSize(), original_size)
+        # Preserve a pre-existing icon too, rather than always clearing it.
+        pixmap = QPixmap(12, 12)
+        pixmap.fill(Qt.red)
+        original_icon = QIcon(pixmap)
+        button.setIcon(original_icon)
+        self.attach()
+        self.bridge.stop()
+        self.assertEqual(button.icon().cacheKey(), original_icon.cacheKey())
+        self.assertEqual(button.iconSize(), original_size)
+
+    def test_save_basin_stays_in_native_row_with_gea_and_no_duplicate(self):
+        from caumax_consulta.rational_export import RationalExportBridge, BUTTON_NAME as SAVE_NAME
+        self.dialog.rubberBand = None
+        exporter = RationalExportBridge(self.iface)
+        try:
+            exporter.start()
+            button = self.dialog.findChild(QPushButton, SAVE_NAME)
+            self.assertIsNotNone(button)
+            binding = self.attach()
+            self.app.processEvents()
+            self.assertFalse(button.icon().isNull())
+            self.assertTrue(button.isVisible())
+            self.assertGreaterEqual(self.dialog.horizontalLayout_2.indexOf(button), 0)
+            self.assertEqual(len(self.dialog.findChildren(QPushButton, SAVE_NAME)), 1)
+            self.assertFalse(binding.container.findChildren(QPushButton, SAVE_NAME))
+            self.bridge.stop()
+            self.assertTrue(button.isVisible())
+        finally:
+            exporter.stop()
+        self.assertIsNone(self.dialog.findChild(QPushButton, SAVE_NAME))
+
+    def test_native_height_fits_content_preserves_width_and_restores_on_unload(self):
+        self.app.processEvents()
+        original = self.dialog.size()
+        original_spacing = self.dialog.layout().spacing()
+        self.attach()
+        self.app.processEvents()
+        self.assertEqual(self.dialog.width(), original.width())
+        self.assertLess(self.dialog.height(), original.height())
+        self.bridge.stop()
+        self.app.processEvents()
+        self.assertEqual(self.dialog.size(), original)
+        self.assertEqual(self.dialog.layout().spacing(), original_spacing)
 
     def complete_parameters(self, binding):
         self.bridge.calculation_started(self.dialog,'parameters')
@@ -233,7 +318,7 @@ class RationalLayersBridgeTests(unittest.TestCase):
         listener = Mock()
         self.dialog.btnClose.clicked.connect(listener)
         binding = self.attach()
-        self.app.processEvents()
+        QTest.qWait(30)  # Settle queued logo sizes before measuring the parent.
         native_geometry = QRect(self.dialog.geometry())
         native_body = self.dialog.body
         binding.button.click()
@@ -310,8 +395,14 @@ class RationalLayersBridgeTests(unittest.TestCase):
         self.app.processEvents()
         original = [self.dialog.layout().itemAt(i)
                     for i in range(self.dialog.layout().count())]
+        original_width = self.dialog.width()
         binding = self.attach()
         self.app.processEvents()
+        self.app.processEvents()
+        # Nested native group boxes update their cached minimum on a later
+        # layout event. The fit must use that settled size, not leave a gap.
+        self.assertEqual(self.dialog.width(), original_width)
+        self.assertEqual(self.dialog.height(), self.dialog.minimumSizeHint().height())
         native_geometry = QRect(self.dialog.geometry())
         for width, height in ((800, 600), (1200, 900)):
             with self.subTest(screen=(width, height)):
@@ -344,8 +435,8 @@ class RationalLayersBridgeTests(unittest.TestCase):
         self.assertTrue(binding.basin_button.isEnabled())
         self.assertEqual(binding.basin_button.text(),'Cuenca hidrográfica')
         self.assertFalse(binding.basin_button.icon().isNull())
-        self.assertEqual(binding.action_row.indexOf(binding.basin_button),0)
-        self.assertEqual(binding.action_row.indexOf(binding.button),1)
+        self.assertEqual(binding.action_row.indexOf(binding.basin_button),1)
+        self.assertEqual(binding.action_row.indexOf(binding.button),2)
         self.assertFalse(any(button.isVisible() and button.text().startswith('Guardar cuenca')
                              for button in self.dialog.findChildren(QPushButton)))
         self.assertFalse(binding.button.icon().isNull())

@@ -33,6 +33,16 @@ QPushButton:disabled { color: #7A8790; background-color: #EAF3F8; }
 '''
 
 
+def _set_gea_icon(button):
+    """Add the existing GEA image without replacing a native button or its slots."""
+    logo = QPixmap(str(LOGO_PATH))
+    if logo.isNull():
+        return
+    height = max(1, min(button.fontMetrics().height(), button.sizeHint().height() - 4))
+    button.setIcon(QIcon(logo))
+    button.setIconSize(QSize(max(1, round(height * logo.width() / logo.height())), height))
+
+
 class _LogoBasinButton(QPushButton):
     """Keep the label and logo size while making the existing button 10% taller."""
     SCALE = 1.10

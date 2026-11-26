@@ -124,7 +124,9 @@ class TerrainLayers:
             for index, layer in enumerate(layers):
                 layer.setCustomProperty('HidroCAUMAX/terrain_owner', self.owner_key)
                 project.addMapLayer(layer, False)
-                group.insertLayer(index, layer).setItemVisibilityChecked(visible)
+                node = group.insertLayer(index, layer)
+                node.setItemVisibilityChecked(visible)
+                node.setExpanded(False)
             group.setItemVisibilityChecked(visible)
             self._variants[key] = dict(layers=layers, group=group)
             self.layers, self._group, self._signature = layers, group, signature
@@ -148,7 +150,9 @@ class TerrainLayers:
         for index, layer in enumerate(layers):
             layer.setCustomProperty('HidroCAUMAX/terrain_owner', self.owner_key)
             project.addMapLayer(layer, False)
-            self._group.insertLayer(index, layer).setItemVisibilityChecked(False)
+            node = self._group.insertLayer(index, layer)
+            node.setItemVisibilityChecked(False)
+            node.setExpanded(False)
         self.layers = layers
         self._signature = signature
         ensure_results_above_official(project)

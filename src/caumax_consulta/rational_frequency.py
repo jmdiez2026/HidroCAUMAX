@@ -37,7 +37,7 @@ class RationalFrequency:
     def known(self):
         return tuple((p.period, p.flow) for p in self.points if p.flow is not None)
 
-    def flow_at(self, period):
+    def flow_at(self, period, allow_extrapolation=False):
         period = number(period, 2)
         known = self.known
         for p, q in known:
@@ -46,6 +46,14 @@ class RationalFrequency:
         for (p1, q1), (p2, q2) in zip(known, known[1:]):
             if p1 < period < p2:
                 return q1 + (q2 - q1) * math.log(period / p1) / math.log(p2 / p1)
+        if allow_extrapolation:
+            if len(known) < 2:
+                raise ValueError('Se necesitan al menos dos caudales disponibles para extrapolar.')
+            (p1, q1), (p2, q2) = known[:2] if period < known[0][0] else known[-2:]
+            flow = q1 + (q2 - q1) * math.log(period / p1) / math.log(p2 / p1)
+            if not math.isfinite(flow) or flow < 0:
+                raise ValueError('La extrapolación produce un caudal negativo o no válido.')
+            return flow
         raise ValueError('El periodo debe estar dentro del intervalo con caudales disponibles.')
 
     def periods_at(self, flow):

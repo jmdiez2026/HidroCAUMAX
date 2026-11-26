@@ -20,6 +20,7 @@ from qgis.core import (
 import qgis.utils
 
 from .watershed_export import _check_new_destination
+from .caumax_bridge import _set_gea_icon
 
 
 BUTTON_NAME = 'btnExportarCuencaAuxiliar'
@@ -27,7 +28,7 @@ BUTTON_STYLE = '''QPushButton { background-color: #D9F0FF; color: #173D52;
 border: 1px solid #7EB4D0; border-radius: 3px; padding: 5px 9px; }
 QPushButton:hover { background-color: #C7E8FF; }
 QPushButton:disabled { background-color: #EAF3F8; color: #7A8790; }'''
-_TITLE = 'HidroCAUMAX v1.0.7 · Guardar cuenca'
+_TITLE = 'HidroCAUMAX v1.0.8 · Guardar cuenca'
 
 
 @dataclass(frozen=True)
@@ -203,6 +204,7 @@ class RationalExportBridge(QObject):
             button = QPushButton('Guardar cuenca…', dialog)
             button.setObjectName(BUTTON_NAME)
             button.setStyleSheet(BUTTON_STYLE)
+            _set_gea_icon(button)
             button.setToolTip('Guardar los polígonos rojos y el cierre calculados por CAUMAX')
             dialog.horizontalLayout_2.insertWidget(2, button)
             key = id(dialog)

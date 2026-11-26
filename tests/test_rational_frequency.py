@@ -10,7 +10,7 @@ from unittest.mock import Mock
 from qgis.PyQt.QtCore import QPoint, QPointF, Qt
 from qgis.PyQt.QtGui import QWheelEvent
 from qgis.PyQt.QtTest import QTest
-from qgis.PyQt.QtWidgets import QCheckBox, QDialog, QLineEdit, QMainWindow, QPushButton
+from qgis.PyQt.QtWidgets import QCheckBox, QDialog, QLabel, QLineEdit, QMainWindow, QPushButton
 from qgis.core import QgsApplication
 
 from caumax_consulta.rational_frequency import (
@@ -62,6 +62,28 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(len(points), 2)
         self.assertFalse(intervals)
 
+    def test_extrapolation_requires_opt_in_and_keeps_original_anchors(self):
+        curve = model()
+        original = curve.points
+        expected = 20.4 + (20.4 - 12.5) * math.log(1000 / 500) / math.log(500 / 100)
+        self.assertAlmostEqual(curve.flow_at(1000, allow_extrapolation=True), expected)
+        with self.assertRaises(ValueError): curve.flow_at(1000)
+        with self.assertRaises(ValueError): curve.periods_at(expected)
+        self.assertEqual(curve.points, original)
+        for period, flow in curve.known:
+            self.assertEqual(curve.flow_at(period, allow_extrapolation=True), flow)
+
+    def test_extrapolation_rejects_single_anchor_negative_and_nonfinite_results(self):
+        single = RationalFrequency((FrequencyPoint(100., 2., 'Cálculo CAUMAX'),), 100., 2.)
+        with self.assertRaisesRegex(ValueError, 'dos caudales'): single.flow_at(1000, True)
+        descending = model((1., 2., 3., 4., 100., 1.))
+        with self.assertRaisesRegex(ValueError, 'negativo'): descending.flow_at(1000, True)
+        for value in (1, float('nan'), float('inf')):
+            with self.assertRaises(ValueError): descending.flow_at(value, True)
+        partial = RationalFrequency((FrequencyPoint(5., 10., 'Método racional'),
+                                     FrequencyPoint(10., 12., 'Método racional')), 5., 10.)
+        self.assertAlmostEqual(partial.flow_at(2, True), 10 + 2 * math.log(2 / 5) / math.log(2))
+
     def test_integer_ticks_remain_integer_and_sufficient_at_normal_extent(self):
         values = integer_ticks(0, 28)
         self.assertGreaterEqual(len(values), 6)
@@ -97,9 +119,15 @@ class DialogTests(unittest.TestCase):
         self.assertEqual([d.table.horizontalHeaderItem(i).text() for i in range(2)],
                          ['Periodo de\nretorno T (años)', 'Caudal punta\n(m³/s)'])
         self.assertEqual(d.table.item(self.row(60), 1).text(), '10,25')
+        self.assertEqual(d.table.item(self.row(2), 1).text(), '1,50')
+        self.assertEqual(d.table.item(self.row(100), 1).text(), '12,50')
+        for row in range(d.table.rowCount()):
+            for column in range(2):
+                self.assertEqual(d.table.item(row, column).textAlignment(), int(Qt.AlignCenter))
         self.assertIn(',', d.flow_spin.text())
-        self.assertEqual(d.table.mapTo(d, QPoint()).y(), d.plot.mapTo(d, QPoint()).y())
-        self.assertEqual(d.table.height(), d.plot.height())
+        self.assertEqual(d.table.mapTo(d, QPoint()).y(),
+                         d.plot.mapTo(d, QPoint()).y() + d.plot.plot_rect().top())
+        self.assertEqual(d.table.height(), d.plot.plot_rect().height())
         self.assertEqual((d.plot.width(), d.plot.height()), (422, 268))
         xticks, yticks = d.plot.ticks()
         self.assertGreaterEqual(len(xticks), 6)
@@ -128,7 +156,7 @@ class DialogTests(unittest.TestCase):
         self.assertEqual(d.table.rowCount(), 8)
         expected = d.model.flow_at(37.5)
         self.assertAlmostEqual(d.rows[37.5].flow, expected)
-        self.assertEqual(d.table.item(self.row(37.5), 1).text(), f'{expected:.2f}'.replace('.', ',').rstrip('0').rstrip(','))
+        self.assertEqual(d.table.item(self.row(37.5), 1).text(), f'{expected:.2f}'.replace('.', ','))
         self.assertEqual(d.flow_spin.decimals(), 2)
         self.assertEqual(d.plot.selected_period, 37.5)
         d.period_spin.editingFinished.emit()
@@ -148,12 +176,10 @@ class DialogTests(unittest.TestCase):
         d = self.dialog
         d.labels_check.setChecked(True)
         d.grid_check.setChecked(False)
-        d.width_spin.setValue(4)
-        d.style_combo.setCurrentIndex(1)
         self.assertTrue(d.plot.labels)
         self.assertFalse(d.plot.grid)
-        self.assertEqual(d.plot.line_width, 4)
-        self.assertEqual(d.plot.line_style, Qt.DashLine)
+        self.assertEqual(d.plot.line_width, 2)
+        self.assertEqual(d.plot.line_style, Qt.SolidLine)
         self.assertFalse(d.grab().isNull())
         before = list(d.plot.view)
         pos = d.plot.plot_rect().center()
@@ -167,6 +193,56 @@ class DialogTests(unittest.TestCase):
         d.log_check.setChecked(False)
         self.assertFalse(d.plot.logarithmic)
         self.assertEqual(d.plot.view[:2], [2., 500.])
+
+    def test_only_requested_compact_controls_are_shown(self):
+        d = self.dialog
+        self.assertEqual([c.text() for c in (d.labels_check, d.grid_check, d.log_check)],
+                         ['Etiqueta', 'Cuadrícula', 'Escala logarítmica T'])
+        for left, right in ((d.labels_check, d.grid_check), (d.grid_check, d.log_check)):
+            self.assertLessEqual(right.x() - (left.x() + left.width()), 14)
+        self.assertEqual([b.text() for b in d.findChildren(QPushButton)], ['Cerrar'])
+        labels = ' '.join(label.text() for label in d.findChildren(QLabel))
+        self.assertNotIn('Rueda:', labels)
+        self.assertNotIn('Estimaciones:', labels)
+        self.assertNotIn('Grosor:', labels)
+        self.assertFalse(d.extrapolation_check.isChecked())
+
+    def test_extrapolation_toggle_recomputes_and_removes_estimates_when_disabled(self):
+        d = self.dialog
+        initial = d.model.points
+        d.period_spin.setValue(1000)
+        QTest.qWait(300)
+        self.assertNotIn(1000, d.rows)
+        self.assertIn('intervalo', d.forward_result.text())
+        QTest.mouseClick(d.extrapolation_check, Qt.LeftButton)
+        self.assertIn(1000, d.rows)
+        self.assertIn('extrapolado', d.forward_result.text())
+        self.assertIn('extrapolada', d.table.item(self.row(1000), 1).toolTip())
+        self.assertTrue(d.plot.plot_rect().adjusted(-1, -1, 1, 1).contains(
+            d.plot.coordinate(1000, d.rows[1000].flow)))
+        self.assertEqual(d.plot.selected_period, 1000)
+        self.assertFalse(d.grab().isNull())
+        d.log_check.setChecked(False)
+        self.assertEqual(d.plot.view[1], 1000)
+        QTest.mouseClick(d.extrapolation_check, Qt.LeftButton)
+        self.assertNotIn(1000, d.rows)
+        self.assertEqual(d.plot.view[1], 500)
+        self.assertEqual(d.model.points, initial)
+
+    def test_disabling_extrapolation_restores_unavailable_original_period(self):
+        self.dialog.close()
+        restricted = model((1., 2., 3., 4., None, None), custom=(20., 3.5))
+        self.dialog = RationalFrequencyDialog(restricted)
+        d = self.dialog
+        d.setAttribute(Qt.WA_DontShowOnScreen)
+        d.show()
+        d.period_spin.setValue(100)
+        d.extrapolation_check.setChecked(True)
+        self.assertIsNotNone(d.rows[100].flow)
+        self.assertIsNone(next(p for p in d.model.points if p.period == 100).flow)
+        d.extrapolation_check.setChecked(False)
+        self.assertIsNone(d.rows[100].flow)
+        self.assertEqual(d.table.item(self.row(100), 1).text(), '—')
 
 
 @unittest.skipUnless((NATIVE_SOURCE / 'rationalmethoddialog.py').is_file(), 'Fuente nativa CAUMAX no disponible')
@@ -209,6 +285,7 @@ class NativeFormulaTests(unittest.TestCase):
             setattr(d, name, QLineEdit(text, d))
         for name in ('btnFitInfo', 'btnFrequencyLaw', 'btnReport', 'btnCalculate'):
             setattr(d, name, QPushButton(d))
+        d.btnCalculate.clicked.connect(lambda: d.calculate())
         d.chkOrdinaryMaxFlood = QCheckBox(d)
         d.period = 100
         d.basinCalc = types.SimpleNamespace(rain=dict(zip(PERIODS, (46., 54., 63., 75., 92.10, 115.))))
@@ -235,11 +312,13 @@ class NativeFormulaTests(unittest.TestCase):
         self.window.close()
         self.app.processEvents()
 
-    def test_actual_native_calculate_opens_curve_with_exact_q_and_no_input_mutation(self):
+    def test_only_explicit_gea_request_opens_curve_with_exact_q_and_no_input_mutation(self):
         d = self.owner
         before = {name: getattr(d, name).text() for name in ('txtArea', 'txtUniformity', 'txtP0',
                     'txtP0Corrector', 'txtIntensityFactor', 'txtRainfallCorrection')}
         d.calculate()
+        self.assertNotIn(id(d), self.presentation.dialogs)
+        self.presentation.request_calculation(d)
         self.assertIn(id(d), self.presentation.dialogs)
         dialog = self.presentation.dialogs[id(d)]
         curve = dialog.model
@@ -263,7 +342,7 @@ class NativeFormulaTests(unittest.TestCase):
         d = self.owner
         self.zone, d.period = 72, 25
         del d.basinCalc.rain[5]
-        d.calculate()
+        self.presentation.request_calculation(d)
         curve = self.presentation.dialogs[id(d)].model
         missing = {p.period: p for p in curve.points if p.flow is None}
         self.assertEqual(set(missing), {5., 100., 500.})
@@ -272,10 +351,10 @@ class NativeFormulaTests(unittest.TestCase):
 
     def test_early_native_validation_does_not_reopen_old_result(self):
         d = self.owner
-        d.calculate()
+        self.presentation.request_calculation(d)
         self.assertIn(id(d), self.presentation.dialogs)
         d.txtArea.setText('51')
-        d.calculate()
+        self.presentation.request_calculation(d)
         self.assertNotIn(id(d), self.presentation.dialogs)
         self.assertFalse(self.events[-1].get('accepted_flow'))
 
@@ -292,10 +371,24 @@ class NativeFormulaTests(unittest.TestCase):
 
     def test_cancelled_and_mismatched_writes_are_ignored_and_owner_close_cleans_up(self):
         d = self.owner
-        d.calculate()
+        self.presentation.request_calculation(d)
         event = dict(self.events[-1], completed=False)
         self.assertIsNone(capture_frequency(d, event))
         event = dict(self.events[-1], flow_writes=['999'])
         self.assertIsNone(capture_frequency(d, event))
         d.close()
         self.assertFalse(self.presentation.dialogs)
+
+    def test_native_button_never_opens_table_and_disabled_request_is_ignored(self):
+        d = self.owner
+        d.btnCalculate.click()
+        self.assertFalse(self.presentation.dialogs)
+        self.assertTrue(d.txtResultFlow.text())
+        self.presentation.request_calculation(d)
+        self.assertIn(id(d), self.presentation.dialogs)
+        d.btnCalculate.click()
+        self.assertFalse(self.presentation.dialogs)
+        d.btnCalculate.setEnabled(False)
+        self.presentation.request_calculation(d)
+        self.assertFalse(self.presentation.dialogs)
+        self.assertFalse(self.presentation._requested)

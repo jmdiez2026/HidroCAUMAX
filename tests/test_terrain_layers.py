@@ -80,6 +80,7 @@ class TerrainLayersTests(unittest.TestCase):
         root = self.project.layerTreeRoot()
         official = root.insertGroup(0, 'CAUMAX_CAPAS')
         self.assertFalse(obj._group.itemVisibilityChecked())
+        self.assertTrue(all(not node.isExpanded() for node in obj._group.children()))
         self.assertTrue(all(not root.findLayer(layer.id()).itemVisibilityChecked()
                             for layer in layers))
         obj._group.setItemVisibilityChecked(True)

@@ -18,12 +18,12 @@ from qgis.core import QgsCoordinateReferenceSystem
 
 from .rational_export import BUTTON_STYLE
 from .caumax_bridge import _LogoBasinButton, BUTTON_STYLE as BASIN_BUTTON_STYLE
-from .rational_export import BUTTON_NAME as EXPORT_BUTTON_NAME
 
 
 BUTTON_NAME = 'btnGenerarCapasResolucionMejoradaHidroCAUMAX'
 PANEL_NAME = 'HidroCAUMAXRationalLayersContainer'
 BASIN_BUTTON_NAME = 'btnCuencaHidrograficaRacionalHidroCAUMAX'
+FREQUENCY_BUTTON_NAME = 'btnCalcularFrecuenciaHidroCAUMAX'
 _FLOW_INPUTS = ('txtArea', 'txtConcentrationTime', 'txtI1Id', 'txtRainfall',
                 'txtIntensityFactor', 'txtP0', 'txtP0Corrector', 'txtUniformity',
                 'txtCorrectedRainfall', 'txtP0CorrectorReturnPeriod', 'txtRainfallCorrection')
@@ -103,7 +103,10 @@ class _Binding:
     auto_geometry: object = None
     fitting: bool = False
     basin_button: object = None
-    native_save_button: object = None
+    frequency_button: object = None
+    native_height: object = None
+    native_width: object = None
+    fitted_height: object = None
     decimal_presentation: object = None
     hidden_native_outline: object = None
     native_outline_visibility: object = None
@@ -125,11 +128,12 @@ class _Binding:
 class RationalLayersBridge(QObject):
     """Own the native buttons and an independent, modeless D8-generation window."""
     def __init__(self, iface, on_basin_requested=None, on_query_started=None,
-                 on_basin_refined=None):
+                 on_basin_refined=None, on_frequency_requested=None):
         super().__init__(iface.mainWindow())
         self.iface = iface
         self.on_basin_requested = on_basin_requested
         self.on_query_started = on_query_started
+        self.on_frequency_requested = on_frequency_requested
         self.on_basin_refined = on_basin_refined
         self._running = False
         self._bindings = {}
@@ -268,6 +272,9 @@ class RationalLayersBridge(QObject):
                                  'El caudal queda pendiente hasta completar su cálculo.')
 
     def _sync_basin(self, binding):
+        calculate = getattr(binding.dialog, 'btnCalculate', None)
+        binding.frequency_button.setEnabled(self.on_frequency_requested is not None
+            and calculate is not None and calculate.isEnabled() and not binding.calculating)
         if binding.calculating:
             binding.basin_button.setEnabled(False)
             return
@@ -305,6 +312,7 @@ class RationalLayersBridge(QObject):
             return
         binding.calculating.add(stage)
         binding.basin_button.setEnabled(False)
+        binding.frequency_button.setEnabled(False)
 
     def calculation_finished(self, dialog, stage, event):
         binding = self._bindings.get(id(dialog))
@@ -389,6 +397,8 @@ class RationalLayersBridge(QObject):
                 continue
 
     def _attach(self, dialog):
+        native_height = dialog.height()
+        native_width = dialog.width()
         container = QWidget(dialog)
         container.setObjectName(PANEL_NAME)
         container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
@@ -396,12 +406,13 @@ class RationalLayersBridge(QObject):
         layout.setContentsMargins(0, 0, 0, 0)
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
-        # Keep the exporter's ownership/lifecycle, but remove its requested
-        # save action from the visible rational-method controls.
-        native_save = dialog.findChild(QPushButton, EXPORT_BUTTON_NAME)
-        if native_save is not None:
-            dialog.horizontalLayout_2.removeWidget(native_save)
-            native_save.hide()
+        frequency_button = _LogoBasinButton('Calcular', container)
+        frequency_button.setObjectName(FREQUENCY_BUTTON_NAME)
+        frequency_button.setStyleSheet(BASIN_BUTTON_STYLE)
+        frequency_button.setToolTip('Calcular y mostrar la tabla y el gráfico de caudales '
+                                   'para varios periodos de retorno.')
+        frequency_button.setEnabled(False)
+        row.addWidget(frequency_button, 0, Qt.AlignLeft)
         basin_button = _LogoBasinButton('Cuenca hidrográfica', container)
         basin_button.setObjectName(BASIN_BUTTON_NAME)
         basin_button.setStyleSheet(BASIN_BUTTON_STYLE)
@@ -429,9 +440,13 @@ class RationalLayersBridge(QObject):
         from .native_decimal import RationalDecimalPresentation
         binding.decimal_presentation = RationalDecimalPresentation(dialog)
         binding.basin_button, binding.action_row = basin_button, row
-        binding.native_save_button = native_save
+        binding.frequency_button = frequency_button
+        binding.native_height = native_height
+        binding.native_width = native_width
         key = id(dialog)
         self._bindings[key] = binding
+        self._connect(binding, frequency_button.clicked,
+                      lambda checked=False: self._request_frequency(binding))
         self._connect(binding, button.clicked, lambda checked=False: self._open_layers_dialog(binding))
         self._connect(binding, basin_button.clicked, lambda checked=False: self._request_basin(binding))
         for field_widget in (dialog.txtX, dialog.txtY):
@@ -458,12 +473,36 @@ class RationalLayersBridge(QObject):
         except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
             pass
         self._sync_basin(binding)
-        for action in (basin_button, button):
+        # Let Qt refresh the nested group boxes' cached minimum sizes before
+        # the queued height fit; fitting in the same turn keeps empty space.
+        self._compact_native_layout(binding)
+        for action in (frequency_button, basin_button, button):
             action.match_reference_buttons(
                 candidate for candidate in (getattr(dialog, 'btnReport', None),
                                             getattr(dialog, 'btnClose', None))
                 if isinstance(candidate, QPushButton))
             QTimer.singleShot(0, action.install_logo)
+        QTimer.singleShot(0, lambda: self._fit_native_height(binding))
+
+    def _request_frequency(self, binding):
+        if (self._running and self._bindings.get(id(binding.dialog)) is binding
+                and self.on_frequency_requested is not None and not binding.calculating):
+            self.on_frequency_requested(binding.dialog)
+
+    def _fit_native_height(self, binding):
+        if not self._running or self._bindings.get(id(binding.dialog)) is not binding:
+            return
+        try:
+            self._compact_native_layout(binding)
+            dialog = binding.dialog
+            dialog.layout().activate()
+            # Native expanding spacers have a large preferred height; their
+            # minimum excludes that empty space without changing any widget.
+            height = max(1, dialog.minimumSizeHint().height())
+            dialog.resize(binding.native_width, height)
+            binding.fitted_height = dialog.height()
+        except RuntimeError:
+            pass
 
     @staticmethod
     def _connect(binding, signal, slot):
@@ -645,15 +684,14 @@ class RationalLayersBridge(QObject):
         if binding.panel is not None:
             self._layers_closed(binding, binding.layers_dialog)
         try:
+            restore_height = binding.dialog.height() == binding.fitted_height
             self._restore_native_layout(binding)
             self._restore_native_outline(binding)
-            if binding.native_save_button is not None:
-                from qgis.PyQt import sip
-                if not sip.isdeleted(binding.native_save_button):
-                    binding.dialog.horizontalLayout_2.insertWidget(2, binding.native_save_button)
-                    binding.native_save_button.show()
             binding.dialog.layout().removeWidget(binding.container)
             binding.container.setParent(None)
             binding.container.deleteLater()
+            if restore_height and binding.native_height is not None:
+                binding.dialog.layout().activate()
+                binding.dialog.resize(binding.dialog.width(), binding.native_height)
         except RuntimeError:
             pass

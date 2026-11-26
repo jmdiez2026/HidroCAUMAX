@@ -192,7 +192,7 @@ class BoundaryLayers:
             if project.mapLayer(layer.id()) is None:
                 project.addMapLayer(layer, False)
             if root.findLayer(layer.id()) is None:
-                group.addLayer(layer)
+                group.addLayer(layer).setExpanded(False)
         self.layers, self.key = layers, key
         self.set_visibility(visibility or {'original': True, 'suavizada': smooth is not None})
         activate_result_group(project, group, OWNER_PROPERTY)

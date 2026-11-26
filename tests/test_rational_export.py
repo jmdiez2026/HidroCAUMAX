@@ -113,6 +113,7 @@ class RationalExportTests(unittest.TestCase):
         buttons = self.dialog.findChildren(QPushButton, exporter.BUTTON_NAME)
         self.assertEqual(len(buttons), 1)
         self.assertFalse(buttons[0].isEnabled())
+        self.assertFalse(buttons[0].icon().isNull())
         self.assertIn('#D9F0FF', buttons[0].styleSheet())
         self.assertEqual(self.bridge.timer.interval(), 400)
         self.calculate()

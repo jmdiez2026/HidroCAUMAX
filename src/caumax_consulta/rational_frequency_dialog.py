@@ -4,9 +4,9 @@ import math
 from qgis.PyQt.QtCore import QObject, QPointF, QRectF, Qt, QTimer, pyqtSignal
 from qgis.PyQt.QtGui import QColor, QPainter, QPainterPath, QPen
 from qgis.PyQt.QtWidgets import (
-    QApplication, QAbstractItemView, QCheckBox, QColorDialog, QComboBox,
-    QDialog, QDialogButtonBox, QDoubleSpinBox, QGridLayout, QGroupBox,
-    QHBoxLayout, QHeaderView, QLabel, QPushButton, QSizePolicy, QSpinBox,
+    QApplication, QAbstractItemView, QCheckBox,
+    QDialog, QDialogButtonBox, QDoubleSpinBox, QGroupBox,
+    QHBoxLayout, QHeaderView, QLabel, QSizePolicy,
     QSplitter, QTableWidget, QTableWidgetItem, QToolTip, QVBoxLayout, QWidget,
 )
 from qgis.PyQt.QtCore import QLocale
@@ -20,6 +20,10 @@ def display(value, decimals=3):
     return format_decimal(value, f'.{decimals}f').rstrip('0').rstrip(',')
 
 
+def display_flow(value):
+    return format_decimal(value, '.2f')
+
+
 def integer_ticks(low, high, count=9):
     step = max(1, math.ceil((high - low) / max(5, count - 1)))
     step = min(step, max(1, math.floor((high - low) / 6)))
@@ -28,6 +32,8 @@ def integer_ticks(low, high, count=9):
 
 class FrequencyPlot(QWidget):
     selected = pyqtSignal(float)
+    TOP_MARGIN = 22
+    BOTTOM_MARGIN = 45
 
     def __init__(self, model, parent=None):
         super().__init__(parent)
@@ -52,7 +58,7 @@ class FrequencyPlot(QWidget):
         return math.log10(period) if self.logarithmic else period
 
     def reset_view(self):
-        known = self.model.known
+        known = tuple((p.period, p.flow) for p in self.points if p.flow is not None)
         low, high = min(p for p, q in known), max(p for p, q in known)
         if low == high:
             low, high = max(2, low / 2), min(500, high * 2)
@@ -64,7 +70,8 @@ class FrequencyPlot(QWidget):
         metrics = self.fontMetrics()
         ylabels = integer_ticks(self.view[2], self.view[3]) or [0]
         left = max(metrics.horizontalAdvance(str(v)) for v in ylabels) + 33
-        return QRectF(left, 22, max(1, self.width() - left - 24), max(1, self.height() - 83))
+        return QRectF(left, self.TOP_MARGIN, max(1, self.width() - left - 24),
+                      max(1, self.height() - self.TOP_MARGIN - self.BOTTOM_MARGIN))
 
     def coordinate(self, period, flow):
         rect = self.plot_rect()
@@ -103,7 +110,7 @@ class FrequencyPlot(QWidget):
             text = str(p)
             painter.drawLine(QPointF(x, rect.bottom()), QPointF(x, rect.bottom() + 4))
             painter.drawText(QRectF(x - metrics.horizontalAdvance(text) / 2 - 2,
-                                   rect.bottom() + 6, metrics.horizontalAdvance(text) + 4, 20),
+                                   rect.bottom() + 4, metrics.horizontalAdvance(text) + 4, 18),
                              Qt.AlignCenter, text)
         for q in yticks:
             y = self.coordinate(self.model.known[0][0], q).y()
@@ -114,7 +121,7 @@ class FrequencyPlot(QWidget):
             painter.drawText(QRectF(20, y - 10, rect.left() - 28, 20), Qt.AlignRight | Qt.AlignVCenter, str(q))
         painter.setPen(QPen(QColor('#677581'), 1))
         painter.drawRect(rect)
-        painter.drawText(QRectF(rect.left(), rect.bottom() + 32, rect.width(), 24),
+        painter.drawText(QRectF(rect.left(), rect.bottom() + 23, rect.width(), 20),
                          Qt.AlignCenter, 'Periodo de retorno (T) · años')
         painter.save()
         painter.translate(14, rect.center().y())
@@ -124,17 +131,17 @@ class FrequencyPlot(QWidget):
         painter.restore()
         painter.save()
         painter.setClipRect(rect.adjusted(-1, -1, 1, 1))
-        curve = QPainterPath()
         known = self.model.known
-        for index, ((p1, q1), (p2, q2)) in enumerate(zip(known, known[1:])):
-            if not index:
-                curve.moveTo(self.coordinate(p1, q1))
-            for step in range(1, 33):
-                fraction = step / 32
-                period = math.exp(math.log(p1) + fraction * math.log(p2 / p1))
-                curve.lineTo(self.coordinate(period, q1 + fraction * (q2 - q1)))
         painter.setPen(QPen(self.color, self.line_width, self.line_style))
-        painter.drawPath(curve)
+        painter.drawPath(self._curve_path(known))
+        extrapolated = sorted((p.period, p.flow) for p in self.points
+                              if p.origin == 'Extrapolación T → Q')
+        if extrapolated:
+            painter.setPen(QPen(self.color, self.line_width, Qt.DashLine))
+            if extrapolated[0][0] < known[0][0]:
+                painter.drawPath(self._curve_path((extrapolated[0], known[0])))
+            if extrapolated[-1][0] > known[-1][0]:
+                painter.drawPath(self._curve_path((known[-1], extrapolated[-1])))
         for point in self.points:
             if point.flow is None:
                 continue
@@ -154,7 +161,7 @@ class FrequencyPlot(QWidget):
                 pos = self.coordinate(point.period, point.flow)
                 if not rect.adjusted(-.5, -.5, .5, .5).contains(pos):
                     continue
-                text = f'{display(point.period)}; {display(point.flow, 2)}'
+                text = f'{display(point.period)}; {display_flow(point.flow)}'
                 width = metrics.horizontalAdvance(text) + 8
                 height = metrics.height() + 4
                 for dx, dy in ((8, -height - 4), (8, 5), (-width - 8, -height - 4),
@@ -166,6 +173,17 @@ class FrequencyPlot(QWidget):
                         painter.drawText(label, Qt.AlignCenter, text)
                         occupied.append(label)
                         break
+
+    def _curve_path(self, known):
+        curve = QPainterPath()
+        for index, ((p1, q1), (p2, q2)) in enumerate(zip(known, known[1:])):
+            if not index:
+                curve.moveTo(self.coordinate(p1, q1))
+            for step in range(1, 33):
+                fraction = step / 32
+                period = math.exp(math.log(p1) + fraction * math.log(p2 / p1))
+                curve.lineTo(self.coordinate(period, q1 + fraction * (q2 - q1)))
+        return curve
 
     def nearest(self, position):
         candidates = [(math.hypot(self.coordinate(p.period, p.flow).x() - position.x(),
@@ -202,7 +220,8 @@ class FrequencyPlot(QWidget):
             point = self.nearest(event.pos())
             if point:
                 QToolTip.showText(event.globalPos(),
-                    f'T = {display(point.period)} años · Q = {display(point.flow, 2)} m³/s', self)
+                    f'T = {display(point.period)} años · Q = {display_flow(point.flow)} m³/s'
+                    + (' (extrapolado)' if point.origin == 'Extrapolación T → Q' else ''), self)
             else:
                 QToolTip.hideText()
         super().mouseMoveEvent(event)
@@ -259,61 +278,50 @@ class RationalFrequencyDialog(QDialog):
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setMinimumWidth(230)
-        self.table.setMinimumHeight(220)
+        self.table.verticalHeader().setMinimumSectionSize(20)
+        self.table.verticalHeader().setDefaultSectionSize(24)
         self.plot = FrequencyPlot(model, self)
         self.plot.setFixedSize(422, 268)
         splitter.setFixedHeight(268)
-        splitter.addWidget(self.table)
+        table_host = QWidget(splitter)
+        table_layout = QVBoxLayout(table_host)
+        # Match the visible plot border, excluding the axes' outer margins.
+        table_layout.setContentsMargins(0, self.plot.TOP_MARGIN, 0, self.plot.BOTTOM_MARGIN)
+        table_layout.setSpacing(0)
+        table_layout.addWidget(self.table)
+        splitter.addWidget(table_host)
         splitter.addWidget(self.plot)
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 0)
         splitter.setSizes([250, 422])
         layout.addWidget(splitter, 1)
-        controls = QGridLayout()
-        self.labels_check = QCheckBox('Mostrar etiquetas', self)
+        controls = QHBoxLayout()
+        controls.setSpacing(12)
+        self.labels_check = QCheckBox('Etiqueta', self)
         self.grid_check = QCheckBox('Cuadrícula', self)
         self.grid_check.setChecked(True)
-        self.log_check = QCheckBox('Escala logarítmica de T', self)
+        self.log_check = QCheckBox('Escala logarítmica T', self)
         self.log_check.setChecked(True)
-        self.color_button = QPushButton('Color…', self)
-        self.style_combo = QComboBox(self)
-        for text, value in [('Línea continua', Qt.SolidLine), ('Línea discontinua', Qt.DashLine), ('Línea de puntos', Qt.DotLine)]:
-            self.style_combo.addItem(text, value)
-        self.width_spin = QSpinBox(self)
-        self.width_spin.setRange(1, 5)
-        self.width_spin.setValue(2)
-        reset = QPushButton('Restablecer vista', self)
-        controls.addWidget(self.labels_check, 0, 0)
-        controls.addWidget(self.grid_check, 0, 1)
-        controls.addWidget(self.log_check, 0, 2, 1, 3)
-        controls.addWidget(self.color_button, 1, 0)
-        controls.addWidget(self.style_combo, 1, 1)
-        controls.addWidget(QLabel('Grosor:', self), 1, 2)
-        controls.addWidget(self.width_spin, 1, 3)
-        controls.addWidget(reset, 1, 4)
-        controls.setColumnStretch(1, 1)
+        for check in (self.labels_check, self.grid_check, self.log_check):
+            controls.addWidget(check)
+        controls.addStretch()
         layout.addLayout(controls)
-        help_label = QLabel('Rueda: ampliar o reducir · Arrastrar: desplazar · Doble clic: restablecer. '
-                            'Los ejes muestran marcas enteras; los puntos conservan sus decimales.', self)
-        help_label.setWordWrap(True)
-        layout.addWidget(help_label)
         queries = QVBoxLayout()
-        self.period_spin = self._spin(2, 500, model.accepted_period)
+        self.period_spin = self._spin(2, 1e6, model.accepted_period)
         self.flow_spin = self._spin(0, max(1e6, model.accepted_flow * 100), model.accepted_flow)
         self.flow_spin.setDecimals(2)
         self.forward_result, self.inverse_result = QLabel(self), QLabel(self)
         self.forward_result.setWordWrap(True)
         self.inverse_result.setWordWrap(True)
+        self.extrapolation_check = QCheckBox('Permitir extrapolación', self)
+        self.extrapolation_check.setChecked(False)
+        self.extrapolation_check.setToolTip('Prolonga la tendencia de los dos valores extremos fuera '
+            'del intervalo disponible. No modifica el cálculo de CAUMAX.')
         queries.addWidget(self._query_box('Periodo → caudal', 'Periodo de retorno (T) · años',
-                                         self.period_spin, self.forward_result))
+                                         self.period_spin, self.forward_result, self.extrapolation_check))
         queries.addWidget(self._query_box('Caudal → periodo', 'Caudal punta (m³/s)',
                                          self.flow_spin, self.inverse_result))
         layout.addLayout(queries)
-        self.method_label = QLabel('Estimaciones: interpolación lineal del caudal respecto a log(T), '
-            'entre los valores disponibles, incluido el resultado aceptado por CAUMAX. '
-            'No se extrapola ni se modifica el cálculo principal.', self)
-        self.method_label.setWordWrap(True)
-        layout.addWidget(self.method_label)
         unavailable = [p for p in model.points if p.flow is None]
         if unavailable:
             warning = QLabel('Periodos sin caudal: ' + ', '.join(display(p.period) for p in unavailable)
@@ -329,10 +337,7 @@ class RationalFrequencyDialog(QDialog):
         self.labels_check.toggled.connect(lambda value: self._plot_setting('labels', value))
         self.grid_check.toggled.connect(lambda value: self._plot_setting('grid', value))
         self.log_check.toggled.connect(self._set_scale)
-        self.width_spin.valueChanged.connect(lambda value: self._plot_setting('line_width', value))
-        self.style_combo.currentIndexChanged.connect(lambda _: self._plot_setting('line_style', self.style_combo.currentData()))
-        self.color_button.clicked.connect(self._choose_color)
-        reset.clicked.connect(self.plot.reset_view)
+        self.extrapolation_check.toggled.connect(self._set_extrapolation)
         self._forward_timer = QTimer(self)
         self._inverse_timer = QTimer(self)
         for timer in (self._forward_timer, self._inverse_timer):
@@ -347,11 +352,8 @@ class RationalFrequencyDialog(QDialog):
         self.estimate_forward(add=False)
         self.estimate_inverse(add=False)
         available = (self.screen() or QApplication.primaryScreen()).availableGeometry()
-        # Requested default: 50% of the observed 844 px plot width and 60%
-        # of its 447 px height, with aligned table and compact controls.
-        self.resize(min(698, available.width() - 40), min(600, available.height() - 60))
+        self.resize(min(698, available.width() - 40), min(self.sizeHint().height(), available.height() - 60))
         layout.activate()
-        self.resize(self.width(), min(self.height() + 268 - self.plot.height(), available.height() - 60))
         splitter.setSizes([250, 422])
 
     def _spin(self, low, high, value):
@@ -361,18 +363,22 @@ class RationalFrequencyDialog(QDialog):
         spin.setRange(low, high)
         spin.setValue(value)
         spin.setKeyboardTracking(True)
-        spin.setFixedWidth(spin.fontMetrics().horizontalAdvance('99999,99') + 28)
+        spin.setFixedWidth(spin.fontMetrics().horizontalAdvance('1000000,00') + 28)
         return spin
 
-    def _query_box(self, title, caption, spin, result):
+    def _query_box(self, title, caption, spin, result, extra=None):
         box = QGroupBox(title, self)
-        row = QHBoxLayout(box)
+        content = QVBoxLayout(box)
+        row = QHBoxLayout()
         row.setSpacing(6)
         label = QLabel(caption, box)
         row.addWidget(label)
         row.addWidget(spin)
         row.addSpacing(18)
         row.addWidget(result, 1)
+        content.addLayout(row)
+        if extra is not None:
+            content.addWidget(extra, 0, Qt.AlignLeft)
         return box
 
     def _queue_forward(self, value):
@@ -390,23 +396,30 @@ class RationalFrequencyDialog(QDialog):
         self.plot.logarithmic = checked
         self.plot.reset_view()
 
-    def _choose_color(self):
-        color = QColorDialog.getColor(self.plot.color, self, 'Color de la curva')
-        if color.isValid():
-            self._plot_setting('color', color)
+    def _set_extrapolation(self, checked):
+        if not checked:
+            original = {p.period: p for p in self.model.points}
+            for period, point in tuple(self.rows.items()):
+                if point.origin == 'Extrapolación T → Q':
+                    if period in original:
+                        self.rows[period] = original[period]
+                    else:
+                        del self.rows[period]
+            self._refresh(self.model.accepted_period)
+            self.plot.reset_view()
+        self.estimate_forward()
 
     def _refresh(self, selected):
         self.table.blockSignals(True)
         ordered = sorted(self.rows.values(), key=lambda p: p.period)
         self.table.setRowCount(len(ordered))
         for row, point in enumerate(ordered):
-            values = (display(point.period), '—' if point.flow is None else display(point.flow, 2))
+            values = (display(point.period), '—' if point.flow is None else display_flow(point.flow))
             for column, text in enumerate(values):
                 item = QTableWidgetItem(text)
                 item.setData(Qt.UserRole, point.period)
-                item.setToolTip(point.note or f'T = {display(point.period)} · Q = {display(point.flow, 2)}')
-                if column < 2:
-                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                item.setToolTip(point.note or f'T = {display(point.period)} · Q = {values[1]}')
+                item.setTextAlignment(Qt.AlignCenter)
                 self.table.setItem(row, column, item)
         self.plot.points = tuple(ordered)
         self.table.blockSignals(False)
@@ -427,24 +440,30 @@ class RationalFrequencyDialog(QDialog):
             self.plot.selected_period = self.table.item(row, 0).data(Qt.UserRole)
             self.plot.update()
 
-    def _add(self, period, flow, origin):
+    def _add(self, period, flow, origin, note=''):
         existing = next((p for p in self.rows if math.isclose(p, period, rel_tol=1e-10)), None)
         if existing is not None:
             if self.rows[existing].flow is not None:
                 return existing
             period = existing
-        self.rows[period] = FrequencyPoint(period, flow, origin)
+        self.rows[period] = FrequencyPoint(period, flow, origin, note)
         return period
 
     def estimate_forward(self, add=True):
         self._forward_timer.stop()
         try:
             period = self.period_spin.value()
-            flow = self.model.flow_at(period)
-            self.forward_result.setText(f'Caudal punta (m³/s): {display(flow, 2)}')
+            flow = self.model.flow_at(period, allow_extrapolation=self.extrapolation_check.isChecked())
+            known = self.model.known
+            extrapolated = period < known[0][0] or period > known[-1][0]
+            self.forward_result.setText(f'Caudal punta (m³/s): {display_flow(flow)}'
+                                       + (' (extrapolado)' if extrapolated else ''))
             if add:
-                period = self._add(period, flow, 'Consulta T → Q')
+                note = 'Estimación extrapolada; no es un cuantil calculado por CAUMAX.' if extrapolated else ''
+                period = self._add(period, flow, 'Extrapolación T → Q' if extrapolated else 'Consulta T → Q', note)
                 self._refresh(period)
+                if extrapolated:
+                    self.plot.reset_view()
         except ValueError as error:
             self.forward_result.setText(str(error))
 
@@ -471,6 +490,19 @@ class RationalFrequencyBridge(QObject):
         super().__init__(parent)
         self.iface = iface
         self.dialogs = {}
+        self._requested = set()
+
+    def request_calculation(self, owner):
+        """Only our GEA button requests the multi-period presentation."""
+        key = id(owner)
+        button = getattr(owner, 'btnCalculate', None)
+        if key in self._requested or button is None or not button.isEnabled():
+            return
+        self._requested.add(key)
+        try:
+            owner.calculate()
+        finally:
+            self._requested.discard(key)
 
     def calculation_started(self, owner, stage):
         previous = self.dialogs.get(id(owner))
@@ -478,7 +510,7 @@ class RationalFrequencyBridge(QObject):
             previous.close()
 
     def calculation_finished(self, owner, stage, event):
-        if stage != 'flow':
+        if stage != 'flow' or id(owner) not in self._requested:
             return
         try:
             model = capture_frequency(owner, event)
@@ -503,6 +535,7 @@ class RationalFrequencyBridge(QObject):
             self.dialogs.pop(key, None)
 
     def stop(self):
+        self._requested.clear()
         for dialog in tuple(self.dialogs.values()):
             dialog.close()
         self.dialogs.clear()

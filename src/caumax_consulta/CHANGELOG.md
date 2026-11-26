@@ -1,3 +1,16 @@
+# HidroCAUMAX v1.0.8 — cálculo GEA, tabla alineada y diálogo compacto (2026-11-26)
+
+- Calcular original conserva su formato y calcula solo el caudal individual. El nuevo Calcular con GEA, abajo a la izquierda, abre la tabla y el gráfico de varios periodos de retorno tras aceptar el cálculo nativo.
+- Guardar cuenca… vuelve a la fila principal y añade el logotipo GEA. Los botones añadidos se retiran al desactivar las herramientas.
+- Altura de Método racional ajustada al contenido, eliminando el espacio vertical vacío y conservando la anchura. Restauración de la altura previa si no se ha redimensionado manualmente.
+- Tabla con valores centrados y caudales con dos decimales fijos y coma. Su borde superior e inferior coincide con el área del gráfico; título horizontal más próximo al eje.
+- Casillas Etiqueta, Cuadrícula y Escala logarítmica T compactas a la izquierda. Retira controles de color, estilo, grosor, botón de restablecimiento y textos inferiores solicitados; conserva zoom, arrastre y doble clic para restablecer.
+- Permitir extrapolación en Periodo → caudal, desmarcado por defecto. Prolonga la tendencia de los dos valores extremos en log(T), identifica las estimaciones y usa línea discontinua. Al desmarcar se eliminan las consultas extrapoladas; los cuantiles originales y la inversa permanecen intactos.
+- Nuevas leyendas de capas de resolución mejorada plegadas, manteniendo el grupo TauDEM abierto y sus estados de visibilidad.
+- Pruebas de regresión con Qt/QGIS y comprobación de escritorio de ambos botones, extrapolación, altura y leyendas. Detalles en `docs/verification-1.0.8.md` del repositorio.
+
+---
+
 # HidroCAUMAX v1.0.7 — barra de herramientas visible al cargar (2026-11-26)
 
 - Barra HidroCAUMAX con el logo elegido por el usuario (gota, hidrograma, río y emblema Q Max), conservado sin modificar la imagen.

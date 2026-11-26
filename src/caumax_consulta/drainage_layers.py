@@ -228,6 +228,7 @@ class DrainageLayers:
         if self._group is None or sip.isdeleted(self._group):
             self._group=create_result_group(QgsProject.instance(),'HidroCAUMAX · Drenaje TauDEM',10)
             self._group.setCustomProperty(OWNER_PROPERTY,self.owner_key)
+            self._group.setExpanded(True)
         return self._group
 
     def display_dem(self, analysis, dem_path):
@@ -253,7 +254,9 @@ class DrainageLayers:
             layer.setCustomProperty(OWNER_PROPERTY, self.owner_key)
             layer.setCustomProperty(ROLE_PROPERTY, kind)
             project.addMapLayer(layer, False)
-            group.insertLayer(index, layer).setItemVisibilityChecked(True)
+            node = group.insertLayer(index, layer)
+            node.setItemVisibilityChecked(True)
+            node.setExpanded(False)
         self.layers = {'dem': dem, 'hillshade': shade}
         for layer in previous.values():
             if (layer is not None and not sip.isdeleted(layer)
@@ -311,7 +314,9 @@ class DrainageLayers:
             layer.setCustomProperty(OWNER_PROPERTY, self.owner_key)
             layer.setCustomProperty(ROLE_PROPERTY, kind)
             project.addMapLayer(layer, False)
-            group.insertLayer(index, layer).setItemVisibilityChecked(flags[kind])
+            node = group.insertLayer(index, layer)
+            node.setItemVisibilityChecked(flags[kind])
+            node.setExpanded(False)
         self.layers = new
         for layer in previous.values():
             if (layer is not None and not sip.isdeleted(layer)

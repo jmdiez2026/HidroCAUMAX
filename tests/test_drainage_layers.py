@@ -221,6 +221,8 @@ class DrainageLayersTests(unittest.TestCase):
         self.assertEqual(ordered, [layers[k].id()
             for k in ('network', 'directions', 'dem', 'hillshade')])
         self.assertEqual(layers['dem'].name(), 'MDT 25x25m')
+        self.assertTrue(group.isExpanded())
+        self.assertTrue(all(not node.isExpanded() for node in group.children()))
         self.assertEqual(Path(layers['dem'].source()), path)
         self.assertEqual(Path(layers['hillshade'].source()), path)
         self.assertTrue(group.children()[2].itemVisibilityChecked())
