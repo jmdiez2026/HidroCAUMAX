@@ -89,8 +89,14 @@ class Resolution(QObject):
         self.active_key=key
         query=replace(self.base_query,dem_path=str(Path(self.base_query.dem_path).parent/f'mdt_{key}.tif'),
                       directions_path=str(Path(self.base_query.dem_path).parent/f'd8_{key}.tif'))
-        for path in (query.dem_path,query.directions_path):
-            Path(path).write_bytes(b'fine fixture')
+        # A true GeoTIFF permits end-to-end QGIS registration of the MDT.
+        for path, kind in ((query.dem_path, 'dem'), (query.directions_path, 'd8')):
+            dataset = gdal.GetDriverByName('GTiff').Create(
+                path, 5, 5, 1, gdal.GDT_Float32 if kind == 'dem' else gdal.GDT_Byte)
+            dataset.SetGeoTransform((342275., float(key), 0., 4710325., 0., -float(key)))
+            dataset.SetProjection(query.crs.toWkt())
+            dataset.GetRasterBand(1).Fill(125 if kind == 'dem' else 1)
+            dataset = None
         item=dict(analysis=analysis(float(key)),query=query,smoothing_state=None)
         self.variants[key]=item
         self.on_result(key,item['analysis'],query)
