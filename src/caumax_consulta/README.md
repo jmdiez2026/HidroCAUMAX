@@ -14,6 +14,12 @@ Con HidroCAUMAX activo, los campos numéricos de la ventana nativa **Método rac
 
 Las entradas que CAUMAX recibe y las señales de sus controles nativos conservan el separador interno **punto** que exige su cálculo Python. Se evita así romper funciones como `float(txtArea.text())`, recálculos automáticos y comprobación de datos. No se introducen separadores de millares.
 
+## Dos decimales en el caudal punta de Método racional
+
+El resultado **Caudal (m³/s)** se muestra siempre con dos decimales y coma (por ejemplo, `10,35`). Cuando se pulsa **Calcular**, HidroCAUMAX observa el valor devuelto por la fórmula nativa `getFlow`, o el resultado nativo de interpolación para un período T introducido manualmente. Comprueba que corresponde al resultado aceptado y evita que CAUMAX pierda las fracciones al escribir su entero redondeado en el campo. La fórmula, el punto de cálculo, la lluvia y los coeficientes de CAUMAX original **no cambian**.
+
+Las cifras que no pueden recuperarse de un cálculo anterior o de una variante de CAUMAX sin el cálculo observable no se inventan: se presenta el entero original con dos ceros decimales. La captura del valor preciso se realiza de manera reversible sobre el diálogo activo y permite que la cuenca y los informes asociados utilicen el Q aceptado con dos decimales.
+
 ## Capas de referencia
 
 En **Complementos → HidroCAUMAX → Cargar capas HidroCAUMAX**, el complemento añade **HidroCAUMAX · Capas de referencia** como **primer subgrupo dentro de CAUMAX_CAPAS**, por encima de **Red 10 km²**, **Ríos** y las demás capas de CAUMAX. Si CAUMAX_CAPAS aún no existe, se coloca en la primera posición del árbol. Al repetir el comando se recoloca también un grupo ya cargado, sin duplicarlo. Se respeta esta prioridad de dibujo aunque el proyecto utilice un orden de capas personalizado. Contiene siete subgrupos, en este orden:
