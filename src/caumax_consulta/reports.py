@@ -476,9 +476,9 @@ def _basin_hydrology_report_html(analysis, state):
 
 def build_report_html(analysis, query, smoothing_state=None):
     """Build the same metrics/units used by the on-screen parameter schema."""
-    from .parameter_schema import METRICS, format_value, interpret_value
+    from .parameter_schema import METRICS, format_value, interpret_value, interpretation_reference
 
-    values = analysis.values
+    values = dict(analysis.values, cell_resolution=(analysis.cell_width, analysis.cell_height))
     basin_crs = QgsCoordinateReferenceSystem.fromWkt(analysis.crs_wkt)
     query_crs = getattr(query, 'crs', basin_crs)
     x = getattr(query, 'x', getattr(analysis, 'selected_x', None))
@@ -521,7 +521,8 @@ def build_report_html(analysis, query, smoothing_state=None):
             + '</b></td><td width="8%">' + _text(metric.unit or '-')
             + '</td><td width="52%">' + _text(interpretation) + '</td></tr>'
         )
-        definitions.append('<p><b>' + _text(metric.label) + '.</b> ' + _text(metric.definition) + '</p>')
+        definitions.append('<p><b>' + _text(metric.label) + '.</b> ' + _text(metric.definition)
+                           + ' ' + _text(interpretation_reference(metric.key)) + '</p>')
     notes = list(getattr(analysis, 'notes', ()) or ())
     diagnostics = getattr(analysis, 'diagnostics', {}) or {}
     for key, diagnostic, label in (

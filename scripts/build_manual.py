@@ -64,7 +64,7 @@ def build():
     story.append(Spacer(1,24))
     p('HidroCAUMAX v.1.0','title')
     p('Manual de usuario','h1')
-    p('Edición para el paquete 1.0.10 · 26 de noviembre de 2026','small')
+    p('Edición para el paquete 1.0.11 · 26 de noviembre de 2026','small')
     p('Herramientas de cuencas, cartografía y caudales máximos para QGIS y CAUMAX 3.0. Este manual acompaña al complemento y se puede consultar sin conexión.')
     p('Primeros pasos','h2')
     for text in ['1. Instala y habilita CAUMAX y, después, HidroCAUMAX.',
@@ -73,7 +73,7 @@ def build():
                  '4. Usa Calcular del recuadro GEA para consultar la tabla y el gráfico de caudales.',
                  '5. Abre Generar capas resolución mejorada si necesitas MDT, direcciones y red con mayor detalle.']:
         p(text)
-    p('El nombre visible es HidroCAUMAX v.1.0. El número técnico 1.0.10 identifica esta entrega y permite ordenar las actualizaciones.','small')
+    p('El nombre visible es HidroCAUMAX v.1.0. El número técnico 1.0.11 identifica esta entrega y permite ordenar las actualizaciones.','small')
 
     heading(2)
     p('Requisitos e instalación','h2')
@@ -149,8 +149,11 @@ def build():
     p('Guardar y recuperar','h2')
     p('<b>Guardar cuenca…</b> o <b>Guardar proyecto</b>, según la ventana, conserva la información de la cuenca para recuperarla con <b>Abrir cuenca</b> o <b>Abrir proyecto</b>. Un proyecto guardado restaura sus resultados y cierres; no equivale a ejecutar un cálculo nuevo con fuentes distintas.')
     p('<b>Informe (PDF)</b> prepara el informe de la cuenca con los resultados disponibles y el mapa. Antes de compartirlo, revisa punto de cierre, unidades, periodos, cobertura de datos y estado del cálculo.')
-    p('Análisis IA','h2')
-    p('Cuando está disponible, solicita una interpretación de los parámetros. Requiere conexión y depende del servicio configurado. La interpretación es texto de apoyo: no sustituye los valores calculados por CAUMAX. Si el servicio no responde, la tabla de resultados permanece disponible y el estado indica el error.')
+    p('Interpretación automática','h2')
+    p('Las 19 filas de morfología se interpretan al terminar el cálculo, sin botón ni conexión a un servicio de IA. La tabla y el informe utilizan los mismos criterios. Al recalcular la cuenca, la resolución o la superficie suavizada, se actualizan también los comentarios; los datos no disponibles se identifican como tales.')
+    p('Las clases de forma e hipsometría proceden del tema docente <b>Cuenca Hidrográfica</b>, revisión 21SEP, de la Universidad de Valladolid. Cada interpretación combina el valor, el intervalo aplicable y una lectura práctica. Mantén el puntero sobre la celda para consultar el texto completo y la referencia.','small')
+    p('Se conserva la elongación calculada con Lb recta; la comparación docente que usa la longitud del cauce se identifica por separado como <b>Re(L)</b>. Los intervalos de Melton que el tema deja abiertos no se completan con categorías inventadas. El índice hipsométrico utiliza la media de cotas y el TRI se interpreta a la escala del MDT.','small')
+    p('Criterios y límites: <link href="https://github.com/jmdiez2026/HidroCAUMAX/blob/main/docs/interpretation-criteria.md" color="#007FA8">documentación de la interpretación automática</link>.','small')
     p('Los mapas de referencia, el inventario AEMET y los resultados de cálculo tienen procedencias distintas. Consulta la descripción de cada capa para conocer la fuente y su fecha.','small')
 
     heading(9)
@@ -176,7 +179,7 @@ def build():
         canvas.setStrokeColor(blue); canvas.setLineWidth(1); canvas.line(42,806,553,806)
         canvas.setFont('Manual',8); canvas.setFillColor(navy)
         canvas.drawString(42,818,'HidroCAUMAX v.1.0 | Manual de usuario')
-        canvas.drawString(42,25,'Paquete 1.0.10 · Edición 26/11/2026')
+        canvas.drawString(42,25,'Paquete 1.0.11 · Edición 26/11/2026')
         canvas.drawRightString(553,25,f'{doc.page} / {len(TITLES)}')
         canvas.restoreState()
     pdf=OUT/'Manual_HidroCAUMAX_v1.0.pdf'

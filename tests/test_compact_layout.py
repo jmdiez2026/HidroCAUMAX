@@ -1,4 +1,4 @@
-"""Compact QGIS header, complete resolution labels and guarded AI entry point."""
+"""Compact QGIS header, complete resolution labels and automatic interpretation."""
 from dataclasses import replace
 from types import ModuleType, SimpleNamespace
 import sys
@@ -95,75 +95,18 @@ class CompactLayoutTests(unittest.TestCase):
                 self.assertLess(dialog.resolution_status.geometry().bottom(),dialog.context_frame.geometry().top())
                 self.assertLessEqual(dialog.context.geometry().bottom(),dialog.context_frame.height()-6)
 
-    def test_ai_button_shares_resolution_title_row_and_is_disabled_during_work(self):
+    def test_automatic_interpretation_removes_both_ai_buttons(self):
+        from qgis.PyQt.QtWidgets import QPushButton
         dialog = self.dialog
-        button=dialog.analysis_ai_button
-        self.assertEqual(button.text(),'Análisis IA')
-        self.assertIn('#174D78',button.styleSheet())
-        self.assertIs(button.parentWidget(),dialog.resolution_group)
-        self.assertIs(dialog.layout().itemAt(0).widget(),dialog.body_scroll)
-        self.assertFalse(button.icon().isNull())
-        self.assertFalse(button.icon().pixmap(button.iconSize()).isNull())
-        self.assertEqual(button.iconSize().width(),18)
-        self.assertEqual(button.layoutDirection(),Qt.LeftToRight)
-        for width in (520,650,900):
+        self.assertIs(dialog.layout().itemAt(0).widget(), dialog.body_scroll)
+        self.assertFalse(hasattr(dialog, 'analysis_ai_button'))
+        self.assertFalse(hasattr(dialog, 'analysis_header_button'))
+        for width in (520, 650, 900):
             with self.subTest(width=width):
                 self.resize(width)
-                group=dialog.resolution_group
-                title=group.title_rect()
-                self.assertLessEqual(abs(button.geometry().center().y()-title.center().y()),1)
-                self.assertGreater(button.geometry().left(),title.right())
-                self.assertEqual(button.geometry().right(),group.width()-group.layout().contentsMargins().right()-1)
-                self.assertLess(button.geometry().bottom(),dialog.resolution_help.geometry().top())
-                text_width=QFontMetrics(button.font()).horizontalAdvance(button.text())
-                self.assertGreaterEqual(button.width(),text_width+button.iconSize().width()+4)
-                scrollbar=dialog.body_scroll.verticalScrollBar()
-                scrollbar.setValue(0)
-                self.fixture.app.processEvents()
-                position=button.mapTo(dialog,QPoint(0,0))
-                self.assertGreater(scrollbar.maximum(),0)
-                scrollbar.setValue(scrollbar.maximum())
-                self.fixture.app.processEvents()
-                self.assertLess(button.mapTo(dialog,QPoint(0,0)).y(),position.y())
-                self.assertTrue(button.isVisible())
-        self.assertTrue(dialog.analysis_ai_button.isEnabled())
-        for flag in ('_surface_pending','_resolution_pending','_saving_project'):
-            with self.subTest(flag=flag):
-                setattr(dialog,flag,True)
-                dialog._refresh_ai_button()
-                self.assertFalse(dialog.analysis_ai_button.isEnabled())
-                setattr(dialog,flag,False)
-        dialog._surface_valid = False
-        dialog._refresh_ai_button()
-        self.assertFalse(dialog.analysis_ai_button.isEnabled())
-        dialog._surface_valid = True
-        dialog._drainage_controller.busy = True
-        dialog._refresh_ai_button()
-        self.assertFalse(dialog.analysis_ai_button.isEnabled())
-        dialog._drainage_controller.busy = False
-        dialog._refresh_ai_button()
-        self.assertTrue(dialog.analysis_ai_button.isEnabled())
-
-    def test_ai_lazy_call_receives_current_analysis_query_and_snapshot(self):
-        dialog = self.dialog
-        from caumax_consulta.ai_analysis import build_context
-        module = ModuleType('caumax_consulta.ai_analysis')
-        module.build_context = build_context
-        job = Mock()
-        module.request_interpretations = Mock(return_value=job)
-        with patch.dict(sys.modules,{'caumax_consulta.ai_analysis':module}):
-            self.assertIs(dialog._show_ai_analysis(),job)
-            args = module.request_interpretations.call_args.args
-            self.assertIs(args[0],dialog)
-            self.assertIs(args[1],dialog.analysis)
-            self.assertIs(args[2],dialog.query)
-            self.assertEqual(args[3],dialog.get_smoothing_state())
-            self.assertTrue(callable(module.request_interpretations.call_args.kwargs['on_interpretations']))
-            module.request_interpretations.reset_mock()
-            dialog._surface_pending = True
-            self.assertIsNone(dialog._show_ai_analysis())
-            module.request_interpretations.assert_not_called()
-            dialog._surface_pending = False
+                self.assertFalse(any('Análisis IA' in b.text() for b in dialog.findChildren(QPushButton)))
+                self.assertEqual(dialog.table.horizontalHeaderItem(3).text(), 'Interpretación')
+                self.assertTrue(all(dialog.table.item(row, 3).text() for row in range(dialog.table.rowCount())))
 
     def test_hydrology_uses_its_own_groups_without_combined_outer_frame(self):
         dialog = self.dialog

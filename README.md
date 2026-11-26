@@ -1,12 +1,18 @@
 # HidroCAUMAX
 
-Complemento para **QGIS 3** que amplía **CAUMAX 3.0** con delimitación y análisis de cuencas, selección de MDT, morfología, curva hipsométrica, umbral de escorrentía P₀, precipitación diaria máxima Pd y consultas de cuantiles. Versión pública actual: **v1.0.10** (versión técnica del paquete: **1.0.10**). Repositorio: **jmdiez2026/HidroCAUMAX**.
+Complemento para **QGIS 3** que amplía **CAUMAX 3.0** con delimitación y análisis de cuencas, selección de MDT, morfología, curva hipsométrica, umbral de escorrentía P₀, precipitación diaria máxima Pd y consultas de cuantiles. Versión pública actual: **v1.0.11** (versión técnica del paquete: **1.0.11**). Repositorio: **jmdiez2026/HidroCAUMAX**.
 
-En **Método racional → Generación de capas resolución mejorada**, el selector incluye **500 × 500 m · original CAUMAX** como referencia informativa, junto a los MDT mejorados de 25 y 5 m. Al seleccionar 500 m se muestra en QGIS la cuenca básica y al elegir una resolución fina se vuelve a delinear automáticamente con su MDT y D8. El ajuste del cierre es opcional; el suavizado original/suavizado y el grado se encuentran en la misma sección. El recuadro GEA inferior contiene Calcular, Guardar cuenca…, Cuenca hidrográfica, Generar capas resolución mejorada y Limpiar capas. Si falla «Análisis IA», su estado aparece visiblemente debajo de la tabla morfológica.
+En **Método racional → Generación de capas resolución mejorada**, el selector incluye **500 × 500 m · original CAUMAX** como referencia informativa, junto a los MDT mejorados de 25 y 5 m. Al seleccionar 500 m se muestra en QGIS la cuenca básica y al elegir una resolución fina se vuelve a delinear automáticamente con su MDT y D8. El ajuste del cierre es opcional; el suavizado original/suavizado y el grado se encuentran en la misma sección. El recuadro GEA inferior contiene Calcular, Guardar cuenca…, Cuenca hidrográfica, Generar capas resolución mejorada y Limpiar capas. La columna Interpretación se completa automáticamente con criterios documentados al terminar el cálculo, sin botón IA ni conexión a un proveedor de texto.
 
 El **Calcular original** conserva su formato y obtiene únicamente el caudal individual. El nuevo **Calcular con GEA** abre la tabla de periodos de retorno y caudales, con valores centrados, caudales con dos decimales y gráfico alineado. Las consultas T→Q y Q→T son automáticas; **Permitir extrapolación** está desmarcado por defecto y solo habilita la prolongación de T→Q, identificada en pantalla. La altura de Método racional se ajusta al contenido y su anchura mínima permite los cinco botones; las nuevas leyendas de capas de resolución mejorada aparecen plegadas. Véase la [verificación de 1.0.8](docs/verification-1.0.8.md).
 
 El diálogo integra los estadísticos de cuenca y recalcula los resultados al cambiar la resolución del MDT o el grado de suavizado. Conserva el punto original consultado y los caudales oficiales de CAUMAX: cambiar el MDT modifica la delimitación y los parámetros de la cuenca, sin inventar nuevos caudales de avenida.
+
+## Interpretación automática (1.0.11)
+
+Las 19 filas se interpretan al finalizar el cálculo o al recuperar un proyecto guardado. Tabla y PDF comparten los mismos criterios y se actualizan al cambiar cuenca, cierre, resolución o superficie suavizada. Se han retirado los dos botones Análisis IA y su consulta externa.
+
+Las clases de compacidad, elongación de cauce y distribución hipsométrica se basan en el tema docente **Cuenca Hidrográfica, revisión 21SEP**, facilitado por el usuario. La aplicación identifica los intervalos y su procedencia, conserva las fórmulas existentes y trata expresamente las diferencias Re(Lb)/Re(L), los huecos de Melton y la dependencia del TRI respecto a la resolución. Los criterios completos están en [interpretation-criteria.md](docs/interpretation-criteria.md). El documento docente no se redistribuye.
 
 ## ResolucionMejorada y configuración automática (1.0.10)
 
@@ -43,20 +49,20 @@ AEMET · precipitación (inventario histórico), Tramos de ríos · Pfafstetter 
 - **CAUMAX 3.0 instalado y activo**, con sus capas configuradas. Los datos oficiales de CAUMAX no se distribuyen en este repositorio.
 - **No se requiere instalar ni activar otro complemento de QGIS:** el delineado y el tratamiento espacial utilizan las bibliotecas incluidas con QGIS. No se usan Processing, SAGA, Whitebox ni proveedores de terceros. Si GRASS ya está incluido en la instalación de QGIS se puede utilizar directamente; en Windows de 64 bits, cuando falta, se usa automáticamente el TauDEM integrado.
 - Conexión a los servicios oficiales IGN/CNIG para descargar MDT mejorados. Las fuentes conservan sus condiciones de disponibilidad y uso.
-- Conexión a **Pollinations Classic** para el botón **Análisis IA**, gratuito y sin credenciales. No se requiere una cuenta, una clave ni una biblioteca adicional. La disponibilidad y los límites temporales dependen de ese servicio externo.
+- La interpretación morfológica funciona localmente y sin conexión. No necesita claves, cuentas ni servicios de IA.
 - En **Windows de 64 bits**, TauDEM 5.5.0, MPI y sus bibliotecas y datos de GDAL/PROJ están incluidos en el ZIP y se preparan automáticamente. **CAUMAX es el único complemento previo**; el usuario no instala otro complemento ni un motor hidrológico adicional. Se reutilizan las bibliotecas de ejecución de C++ de QGIS/Windows. El paquete de ejecutables integrado es para Windows: en Linux/macOS se requieren los motores GRASS o TauDEM/MPI ya disponibles en esa instalación; no se presenta el ZIP de Windows como un runtime multiplataforma.
 
-La versión v1.0.10 se distribuye en el canal **estable** (`experimental=False`). El código contiene controles de cobertura, NoData y errores; sus resultados deben revisarse con las fuentes y la resolución de cada proyecto.
+La versión v1.0.11 se distribuye en el canal **estable** (`experimental=False`). El código contiene controles de cobertura, NoData y errores; sus resultados deben revisarse con las fuentes y la resolución de cada proyecto.
 
 ## Instalación
 
 **Cambio de numeración anterior:** v1.0 reinició la serie pública desde 1.2.13. Los usuarios que aún tengan 1.2.13 deben instalar manualmente el ZIP de la serie 1.0.x; quienes ya tengan 1.0.0 podrán actualizar a 1.0.5 y posteriores desde el gestor de QGIS, con este repositorio habilitado.
 
 
-Descargas de la versión **v1.0.10**:
+Descargas de la versión **v1.0.11**:
 
-- [ZIP instalable desde QGIS](https://github.com/jmdiez2026/HidroCAUMAX/releases/download/v1.0.10/HidroCAUMAX_v1_0_10.zip).
-- [Instalador de Windows](https://github.com/jmdiez2026/HidroCAUMAX/releases/download/v1.0.10/HidroCAUMAX_v1_0_10_Setup.exe), con icono propio de río en crecida.
+- [ZIP instalable desde QGIS](https://github.com/jmdiez2026/HidroCAUMAX/releases/download/v1.0.11/HidroCAUMAX_v1_0_11.zip).
+- [Instalador de Windows](https://github.com/jmdiez2026/HidroCAUMAX/releases/download/v1.0.11/HidroCAUMAX_v1_0_11_Setup.exe), con icono propio de río en crecida.
 
 **En Windows**, cierra QGIS, ejecuta el instalador y selecciona tu perfil de QGIS 3. El asistente muestra el destino dentro de `%APPDATA%\QGIS\QGIS3\profiles`, trabaja con el usuario actual y no necesita permisos de administrador. Después, abre QGIS con ese perfil y activa HidroCAUMAX. QGIS y CAUMAX original deben estar instalados previamente. Los perfiles ubicados fuera de la carpeta habitual pueden usar el ZIP desde QGIS.
 
@@ -64,7 +70,7 @@ La instalación nueva se prepara antes de sustituir la anterior. Si ya había Hi
 
 **Instalación mediante ZIP**, válida también en Linux y macOS:
 
-1. Utiliza el archivo instalable **HidroCAUMAX_v1_0_10.zip** de esta entrega. El ZIP de código fuente que ofrece GitHub no es el instalable de QGIS.
+1. Utiliza el archivo instalable **HidroCAUMAX_v1_0_11.zip** de esta entrega. El ZIP de código fuente que ofrece GitHub no es el instalable de QGIS.
 2. En QGIS abre **Complementos → Administrar e instalar complementos → Instalar a partir de ZIP** y selecciona el instalable, sin descomprimirlo.
 3. Si ya utilizas HidroCAUMAX, acepta sustituir el complemento anterior y reinicia QGIS para cargar juntos todos los módulos de la nueva versión. La carpeta interna permanece como **caumax_consulta** para conservar la identidad de instalación.
 4. Activa CAUMAX 3.0, carga sus capas y realiza una consulta válida. Pulsa **Cuenca hidrográfica** para abrir las herramientas ampliadas.
@@ -112,7 +118,7 @@ Fuentes y procedencia verificadas:
 - [Esri España: copia cartográfica AEMET publicada en 2017](https://www.arcgis.com/home/item.html?id=20e0ab17fcf249d1a03a4b5c7b083cb1).
 - [AEMET OpenData: centro de descargas](https://opendata.aemet.es/centrodedescargas/inicio).
 
-## Cambios incluidos en 1.2.13
+## Histórico: cambios incluidos en 1.2.13
 
 - **Cierre automático en Método racional:** al seleccionar MDT de 25 × 25 m o 5 × 5 m se identifica el drenaje correspondiente a la cuenca nativa y se elige el centro de celda admisible más próximo al punto original. Se elimina el veto de orientación del cauce grueso de 500 m que podía abrir innecesariamente el selector manual. **Ajuste Punto de Cierre** sigue disponible.
 - **Comprobación del caso comunicado:** en EPSG:25830, X=346039,5 e Y=4717691,8, el ajuste automático desplaza el cierre 34,02 m con MDT25 y 12,02 m con MDT5. Las cuencas resultantes tienen 14,515625 y 14,491800 km², respectivamente, sin alcanzar el borde del MDT. Se comprobaron la mínima distancia entre todos los candidatos, los cambios de resolución en el diálogo y el guardado/reapertura.
@@ -121,7 +127,7 @@ Fuentes y procedencia verificadas:
 - **Google Satellite:** nueva capa XYZ, inicialmente desactivada, situada después de SNCZI y antes de Pfafstetter. El catálogo reúne 27 capas en siete subgrupos.
 - **Posición de las capas de referencia:** el grupo se coloca fuera de CAUMAX_CAPAS, inmediatamente encima, para dibujar sus capas sobre las de CAUMAX. La recolocación se aplica también al repetir el comando con todas las capas ya presentes y contempla el orden de dibujo personalizado.
 
-## Cambios incluidos en 1.2.12
+## Histórico: cambios incluidos en 1.2.12
 
 - **Cargar capas HidroCAUMAX:** nuevo comando en **Complementos → HidroCAUMAX** para incorporar un grupo de referencia con CORINE/ocupación del suelo, clasificación Pfafstetter, las 17 variables agroclimáticas, los calados fluviales SNCZI de T10, T100 y T500 el Mapa Hidrogeológico del IGME y la red de estaciones AEMET. Son 25 WMS oficiales y un SHP local de estaciones; no se duplican al repetir el comando.
 - **Cuenca hidrográfica en Método racional:** el botón con el logotipo GEA-UVa aparece a la izquierda de **Generar capas resolución mejorada**, en la misma fila inferior del diálogo nativo.
@@ -130,7 +136,7 @@ Fuentes y procedencia verificadas:
 - **Delineación racional con MDT de 25 × 25 m y 5 × 5 m:** el selector de resolución utiliza las mismas herramientas de descarga, direcciones D8, ajuste del cierre, delineación y suavizado que el diálogo de consulta de capas de caudales máximos, según la cobertura oficial disponible.
 - **Origen conservado:** los proyectos, informes, exportaciones e interpretaciones distinguen el método racional de la consulta de capas de caudales máximos. Las capas ráster Q no se utilizan como sustituto del cálculo racional. Cambiar MDT, cierre o suavizado recalcula las propiedades de la cuenca, sin modificar el Q nativo.
 
-## Cambios incluidos en 1.2.11
+## Histórico: cambios incluidos en 1.2.11
 
 - **Gráficos más compactos:** los dos bloques Qci/T y Pd/T reducen su altura al 90 % de la versión 1.2.10; la altura habitual pasa de 324 a 292 píxeles, con redondeo. El ajuste se aplica también a la disposición vertical de ventanas estrechas.
 - **Informe en una sola fila:** Informe (PDF), Guardar proyecto y Abrir proyecto se alinean a la izquierda. Cerrar ocupa el extremo derecho de esa misma fila, con fondo rojo claro y márgenes más compactos.
@@ -139,7 +145,7 @@ Fuentes y procedencia verificadas:
 
 - **Acceso a la cuenca:** el botón Cuenca hidrográfica aumenta su altura un 10 % respecto a 1.2.10.
 
-## Cambios incluidos en 1.2.10
+## Histórico: cambios incluidos en 1.2.10
 
 - **CAUMAX como único complemento previo:** no se depende de otros plugins de QGIS. En Windows de 64 bits el TauDEM incluido permite delinear MDT finos aunque QGIS no tenga GRASS; la selección del motor, la caché y los metadatos distinguen ambos procedimientos.
 - **Limpieza completa del mapa:** Borrar Delineado retira también los contornos temporales, cursos y cruces roja y azul del lienzo, aunque sus capas ya no aparezcan en el listado. Cancela las tareas pendientes y actualiza la representación, manteniendo las capas ajenas.
@@ -148,14 +154,14 @@ Fuentes y procedencia verificadas:
 - **Capas mejoradas en Método racional:** el nuevo botón inferior Generar capas resolución mejorada abre una ventana independiente no modal, sin modificar el tamaño del diálogo nativo de CAUMAX. Tiene selector de MDT propio, ocupa la anchura disponible y funciona sin abrir Cuenca hidrográfica. Los cuatro botones internos aumentan al 110 % en anchura y altura.
 - **Presentación compacta:** los gráficos Qci/T y Pd/T reducen su altura al 90 %, las filas de caudales se ajustan al texto y los resúmenes de P₀ y precipitación ocupan dos líneas. El botón de precipitación aumenta su anchura al 110 %. Se retira el recuadro de observaciones bajo la tabla morfológica.
 
-## Cambios incluidos en 1.2.9
+## Histórico: cambios incluidos en 1.2.9
 
 - **Análisis IA directo en la tabla:** ambos botones solicitan únicamente 19 comentarios técnicos breves, sin generar seis apartados adicionales que agotan el límite de texto del servicio. Solo se muestran respuestas completas y validadas; un indicador de límite no invalida por sí mismo un JSON terminado. No se abre otra ventana.
 - **Botón del encabezado:** icono blanco de IA y diseño azul oscuro, con la misma altura que la fila del encabezado; el título y el botón comparten la columna sin superponerse.
 - **Resolución MDT:** el botón superior se coloca a la derecha de ese título y se elimina la fila adicional que ocupaba.
 - **Estado y errores:** durante la petición se desactivan ambos botones. El estado, los errores y los segundos de espera del servicio aparecen en su texto de ayuda, sin ventanas emergentes. Cambiar los datos o cerrar la cuenca cancela la petición pendiente y descarta respuestas antiguas.
 
-## Cambios incluidos en 1.2.8
+## Histórico: cambios incluidos en 1.2.8
 
 - **Cierre de la malla de 500 m:** se utiliza el centro de la celda que contiene el punto original, transformado al CRS del MDT. La cuenca se delimita con las direcciones D8 desde esa celda. En los MDT mejorados el punto original sigue siendo la referencia para determinar el cierre y para cualquier ajuste manual posterior.
 - **Refinamiento de 25 m y 5 m:** se contrasta la cuenca de cada cierre candidato con la superficie de la cuenca original, mediante la acumulación D8 de la malla fina. Se conserva la celda del clic cuando corresponde a esa cuenca; de lo contrario, se busca un cierre próximo sobre una única cadena de drenaje compatible. Una pequeña escorrentía lateral no se acepta como sustituto del río original. Las situaciones sin correspondencia inequívoca requieren selección manual.
@@ -176,7 +182,7 @@ Se conservan la comprobación de actualizaciones desde QGIS, la tabla con un má
 
 La delimitación utiliza centros de celdas y conectividad D8. Su geometría y detalle dependen de la resolución y calidad del MDT. El curso principal se calcula dentro de la cuenca de la celda seleccionada.
 
-### Interfaz y funciones conservadas de 1.2.5
+### Histórico: interfaz y funciones conservadas de 1.2.5
 
 - **Interfaz compacta:** resoluciones `500mx500m`, `25mx25m`, `5mx5m`, `2mx2m` y `0,5mx0,5m`, en una fila cuando caben; MDT activo y punto original en la misma línea. Los paneles P₀ y precipitación diaria quedan separados.
 - **Análisis IA:** botones azul oscuro con icono blanco en el título Resolución MDT y en el encabezado Interpretación. Genera las interpretaciones de los 19 parámetros usando también P₀, Pd y los cuantiles disponibles, con un enfoque aplicado a la Norma 5.2-IC. Envía únicamente los valores necesarios, sin coordenadas, archivos ni rutas. Se ejecuta sin bloquear QGIS y rellena directamente la tabla.
@@ -186,7 +192,7 @@ La delimitación utiliza centros de celdas y conectividad D8. Su geometría y de
 
 El [registro de la revisión](src/caumax_consulta/CHANGELOG.md) explica los cambios y sus límites. Se conservan las funciones de la 1.2.4 descritas a continuación.
 
-### Funciones conservadas de la 1.2.4
+### Histórico: funciones conservadas de la 1.2.4
 
 - **Generar capas D8** utiliza el TauDEM real incluido en Windows de 64 bits. Los componentes se preparan automáticamente en una carpeta privada del usuario, sin descargas adicionales ni cambios en las bibliotecas de QGIS. La extracción y el cálculo se ejecutan en segundo plano; al cerrar la consulta se cancelan sus tareas pendientes. El motor predeterminado se utiliza directamente, sin selector de carpeta externa.
 - Curva hipsométrica: eje horizontal dimensional con marcas enteras y aproximadamente diez divisiones. Para cuencas menores de 1 km², el eje muestra m². Los valores internos mantienen su precisión.
@@ -218,7 +224,7 @@ No se incluyen capas de proyectos, sesiones guardadas, cachés, credenciales ni 
 El empaquetado utiliza **Python 3.10 o posterior** y su biblioteca estándar; no necesita iniciar QGIS:
 
 ```text
-python scripts/build_release.py --output dist --tag v1.0.10
+python scripts/build_release.py --output dist --tag v1.0.11
 ```
 
 Genera el ZIP instalable, sus sumas SHA-256 y el índice XML de distribución. Los archivos resultantes quedan fuera del control de versiones mediante `.gitignore`.
@@ -226,8 +232,8 @@ Genera el ZIP instalable, sus sumas SHA-256 y el índice XML de distribución. L
 Para añadir el instalador Windows se necesitan **NSIS (`makensis`) y 7-Zip (`7z` o `7zz`)** en la máquina de compilación. No se requiere Python en el equipo donde se ejecuta el instalador:
 
 ```text
-python scripts/build_windows_installer.py --zip dist/HidroCAUMAX_v1_0_10.zip --manifest dist/release_manifest.json --output-dir dist
-python scripts/build_release.py --output dist --tag v1.0.10 --reuse-zip dist/HidroCAUMAX_v1_0_10.zip --installer dist/HidroCAUMAX_v1_0_10_Setup.exe --installer-manifest dist/installer_manifest.json
+python scripts/build_windows_installer.py --zip dist/HidroCAUMAX_v1_0_11.zip --manifest dist/release_manifest.json --output-dir dist
+python scripts/build_release.py --output dist --tag v1.0.11 --reuse-zip dist/HidroCAUMAX_v1_0_11.zip --installer dist/HidroCAUMAX_v1_0_11_Setup.exe --installer-manifest dist/installer_manifest.json
 ```
 
 El empaquetador verifica los archivos realmente contenidos en el EXE frente al ZIP, registra las fuentes y la versión del compilador y añade el instalador a las sumas SHA-256 y la página de descarga. El ZIP es reproducible byte a byte; no se presupone que dos versiones distintas de NSIS produzcan un EXE idéntico.
@@ -250,7 +256,7 @@ python -m unittest test_flow_quantiles test_basin_hydrology_widget test_reports 
 
 En Windows puede usarse el lanzador `python-qgis-ltr.bat` o el equivalente de la instalación en lugar de `python`. No se fija una ruta de instalación personal. `tests/check_qgis_env.py` permite comprobar las versiones de QGIS y GDAL del intérprete seleccionado.
 
-Se conservan las regresiones de geometría suavizada, lectura GDAL, guardado completo por resolución, distribución de controles y conexión IA. Las pruebas de red utilizan respuestas simuladas controladas; esta revisión no atribuye una nueva validación del servicio externo de IA. Las capas originales del caso de la captura no se distribuyen con el repositorio.
+Se conservan las regresiones de geometría suavizada, lectura GDAL, guardado completo por resolución y distribución de controles. La interpretación automática añade pruebas de clases y límites, datos ausentes, diferencias entre definiciones y actualización de las filas sin solicitudes de red. Las pruebas del antiguo módulo IA se mantienen como cobertura histórica de código sin conexión a la interfaz actual. Las capas originales del caso de la captura no se distribuyen con el repositorio.
 
 ## Publicación y actualizaciones desde QGIS
 

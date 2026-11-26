@@ -1,15 +1,13 @@
 """Shared basin tools for native CAUMAX raster and rational-method contexts."""
 import traceback
-import hashlib
-import json
 from html import escape
 from pathlib import Path
 from dataclasses import replace
 from copy import deepcopy
 from types import SimpleNamespace
 
-from qgis.PyQt.QtCore import Qt, QTimer, QSettings, QEvent, QSize
-from qgis.PyQt.QtGui import QColor, QFont, QFontMetrics, QIcon
+from qgis.PyQt.QtCore import Qt, QTimer, QSettings, QEvent
+from qgis.PyQt.QtGui import QColor, QFont, QFontMetrics
 from qgis.PyQt.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QDialog, QDialogButtonBox,
     QDoubleSpinBox, QSpinBox, QFileDialog, QFrame, QGridLayout, QGroupBox, QHBoxLayout, QMessageBox,
@@ -22,10 +20,10 @@ from qgis.core import (
 )
 from qgis.gui import QgsRubberBand, QgsVertexMarker
 
-from .parameter_schema import METRICS, format_value
+from .parameter_schema import METRICS, format_value, interpret_value, interpretation_reference
 from .drainage_threshold import manual_step, recommended_threshold
 from .metrics import shape_metrics
-from .morphology_table import ActionGroupBox, InterpretationDelegate, InterpretationHeader, fit_morphology_rows
+from .morphology_table import InterpretationDelegate, InterpretationHeader, fit_morphology_rows
 from .drainage_panel import DrainageControls, DrainageStatusLabel
 from .flow_quantiles import is_rational_query, rational_flow_text
 from .native_decimal import format_decimal
@@ -38,15 +36,6 @@ QPushButton:hover { background-color: #C7E8FF; }
 QPushButton:pressed { background-color: #B1DDF6; }
 QPushButton:disabled { background-color: #EEF6FB; color: #8A9EA8; border-color: #C6DAE5; }
 '''
-
-
-AI_BUTTON_STYLE = """
-QPushButton { background-color: #174D78; color: white; border: 1px solid #103B5C;
-              border-radius: 4px; padding: 3px 10px; min-height: 0px; }
-QPushButton:hover { background-color: #216493; }
-QPushButton:pressed { background-color: #103B5C; }
-QPushButton:disabled { background-color: #91A5B5; color: #F4F7FA; border-color: #8298A9; }
-"""
 
 
 def _compact_resolution(width, height=None):
@@ -108,11 +97,7 @@ class BasinDialog(QDialog):
         self.setWindowModality(Qt.NonModal)
         self.query, self.iface = query, iface
         self.analysis = None
-        self._ai_interpretations = {}
-        self._ai_fingerprint = None
-        self._ai_revision = 0
-        self._ai_request = None
-        self._ai_status_message = 'Generar las interpretaciones de la cuenca con IA gratuita.'
+        self._interpretations_valid = False
         self._base_geometry_wkb = None
         self._pending_external_basin = None
         self._outlet_selector = None
@@ -173,16 +158,6 @@ class BasinDialog(QDialog):
         self._smoothing_timer.setInterval(100)
         self._smoothing_timer.timeout.connect(self._update_smoothing)
         outer = QVBoxLayout(self)
-        self.analysis_ai_button = QPushButton('Análisis IA',self)
-        self.analysis_ai_button.setObjectName('HidroCAUMAXAnalysisAI')
-        self.analysis_ai_button.setStyleSheet(AI_BUTTON_STYLE)
-        self.analysis_ai_button.setIcon(QIcon(str(Path(__file__).parent/'assets'/'analysis_ai.svg')))
-        self.analysis_ai_button.setIconSize(QSize(18,18))
-        self.analysis_ai_button.setLayoutDirection(Qt.LeftToRight)
-        self.analysis_ai_button.setSizePolicy(QSizePolicy.Maximum,QSizePolicy.Fixed)
-        self.analysis_ai_button.setToolTip('Analizar los resultados completos de la cuenca activa.')
-        self.analysis_ai_button.setEnabled(False)
-        self.analysis_ai_button.clicked.connect(self._show_ai_analysis)
         self.body_scroll = QScrollArea(self)
         self.body_scroll.setWidgetResizable(True)
         body = QWidget(self.body_scroll)
@@ -213,9 +188,6 @@ class BasinDialog(QDialog):
         self.table = QTableWidget(len(METRICS), 4, group)
         self.table.setHorizontalHeaderLabels(['Parámetro', 'Valor', 'Unidad', 'Interpretación'])
         self.table.setHorizontalHeader(InterpretationHeader(self.table))
-        self.analysis_header_button = self.table.horizontalHeader().analysis_button
-        self.analysis_header_button.setEnabled(False)
-        self.table.horizontalHeader().analysis_requested.connect(self._show_ai_analysis)
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -231,12 +203,6 @@ class BasinDialog(QDialog):
         self.table.horizontalHeader().setMinimumSectionSize(20)
         self.table.setItemDelegateForColumn(3, InterpretationDelegate(self.table))
         self.table.setMinimumHeight(280)
-        self.ai_status_label = QLabel(group)
-        self.ai_status_label.setObjectName('HidroCAUMAXAIStatus')
-        self.ai_status_label.setTextFormat(Qt.PlainText)
-        self.ai_status_label.setWordWrap(True)
-        self.ai_status_label.setStyleSheet('QLabel { color: #174D78; padding: 2px 4px; }')
-        self.ai_status_label.hide()
         for row, metric in enumerate(METRICS):
             for column, text in enumerate((metric.label, 'Calculando…', metric.unit, '')):
                 item = QTableWidgetItem(text)
@@ -250,7 +216,6 @@ class BasinDialog(QDialog):
         self.table.horizontalHeader().sectionResized.connect(lambda *args: self._row_timer.start(80))
         self.table.viewport().installEventFilter(self)
         box.addWidget(self.table)
-        box.addWidget(self.ai_status_label)
         layout.addWidget(group)
         from .hypsometry import HypsometricWidget
         self.hypsometry_widget = HypsometricWidget(self)
@@ -321,10 +286,9 @@ class BasinDialog(QDialog):
         self.original_check.toggled.connect(self._queue_smoothing)
         self.smooth_check.toggled.connect(self._queue_smoothing)
         self.smoothing_degree.valueChanged.connect(self._queue_smoothing)
-        resolution_group = ActionGroupBox('Resolución MDT', self)
+        resolution_group = QGroupBox('Resolución MDT', self)
         self.resolution_group = resolution_group
         resolution_layout = QVBoxLayout(resolution_group)
-        resolution_group.set_header_action(self.analysis_ai_button)
         resolution_help = QLabel('La aplicación CAUMAX original utiliza MDT de tamaño de celda 500mx500m. Aquí puede seleccionar una resolución mejorada con MDT oficiales (www.cnig.es). Todos los cálculos se actualizarán automáticamente', resolution_group)
         self.resolution_help = resolution_help
         self._update_context()
@@ -519,7 +483,6 @@ class BasinDialog(QDialog):
                 self.table.setColumnWidth(column, value)
         finally:
             header.blockSignals(blocked)
-        header.update_layout()
         fit_morphology_rows(self.table)
 
     def _fit_smoothing_controls(self):
@@ -549,7 +512,6 @@ class BasinDialog(QDialog):
 
     def _update_context(self):
         query,analysis = self.query,self.analysis
-        self.analysis_ai_button.setVisible(not is_rational_query(query))
         coordinates = lambda value: format_decimal(value, '.3f').rstrip('0').rstrip(',')
         self.context_point.setText(
             f'Punto original de consulta: X={coordinates(query.x)}; Y={coordinates(query.y)} · '
@@ -618,143 +580,30 @@ class BasinDialog(QDialog):
         # label; ordinary widths display both labels in the same first line.
         self.context_point.setWordWrap(required() > available)
 
-    def _ai_available(self):
-        drainage_busy = bool(self._drainage_timer.isActive()
-            or (self._drainage_controller and self._drainage_controller.busy))
-        return bool(not self._disposed and self.analysis is not None and self._surface_valid
-            and not self._resolution_pending and not self._saving_project
-            and not self._basin_hydrology_busy() and not drainage_busy and self._task is None)
-
-    def _refresh_ai_button(self):
-        available = self._ai_available() and self._ai_request is None
-        self.analysis_ai_button.setEnabled(available)
-        self.analysis_header_button.setEnabled(available)
-
-    def _set_ai_status(self, message):
-        self._ai_status_message = str(message)
-        if hasattr(self, 'ai_status_label'):
-            self.ai_status_label.setText(self._ai_status_message)
-            self.ai_status_label.setVisible(
-                self._ai_status_message !=
-                'Generar las interpretaciones de la cuenca con IA gratuita.')
-        for button in (self.analysis_ai_button,self.analysis_header_button):
-            button.setToolTip(self._ai_status_message)
-            button.setAccessibleDescription(self._ai_status_message)
-
-    def _cancel_ai_request(self):
-        request,self._ai_request = self._ai_request,None
-        if request is not None:
-            request.cancel()
-            request.deleteLater()
-
-    def _ai_data_fingerprint(self, state=None):
-        """Identify the interpreted data locally, excluding map/display preferences."""
-        from .ai_analysis import build_context
-        if state is None:
-            state = dict(degree=self.smoothing_degree.value(),
-                         flow_quantiles=self.quantiles_widget.snapshot(),
-                         basin_hydrology=self.basin_hydrology_widget.snapshot())
-        analysis,query = self.analysis,self.query
-        context = dict(report=build_context(analysis,query,state),
-                       resolution_key=self._active_resolution_key,
-                       query_point=(query.x,query.y,query.crs.toWkt()),
-                       outlet=(analysis.outlet_x,analysis.outlet_y),
-                       selected_point=(analysis.selected_x,analysis.selected_y))
-        digest = hashlib.sha256()
-        for part in (bytes(analysis.geometry_wkb),bytes(analysis.main_course_wkb),
-                     analysis.crs_wkt.encode('utf-8'),
-                     json.dumps(context,sort_keys=True,ensure_ascii=False,allow_nan=False).encode('utf-8')):
-            digest.update(len(part).to_bytes(8,'big'))
-            digest.update(part)
-        return digest.hexdigest()
-
     def _render_interpretations(self):
+        """Use the same local, current-value interpretation as the PDF."""
+        ready = (not self._disposed and self._interpretations_valid and self.analysis is not None
+                 and self._surface_valid and not self._surface_pending
+                 and not self._resolution_pending and self._task is None)
+        values = dict(self.analysis.values) if ready else {}
+        if ready:
+            values['cell_resolution'] = (self.analysis.cell_width, self.analysis.cell_height)
         self.table.horizontalHeaderItem(3).setText('Interpretación')
-        for row,metric in enumerate(METRICS):
-            text = self._ai_interpretations.get(metric.key,'')
-            self.table.item(row,3).setText(text)
-            self.table.item(row,3).setToolTip('<qt>'+escape(text).replace('\n','<br>')+'</qt>' if text else '')
+        for row, metric in enumerate(METRICS):
+            text = interpret_value(metric.key, values.get(metric.key), values) if ready else ''
+            self.table.item(row, 3).setText(text)
+            detail = text + '\n\n' + interpretation_reference(metric.key) if text else ''
+            self.table.item(row, 3).setToolTip(
+                '<qt>' + escape(detail).replace('\n', '<br>') + '</qt>' if detail else '')
         self._row_timer.start(0)
 
-    def _reset_ai_interpretations(self):
-        self._ai_revision += 1
-        self._cancel_ai_request()
-        self._ai_fingerprint = None
-        self._ai_interpretations = {}
-        self._render_interpretations()
-        self._set_ai_status('Generar las interpretaciones de la cuenca con IA gratuita.')
-        self._refresh_ai_button()
-
-    def _sync_ai_interpretations(self):
-        if self._ai_fingerprint is not None and self._ai_data_fingerprint() != self._ai_fingerprint:
-            self._reset_ai_interpretations()
-
-    def _apply_ai_interpretations(self, revision, analysis, query, fingerprint, interpretations):
-        if (self._disposed or revision != self._ai_revision
-                or analysis is not self.analysis or query is not self.query
-                or not self._surface_valid or self._resolution_pending
-                or self._basin_hydrology_busy() or self._task is not None):
-            return False
-        if (not isinstance(interpretations,dict)
-                or set(interpretations) != {metric.key for metric in METRICS}
-                or any(not isinstance(text,str) or not text.strip() for text in interpretations.values())):
-            return False
-        if self._ai_data_fingerprint() != fingerprint:
-            self._reset_ai_interpretations()
-            return False
-        self._ai_interpretations = dict(interpretations)
-        self._ai_fingerprint = fingerprint
-        self._render_interpretations()
-        return True
-
-    def _show_ai_analysis(self):
-        """Fill the table asynchronously without opening any analysis window."""
-        if not self._ai_available():
-            self._set_ai_status('Análisis IA no disponible hasta terminar los cálculos de la cuenca.')
-            self._refresh_ai_button()
-            return
-        try:
-            from .ai_analysis import request_interpretations
-            self._cancel_ai_request()
-            state = self.get_smoothing_state()
-            fingerprint = self._ai_data_fingerprint(state)
-            if self._ai_fingerprint is not None and fingerprint != self._ai_fingerprint:
-                self._reset_ai_interpretations()
-            self._ai_revision += 1
-            revision,analysis,query = self._ai_revision,self.analysis,self.query
-            self._ai_fingerprint = fingerprint
-            completed = False
-
-            def status_changed(message):
-                if not self._disposed and revision == self._ai_revision:
-                    self._set_ai_status(message)
-
-            def finished():
-                nonlocal completed
-                completed = True
-                if self._disposed or revision != self._ai_revision:
-                    return
-                request,self._ai_request = self._ai_request,None
-                if request is not None:
-                    request.deleteLater()
-                self._refresh_ai_button()
-
-            self._set_ai_status('Interpretando los parámetros con IA…')
-            request = request_interpretations(self,analysis,query,state,
-                on_interpretations=lambda rows: self._apply_ai_interpretations(
-                    revision,analysis,query,fingerprint,rows),
-                on_status=status_changed,on_finished=finished)
-            if completed:
-                request.deleteLater()
-            else:
-                self._ai_request = request
-            self._refresh_ai_button()
-            return request
-        except Exception as error:
-            self._cancel_ai_request()
-            self._set_ai_status('No se ha generado la interpretación de IA. '+str(error))
-            self._refresh_ai_button()
-            QgsMessageLog.logMessage(str(error),'HidroCAUMAX',Qgis.Warning)
+    def _clear_interpretations(self):
+        """Do not retain comments from an earlier basin while recalculating."""
+        self._interpretations_valid = False
+        for row in range(len(METRICS)):
+            self.table.item(row, 3).setText('')
+            self.table.item(row, 3).setToolTip('')
+        self._row_timer.start(0)
 
     def _connect_parent(self, signal, slot):
         signal.connect(slot)
@@ -777,7 +626,7 @@ class BasinDialog(QDialog):
             self._failed(str(error))
 
     def _failed(self, message):
-        self._reset_ai_interpretations()
+        self._clear_interpretations()
         self.progress.hide()
         for row, metric in enumerate(METRICS):
             self.table.item(row, 1).setText(format_value(metric.key, None))
@@ -816,6 +665,7 @@ class BasinDialog(QDialog):
             self.adopt_refined_basin(*pending)
 
     def _display_analysis(self, quantile_snapshot=None):
+        self._interpretations_valid = True
         key = f'{min(self.analysis.cell_width, self.analysis.cell_height):g}'
         visible = self._grid_visibility_by_resolution.get(key, key in ('500', '25'))
         self.cell_grid_check.blockSignals(True)
@@ -834,7 +684,6 @@ class BasinDialog(QDialog):
         self.progress.hide()
         for row, metric in enumerate(METRICS):
             self.table.item(row, 1).setText(format_value(metric.key, self.analysis.values.get(metric.key)))
-        self._sync_ai_interpretations()
         self._render_interpretations()
         crs = QgsCoordinateReferenceSystem.fromWkt(self.analysis.crs_wkt)
         summary = (
@@ -914,13 +763,13 @@ class BasinDialog(QDialog):
 
     def _quantiles_changed(self,*args):
         if self._quantiles_loading or self._smoothing_loading or self._disposed:return
-        self._sync_ai_interpretations()
+        self._render_interpretations()
         self._cache_variant_state()
 
     def _basin_hydrology_changed(self, *args):
         if self._basin_hydrology_loading or self._smoothing_loading or self._disposed:
             return
-        self._sync_ai_interpretations()
+        self._render_interpretations()
         self._cache_variant_state()
 
     def _basin_hydrology_busy(self):
@@ -1061,7 +910,6 @@ class BasinDialog(QDialog):
                 f"{len(state['features'])} tramos. Cada archivo se exporta por separado.")
         elif not busy:
             self.drainage_status.setText('TauDEM predeterminado seleccionado. Pulsa Generar capas D8.')
-        self._refresh_ai_button()
 
     def _prepare_drainage(self, *args):
         self._drainage_timer.stop()
@@ -1168,7 +1016,7 @@ class BasinDialog(QDialog):
         self._drainage_timer.start()
 
     def _mark_drainage_pending(self):
-        for name in ('report_button','save_project_button','export_button','network_export_button','analysis_ai_button','analysis_header_button'):
+        for name in ('report_button','save_project_button','export_button','network_export_button'):
             button=getattr(self,name,None)
             if button is not None:button.setEnabled(False)
 
@@ -1383,7 +1231,7 @@ class BasinDialog(QDialog):
         point = dialog.selection()
         if point is None:
             return
-        self._reset_ai_interpretations()
+        self._clear_interpretations()
         self._outlet_apply_pending = True
         self._outlet_manual_token = None
         self._delineation_cleared = False
@@ -1392,6 +1240,7 @@ class BasinDialog(QDialog):
         self._cancel_basin_hydrology()
         self._cancel_surface()
         self._resolution_pending = True
+        self._clear_interpretations()
         self.resolution_progress.show()
         self._refresh_basin_hydrology_controls()
         try:
@@ -1494,9 +1343,9 @@ class BasinDialog(QDialog):
             return
         if self._resolution_pending and self._resolution_controller.requested_key == key:
             return
-        self._reset_ai_interpretations()
+        self._clear_interpretations()
         self._resolution_pending = True
-        self._refresh_ai_button()
+        self._render_interpretations()
         self.basin_hydrology_widget.setEnabled(False)
         self.report_button.setEnabled(False)
         self.save_project_button.setEnabled(False)
@@ -1649,7 +1498,7 @@ class BasinDialog(QDialog):
             return
         if self.analysis is None:
             return
-        self._reset_ai_interpretations()
+        self._clear_interpretations()
         if self._base_geometry_wkb is None:
             self._base_geometry_wkb = bytes(self.analysis.geometry_wkb)
         self._cancel_drainage()
@@ -1659,6 +1508,7 @@ class BasinDialog(QDialog):
         self._surface_pending = True
         self._surface_requested = True
         self._surface_valid = False
+        self._clear_interpretations()
         snapshot = self.basin_hydrology_widget.snapshot() or {}
         if snapshot:
             self._surface_preferences = {k:snapshot[k] for k in
@@ -2250,7 +2100,7 @@ class BasinDialog(QDialog):
         return saved
 
     def _restore_session(self, saved):
-        self._reset_ai_interpretations()
+        self._clear_interpretations()
         self._cancel_save_surfaces()
         self._saving_project = False
         self._cancel_drainage()
@@ -2415,10 +2265,6 @@ class BasinDialog(QDialog):
         if self._disposed:
             return
         self._disposed = True
-        self._ai_revision += 1
-        self._cancel_ai_request()
-        self._ai_interpretations = {}
-        self._ai_fingerprint = None
         from .delineation_cleanup import unregister_dialog
         unregister_dialog(self)
         self._close_outlet_selection()

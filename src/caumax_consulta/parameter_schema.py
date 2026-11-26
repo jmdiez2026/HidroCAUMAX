@@ -70,7 +70,7 @@ def _short(value, precision=1):
 
 
 def interpret_value(key, value, values=None):
-    """Short practical readings without unsupported flood-risk categories."""
+    """Deterministic readings; classroom categories never change measured values."""
     values = values or {}
     if format_value(key, value) == 'n.d.':
         if key == 'hypsometric' and values.get('relief_m') == 0:
@@ -78,8 +78,13 @@ def interpret_value(key, value, values=None):
         return 'No evaluable; consulta las observaciones del cálculo.'
     if key == 'cell_resolution':
         width, height = (float(v) for v in value)
+        if width * height < 10000:
+            area_text = '<0,01' if width * height < .01 else _short(width * height, 2)
+            return f'Cada celda representa {area_text} m²; condiciona el detalle del cálculo.'
         return f'Cada celda representa {_short(width * height / 10000, 2)} ha; condiciona el detalle del cálculo.'
     number = float(value)
+    if key not in ('zmax_m', 'zmin_m', 'zmedian_m') and number < 0:
+        return 'No evaluable: valor fuera del dominio del indicador.'
     if key == 'area_km2':
         return f'Superficie aportante equivalente a {_short(number * 100, 1)} ha.'
     if key == 'perimeter_km':
@@ -87,19 +92,80 @@ def interpret_value(key, value, values=None):
     if key == 'cell_count':
         return 'Celdas de la malla que aportan superficie a la cuenca activa.'
     if key == 'elongation_ratio':
-        return f'Diámetro equivalente: {_short(number * 100)} % de Lb; un valor menor indica más alargamiento.'
+        area, length = _positive(values.get('area_km2')), _positive(values.get('main_length_km'))
+        measured = f'Diámetro equivalente: {_short(number * 100)} % de Lb recta.'
+        if area is None or length is None:
+            return measured + ' La clasificación del tema necesita la longitud del cauce L.'
+        course_ratio = 2 * math.sqrt(area / math.pi) / length
+        if course_ratio > 1:
+            return measured + f' Re(L)={_short(course_ratio, 2)}: fuera del intervalo docente hasta 1; revisar recorrido y cierre.'
+        if course_ratio < .5:
+            category, interval = 'Muy alargada', 'Re(L)<0,50'
+        elif course_ratio < .7:
+            category, interval = 'Alargada', '0,50≤Re(L)<0,70'
+        elif course_ratio < .8:
+            category, interval = 'Moderadamente alargada', '0,70≤Re(L)<0,80'
+        elif course_ratio <= .9:
+            category, interval = 'Subcircular', '0,80≤Re(L)≤0,90'
+        else:
+            category, interval = 'Circular', '0,90<Re(L)≤1'
+        return f'{category} según el cauce: Re(L)={_short(course_ratio, 2)} ({interval}). ' + measured
     if key == 'kc':
-        return f'Contorno {_short((number - 1) * 100)} % más largo que un círculo de igual área.'
+        if number < 1:
+            return 'No evaluable: Kc debe ser ≥1; revisar área y perímetro.'
+        if number <= 1.25:
+            category, interval, response = 'Compacta', '1≤Kc≤1,25', 'tendencia geométrica a concentrar aportaciones más simultáneas'
+        elif number <= 1.5:
+            category, interval, response = 'Transición', '1,25<Kc≤1,50', 'forma intermedia entre compacta y alargada'
+        elif number <= 1.75:
+            category, interval, response = 'Alargada y estrecha', '1,50<Kc≤1,75', 'tendencia geométrica a escalonar aportaciones'
+        else:
+            category, interval, response = 'Delgada, sinuosa o muy asimétrica', 'Kc>1,75', 'contrastar la forma con la divisoria y la red'
+        return (f'{category} ({interval}): {response}. '
+                f'Contorno {_short((number - 1) * 100)} % más largo que un círculo de igual área.')
     if key == 'ic':
+        if not 0 < number <= 1:
+            return 'No evaluable: Ic debe estar entre 0 y 1.'
         return f'Área equivalente al {_short(number * 100)} % del círculo de igual perímetro.'
     if key == 'melton':
-        return f'Desnivel igual al {_short(number * 100)} % de √área; mayor valor, relieve relativo más marcado.'
+        if number < .1:
+            category, interval = 'muy baja', 'MRN<0,10'
+        elif number <= .2:
+            category, interval = 'moderada', '0,10≤MRN≤0,20'
+        elif .3 <= number <= .6:
+            category, interval = 'alta', '0,30≤MRN≤0,60'
+        elif number > 4:
+            category, interval = 'torrencial extrema', 'MRN>4'
+        else:
+            return (f'Desnivel igual al {_short(number * 100)} % de √área. '
+                    'Intervalo sin clase en la tabla docente; contrastar con pendiente y Tc.')
+        return (f'Clase docente «{category}» ({interval}); desnivel igual al {_short(number * 100)} % de √área. '
+                'Lectura conjunta con pendiente y Tc.')
     if key == 'slope_d8_pct':
         return f'Descenso local medio de {_short(number, 2)} m por cada 100 m horizontales en D8.'
     if key == 'hypsometric':
-        return f'Cota media al {_short(number * 100)} % del intervalo entre Hmín y Hmáx.'
+        if not 0 <= number <= 1:
+            return 'No evaluable: HI debe estar entre 0 y 1.'
+        if number in (.35, .6):
+            category = f'Límite entre clases docentes (HI={_short(number, 2)})'
+        elif number < .35:
+            category = 'Distribución baja: clase docente «vieja» (HI<0,35)'
+        elif number < .6:
+            category = 'Distribución intermedia: clase docente «madura» (0,35<HI<0,60)'
+        else:
+            category = 'Distribución alta: clase docente «joven» (HI>0,60)'
+        return category + f'. Cota media al {_short(number * 100)} % del intervalo entre Hmín y Hmáx.'
     if key == 'tri_m':
-        return f'Contraste local medio (RMS): {_short(number / math.sqrt(8), 2)} m; mayor valor, terreno más irregular.'
+        base = f'Contraste local medio (RMS): {_short(number / math.sqrt(8), 2)} m.'
+        resolution = values.get('cell_resolution')
+        try:
+            width, height = map(float, resolution)
+            valid = all(math.isfinite(n) and n > 0 for n in (width, height))
+        except (TypeError, ValueError):
+            valid = False
+        if valid:
+            return base + f' Ventana de {_short(3*width, 2)}×{_short(3*height, 2)} m: comparar terrenos a esta misma resolución.'
+        return base + ' Comparar terrenos con igual resolución y algoritmo.'
     if key == 'relief_m':
         return 'Rango vertical entre las cotas extremas de la cuenca.'
     if key == 'zmax_m':
@@ -113,7 +179,37 @@ def interpret_value(key, value, values=None):
     if key == 'main_length_10_85_km':
         return '75 % central del curso principal; excluye sus tramos extremos.'
     if key == 'tc_h':
-        return f'Unos {_short(number * 60, 0)} min para el curso completo; estimación con la fórmula 5.2-IC.'
+        if number <= .25:
+            return 'Tc≤0,25 h: requiere revisar el cálculo por tramos antes de utilizar esta estimación.'
+        return f'Unos {_short(number * 60, 0)} min para el curso completo; duración de referencia para evaluar la intensidad de lluvia.'
     if key == 'tc_10_85_h':
         return f'Unos {_short(number * 60, 0)} min para el tramo central; comparación con Tc(L).'
     return ''
+
+
+def _positive(value):
+    try:
+        number = float(value)
+        return number if math.isfinite(number) and number > 0 else None
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def interpretation_reference(key):
+    """Provenance and applicability shown in tooltips and report definitions."""
+    source = 'Tema Cuenca Hidrográfica (material docente facilitado por el usuario)'
+    details = {
+        'elongation_ratio': ('40', 'El tema usa Re(L)=2√(A/π)/L del cauce, diferente de Re(Lb) de la fila. Se deriva Re(L) solo si A y L son válidos. Límites compartidos: 0,50 y 0,70 y 0,80 inician clase; 0,90 pertenece a subcircular. Se clasifica sin redondear.'),
+        'kc': ('41', 'Se conserva P/(2√(πA)); 0,282 es su aproximación. Los límites 1,25, 1,50 y 1,75 se incluyen en la clase inferior. Las tendencias de forma se interpretan manteniendo iguales las demás condiciones, no como un caudal calculado.'),
+        'ic': ('41', 'Ic=1/Kc²: es una expresión del mismo contraste de forma, no una evidencia independiente.'),
+        'melton': ('44', 'La tabla omite 0,20<MRN<0,30 y 0,60<MRN≤4. Se mantienen sin clase. Para 0,409 se usa la tabla (alta), no la etiqueta contradictoria del ejemplo (muy fuerte). La clase docente no determina por sí sola peligrosidad ni transporte de sedimentos.'),
+        'hypsometric': ('54', 'Se conserva la media de cotas, no la mediana P50. 0,35 y 0,60 se presentan como límites. Joven/madura/vieja son analogías geomorfológicas docentes, no una datación ni una medida de erosión actual.'),
+        'tri_m': ('55–56', 'Se calcula TRI de Riley (raíz de la suma de ocho cuadrados), promediado en la cuenca. La escala clásica y la escala local 0–4/4–7/7–10/>10 no son universales: esta última corresponde solo a la cuenca ejemplo. Se informa el contraste y la escala de la ventana sin trasladar esas clases a otras cuencas.'),
+        'slope_d8_pct': ('45–49', 'Media de descensos locales D8; se conserva el algoritmo y el MDT del cálculo. El tema no proporciona clases numéricas de pendiente. No se sustituye con ella la pendiente longitudinal utilizada en Tc.'),
+        'tc_h': ('38–39', 'Se interpreta el Tc del recorrido D8 de mayor longitud. Se conserva la fórmula y sus controles de disponibilidad; no se cambia automáticamente al tramo central.'),
+        'tc_10_85_h': ('36–39', 'Tramo central del mismo recorrido, para comparación. Su selección como representativo requiere criterio del estudio; no reemplaza automáticamente Tc(L).'),
+    }
+    if key in details:
+        pages, detail = details[key]
+        return f'{source}, págs. {pages}. {detail}'
+    return 'Lectura cuantitativa del dato calculado y de su definición; sin rangos categóricos inventados.'

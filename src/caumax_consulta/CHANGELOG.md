@@ -1,3 +1,15 @@
+# HidroCAUMAX v.1.0 - interpretación automática (revisión 1.0.11, 2026-11-26)
+
+- Retirados los dos botones Análisis IA y la consulta externa desde la ventana de cuenca. Las 19 interpretaciones se generan localmente al finalizar el cálculo, también al recuperar proyectos.
+- Tabla y PDF comparten lecturas cuantitativas, clases y referencias del tema docente Cuenca Hidrográfica, revisión 21SEP. El material original no se redistribuye.
+- Compacidad y elongación de cauce con intervalos documentados; distinción explícita entre Re(Lb) de la fila y Re(L) del tema. Índice hipsométrico con media de cotas y extremos 0,35/0,60 tratados como límites.
+- Se conservan los huecos de la clasificación de Melton. TRI informa contraste y escala de la ventana sin universalizar la clasificación del ejemplo docente. No se cambian las fórmulas CAUMAX, los caudales ni las direcciones ESRI D8.
+- Comentarios actualizados cuando cambia cuenca, cierre, resolución o superficie suavizada; las incidencias y valores ausentes no reutilizan resultados anteriores como nuevos.
+- Pruebas de clases, extremos, datos inválidos y ausentes, actualización de la tabla, ausencia de peticiones IA y concordancia de informe e interfaz. Manual de diez páginas actualizado a esta revisión.
+- Nombre visible conservado: HidroCAUMAX v.1.0; versión interna para las actualizaciones: 1.0.11. Véase docs/interpretation-criteria.md.
+
+---
+
 # HidroCAUMAX v1.0.10 — carpeta de exportaciones, capas mejoradas y P0 (2026-11-26)
 
 - Nombre visible HidroCAUMAX v.1.0; paquete y actualizaciones 1.0.10.
