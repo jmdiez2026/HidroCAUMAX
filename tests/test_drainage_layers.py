@@ -17,7 +17,8 @@ from osgeo import gdal, ogr, osr
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 from qgis.PyQt import sip
 from qgis.core import (QgsApplication, QgsCoordinateReferenceSystem, QgsProject,
-                       QgsGeometry, QgsVectorLayer, QgsWkbTypes)
+                       QgsGeometry, QgsVectorLayer, QgsWkbTypes,
+                       QgsSingleBandPseudoColorRenderer, QgsHillshadeRenderer)
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from caumax_consulta import drainage_layers as drainage
@@ -90,6 +91,46 @@ class DrainageLayersTests(unittest.TestCase):
         values = np.arange(1,9,dtype=np.uint8) if native else np.array([1,2,4,8,16,32,64,128],dtype=np.uint8)
         ds.GetRasterBand(1).WriteArray(values.reshape(2,4));ds = None
         return path
+
+    def elevation(self):
+        path = self.folder / 'real_mdt_25m.tif'
+        dataset = gdal.GetDriverByName('GTiff').Create(
+            str(path), 4, 2, 1, gdal.GDT_Float32)
+        dataset.SetGeoTransform((500000,25,0,4700050,0,-25))
+        dataset.SetProjection(self.crs.toWkt())
+        dataset.GetRasterBand(1).SetNoDataValue(-9999)
+        dataset.GetRasterBand(1).WriteArray(
+            np.array([[900, 930, 960, 1050],
+                      [850, 910, 975, 1100]], dtype=np.float32))
+        dataset = None
+        return path
+
+    def test_generated_mdt_is_third_layer_of_drainage_group_with_natural_relief(self):
+        state = self.snapshot()
+        state['caumax_d8_path'] = str(self.directions())
+        state['dem_path'] = str(self.elevation())
+        controller = self.controller()
+        layers = controller.update(self.analysis, state)
+        self.assertEqual(set(layers), {'network', 'directions', 'dem', 'hillshade'})
+        group = controller._group
+        names = [node.layer().name() for node in group.children()]
+        self.assertEqual(names[2], 'MDT 25x25m')
+        self.assertEqual(names[3], 'Relieve sombreado MDT 25x25m')
+        self.assertIn('Dirección de Flujo D8', names[1])
+        self.assertEqual(Path(layers['dem'].source()), Path(state['dem_path']))
+        self.assertEqual(Path(layers['hillshade'].source()), Path(state['dem_path']))
+        self.assertIsInstance(layers['dem'].renderer(), QgsSingleBandPseudoColorRenderer)
+        self.assertIsInstance(layers['hillshade'].renderer(), QgsHillshadeRenderer)
+        self.assertTrue(all(node.itemVisibilityChecked() for node in
+                            group.children()[2:4]))
+        self.assertAlmostEqual(layers['dem'].opacity(), 0.86)
+        # Subsequent network updates keep manual layer visibility choices.
+        group.children()[2].setItemVisibilityChecked(False)
+        next_layers = controller.update(self.analysis, state)
+        self.assertFalse(self.project.layerTreeRoot().findLayer(
+            next_layers['dem'].id()).itemVisibilityChecked())
+        self.assertEqual([node.layer().name() for node in group.children()][2],
+                         'MDT 25x25m')
 
     def test_reader_is_pure_ogr_in_worker_and_preserves_fields_geometry_attributes(self):
         path = self.network()
