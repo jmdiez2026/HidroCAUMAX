@@ -6,6 +6,7 @@ D8 product receive an iterative equivalent of its recursive upstream walk.
 """
 from dataclasses import dataclass, field
 import functools
+import math
 import sys
 import types
 import weakref
@@ -120,6 +121,38 @@ def _clone_calculation(original, make_factory):
     return types.MethodType(copied, owner)
 
 
+def _accepted_flow_with_two_decimals(dialog, event, direct, interpolated):
+    """Return CAUMAX's accepted Q with real fractional precision when observed.
+
+    Never infer a fine value from the rounded screen text alone. Only use a
+    sampled native result if its integer rounding agrees with the value CAUMAX
+    actually committed. A foreign implementation may use a different formula;
+    in that case only format its own final accepted text to two decimals.
+    """
+    flow_writes = event.get('flow_writes') or ()
+    period_writes = event.get('period_writes') or ()
+    if (not event.get('completed') or not flow_writes or not period_writes
+            or str(flow_writes[-1]) != dialog.txtResultFlow.text()
+            or str(period_writes[-1]) != dialog.txtResultReturnPeriod.text()):
+        return None
+    try:
+        reported = float(flow_writes[-1])
+        period = float(period_writes[-1])
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(reported) or reported < 0 or not math.isfinite(period):
+        return None
+    # For a custom T the native function uses its interpolation result; its
+    # preceding calls to getFlow() belong to the six supporting periods.
+    candidate = (interpolated[-1] if interpolated else
+                 direct[0] if len(direct) == 1 else reported)
+    if (not math.isfinite(candidate) or candidate < 0
+            or (not math.isclose(candidate, reported, abs_tol=.005, rel_tol=0)
+                and round(candidate) != reported)):
+        candidate = reported
+    return f'{candidate:.2f}'
+
+
 @dataclass
 class _CalculatorBinding:
     reference: object
@@ -199,6 +232,31 @@ class RationalInputsBridge(QObject):
                 return original(*args, **kwargs)
             event = dict(completed=False, ready_writes=[], flow_writes=[], period_writes=[])
             restorations = []
+            direct_flows, interpolated_flows = [], []
+
+            def capture_method(name, values):
+                # Capture the unrounded native calculation. This is a local,
+                # reversible instance hook, not a replacement of CAUMAX's code.
+                method = getattr(owner, name, None)
+                if not callable(method):
+                    return
+                previous = vars(owner).get(name, _MISSING)
+
+                def observing(*call_args, **call_kwargs):
+                    value = method(*call_args, **call_kwargs)
+                    try:
+                        numeric = float(value)
+                        if math.isfinite(numeric):
+                            values.append(numeric)
+                    except (TypeError, ValueError, OverflowError):
+                        pass
+                    return value
+
+                try:
+                    setattr(owner, name, observing)
+                    restorations.append((owner, name, previous, observing))
+                except (AttributeError, RuntimeError, TypeError):
+                    pass
 
             def record(attribute, method_name, key):
                 widget = getattr(owner, attribute, None)
@@ -225,6 +283,8 @@ class RationalInputsBridge(QObject):
             else:
                 record('txtResultFlow', 'setText', 'flow_writes')
                 record('txtResultReturnPeriod', 'setText', 'period_writes')
+                capture_method('getFlow', direct_flows)
+                capture_method('_getInterpolatedFlow', interpolated_flows)
             try:
                 result = original(*args, **kwargs)
                 event['completed'] = True
@@ -240,6 +300,18 @@ class RationalInputsBridge(QObject):
                     except (AttributeError, RuntimeError, TypeError):
                         pass
                 if self._running and self._bindings.get(id(owner)) is binding:
+                    if stage == 'flow':
+                        precise = _accepted_flow_with_two_decimals(
+                            owner, event, direct_flows, interpolated_flows)
+                        if precise is not None:
+                            # The native result is always dot-decimal for its
+                            # own readers. The Spanish overlay displays a comma.
+                            # Record the new accepted write for the basin bridge.
+                            try:
+                                owner.txtResultFlow.setText(precise)
+                                event['flow_writes'].append(precise)
+                            except RuntimeError:
+                                pass
                     self.calculation_finished.emit(owner, stage, event)
 
         return types.MethodType(observed, binding.dialog)
