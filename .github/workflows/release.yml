@@ -84,6 +84,19 @@ jobs:
       - name: Validar el instalador Windows
         if: steps.source.outputs.has_installer == 'true'
         run: python -m unittest discover -s tests -p test_windows_installer.py -v
+      - name: Verificar sintaxis de IA y pruebas del diálogo antes de distribuir
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          for filename in (
+              'src/caumax_consulta/ai_analysis.py',
+              'tests/test_ai_analysis.py',
+              'tests/test_ai_table_integration.py',
+          ):
+              path = Path(filename)
+              compile(path.read_bytes(), str(path), 'exec')
+              print('Sintaxis correcta:', filename)
+          PY
       - name: Validar empaquetado, identidad y XML
         run: python -m unittest discover -s tests -p test_release_packaging.py -v
       - name: Validar empaquetador del runtime TauDEM
