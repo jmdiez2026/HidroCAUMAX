@@ -223,8 +223,9 @@ class RationalInputsBridge(QObject):
         Qt's textChanged signal omits identical writes. Recording the native
         setText call distinguishes a newly accepted result from an old result
         left visible after validation or confirmation was cancelled. Every
-        call still reaches the original widget method without altering its
-        arguments, return value, signals or the native calculation.
+        call still reaches the original widget method. After an accepted flow
+        calculation we display the captured unrounded Q to two decimals;
+        native CAUMAX formulas and its installed files remain untouched.
         """
         @functools.wraps(original)
         def observed(owner, *args, **kwargs):
