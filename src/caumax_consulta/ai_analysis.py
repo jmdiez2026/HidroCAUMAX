@@ -310,8 +310,52 @@ def review_findings(result):
     return findings
 
 
+def _compact_analysis(result, context):
+    """Validate a complete 19-row AI response; QGIS owns all numeric cells."""
+    rows = result.get('parameter_interpretations')
+    required = {metric.key for metric in METRICS}
+    if (set(result) != {'parameter_interpretations'}
+            or not isinstance(rows, dict) or set(rows) != required
+            or any(not isinstance(text, str) or not text.strip()
+                   for text in rows.values())):
+        raise ValueError('La IA no devolvió las 19 interpretaciones completas. '
+                         'No se muestran comentarios parciales.')
+    findings = review_findings(result)
+    reviewed = {}
+    for metric in METRICS:
+        value = rows[metric.key].replace('\\n', ' ').strip()
+        value = re.sub(r'\\s+', ' ', value)
+        if metric.key in findings:
+            value = (REVIEW_PREFIX + ' ' + ' '.join(findings[metric.key])
+                     + ' **Texto recibido de IA:** ' + value)
+        reviewed[metric.key] = value
+    output = ['# Interpretaciones de la morfología de la cuenca',
+              'La IA comenta exclusivamente los parámetros de la tabla. '
+              'Los valores y unidades proceden del cálculo QGIS, no de la IA.',
+              '| Parámetro | Valor | Unidad | Interpretación IA |',
+              '|---|---:|---|---|']
+    values = {item['key']: item['value'] for item in context['parameters']}
+    for metric in METRICS:
+        cells = (metric.label, format_value(metric.key, values.get(metric.key)),
+                 metric.unit or '—', reviewed[metric.key])
+        output.append('| ' + ' | '.join(
+            str(item).replace('|', '\\|').replace('\\n', ' ').strip()
+            for item in cells) + ' |')
+    output += ['', '## Advertencia de interpretación',
+               'Ningún parámetro aislado acredita riesgo, dimensionamiento ni '
+               'conformidad con la Norma 5.2-IC.',
+               '[Norma 5.2-IC oficial](' + NORM_URL + ')']
+    return '\\n'.join(output), reviewed
+
+
 def _structured_analysis(content, context):
-    """Validate once and build the report and its reviewed parameter texts."""
+    """Validate complete AI responses, both compact (table) and old full reports."""
+    try:
+        preliminary = json.loads(content)
+    except (ValueError, TypeError):
+        preliminary = None
+    if isinstance(preliminary, dict) and set(preliminary) == {'parameter_interpretations'}:
+        return _compact_analysis(preliminary, context)
     sections = ('overview', 'p0', 'daily_precipitation', 'caumax_flows',
                 'decisions_52ic', 'priority_checks')
     try:
@@ -593,9 +637,17 @@ class InterpretationRequest(QObject):
         if not error:
             try:
                 content, truncated = decode_response(bytes(self.raw))
-                if truncated:
-                    raise ValueError('Respuesta incompleta: el servicio alcanzó su límite de texto. Puedes reintentar.')
-                rendered, interpretations = _structured_analysis(content, self.context)
+                try:
+                    rendered, interpretations = _structured_analysis(content, self.context)
+                except ValueError as exception:
+                    if truncated:
+                        raise ValueError('Respuesta incompleta: el servicio alcanzó su límite '
+                                         'de texto antes de generar las 19 interpretaciones. '
+                                         'Puedes reintentar.') from exception
+                    raise
+                # A provider may flag finish_reason=length despite having sent
+                # a syntactically complete, validated 19-row JSON object.
+                # Do not discard that complete table solely on the flag.
                 if REVIEW_PREFIX in rendered:
                     self._accept(rendered, interpretations,
                                  'Interpretación recibida con apartados que requieren revisión. '
