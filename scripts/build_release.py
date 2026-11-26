@@ -25,6 +25,9 @@ DEFAULT_REPOSITORY = 'jmdiez2026/HidroCAUMAX'
 DEFAULT_ROOT = Path(__file__).resolve().parents[1]
 EXCLUDED_PARTS = {'__pycache__', '.git', '.pytest_cache', '.mypy_cache'}
 EXCLUDED_NAMES = {'.DS_Store', 'Thumbs.db'}
+IMPROVED_FOLDER = 'ResolucionMejorada'
+PO_FILENAME = 'Po_Spain_CLC2000_100x100_30N_AdrLBallesteros.tif'
+BUNDLED_IMPROVED_FILES = frozenset({PO_FILENAME, PO_FILENAME + '.aux.xml'})
 VERSION_RE = re.compile(r'(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)\Z')
 REPOSITORY_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9_.-]*\Z')
 
@@ -77,6 +80,11 @@ def source_files(source: Path) -> dict[str, Path]:
             continue
         if not path.resolve().is_relative_to(root):
             raise ValueError('Plugin source escaped the package directory.')
+        if (relative.parts[0].casefold() == IMPROVED_FOLDER.casefold()
+                and (len(relative.parts) != 2 or relative.parts[0] != IMPROVED_FOLDER
+                     or relative.name not in BUNDLED_IMPROVED_FILES)):
+            raise ValueError('ResolucionMejorada must contain only the bundled P0 TIFF '
+                             'and its .aux.xml file; unexpected file: ' + str(relative))
         if any(part.startswith('.') for part in relative.parts):
             raise ValueError('Unexpected hidden file in plugin source: '+str(relative))
         name = PLUGIN_ID+'/'+relative.as_posix()
@@ -85,6 +93,9 @@ def source_files(source: Path) -> dict[str, Path]:
         result[name] = path
     if not {PLUGIN_ID+'/metadata.txt', PLUGIN_ID+'/__init__.py'} <= result.keys():
         raise ValueError('Plugin entry point and metadata.txt are required.')
+    if not {PLUGIN_ID+'/'+IMPROVED_FOLDER+'/'+name
+            for name in BUNDLED_IMPROVED_FILES} <= result.keys():
+        raise ValueError('ResolucionMejorada requires the bundled P0 TIFF and its .aux.xml file.')
     return result
 
 

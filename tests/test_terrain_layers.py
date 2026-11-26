@@ -5,14 +5,15 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 import numpy as np
 from osgeo import gdal, osr
 from qgis.core import (QgsApplication, QgsCoordinateReferenceSystem, QgsGeometry,
-                       QgsProject, QgsRectangle, QgsVectorLayer)
+                       QgsProject, QgsRectangle, QgsVectorLayer, QgsRasterLayer)
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'src'))
-from caumax_consulta.terrain_layers import TerrainLayers
+from caumax_consulta.terrain_layers import TerrainLayers, remove_native_terrain
 
 
 class NoCanvas:
@@ -90,6 +91,42 @@ class TerrainLayersTests(unittest.TestCase):
         self.assertLess(root.children().index(obj._group), root.children().index(official))
         self.assertEqual(set(self.project.mapLayers())-self.initial_ids,set(ids))
         self.assertTrue(all(Path(x.source()).resolve()==self.path.resolve() for x in layers))
+
+    def test_native_500m_never_builds_or_loads_a_terrain_background(self):
+        obj = self.controller()
+        native = SimpleNamespace(z_min=100., z_max=200., cell_width=500., cell_height=500.)
+        before = set(self.project.mapLayers())
+        with patch('caumax_consulta.dem_display.build_terrain_layers') as build:
+            for retained in (False, True):
+                obj.retain_variants = retained
+                self.assertEqual(obj.update(native, self.query), [])
+            build.assert_not_called()
+        self.assertEqual(set(self.project.mapLayers()), before)
+        self.assertIsNone(obj._group)
+
+    def test_legacy_500m_background_is_retired_without_touching_native_dem_or_user_layers(self):
+        from caumax_consulta.dem_display import build_terrain_layers
+        root = self.project.layerTreeRoot()
+        path = self.dem('native500.tif', 500)
+        before = path.read_bytes()
+        layers = build_terrain_layers(str(path), elevation_range=(100., 200.))
+        group = root.addGroup('HidroCAUMAX · MDT 500 × 500 m · Relieve')
+        group.setCustomProperty('HidroCAUMAX/terrain_owner', 'old')
+        ids = []
+        for layer in layers:
+            layer.setCustomProperty('HidroCAUMAX/terrain_owner', 'old')
+            self.project.addMapLayer(layer, False); group.addLayer(layer); ids.append(layer.id())
+        foreign = QgsVectorLayer('Point?crs=EPSG:25830', 'User layer', 'memory')
+        self.project.addMapLayer(foreign, False); group.addLayer(foreign)
+        native = QgsRasterLayer(str(path), 'MDT original CAUMAX', 'gdal')
+        self.project.addMapLayer(native)
+        self.assertEqual(remove_native_terrain(), 2)
+        self.assertTrue(all(self.project.mapLayer(key) is None for key in ids))
+        self.assertIsNone(root.findGroup('HidroCAUMAX · MDT 500 × 500 m · Relieve'))
+        self.assertIs(self.project.mapLayer(foreign.id()), foreign)
+        self.assertIs(self.project.mapLayer(native.id()), native)
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(remove_native_terrain(), 0)
 
     def test_switching_resolution_replaces_only_this_owned_background(self):
         obj = self.controller()
@@ -175,6 +212,7 @@ class TerrainLayersTests(unittest.TestCase):
         second_bounds = (330000., 4729000., 331000., 4730000.)
         second = self.basin_analysis(second_bounds, 500)
         layers500 = obj.update(second, query500)
+        self.assertEqual(layers500, [])
         self.assert_context(layers25+layers500, second_bounds, second)
         self.assertTrue(all(root.findLayer(layer.id()).isVisible() for layer in layers25))
         self.assertTrue(all(not root.findLayer(layer.id()).isVisible() for layer in layers500))

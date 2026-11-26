@@ -297,6 +297,15 @@ public static class HcauWin32 {
     Assert-True (Test-Path -LiteralPath $registryPath) 'Per-profile uninstall registry key is absent.'
     Record-Check 'fresh_install_exact_zip' @{ files = $expected.Count; target = $pluginPath }
 
+    $initialImprovedFiles = @(
+        'Po_Spain_CLC2000_100x100_30N_AdrLBallesteros.tif',
+        'Po_Spain_CLC2000_100x100_30N_AdrLBallesteros.tif.aux.xml'
+    )
+    $improvedItems = @(Get-ChildItem -LiteralPath (Join-Path $pluginPath 'ResolucionMejorada') -Force)
+    Assert-True ($improvedItems.Count -eq 2 -and @($improvedItems | Where-Object PSIsContainer).Count -eq 0) 'Fresh ResolucionMejorada must contain exactly the two P0 files.'
+    Assert-True ((@($improvedItems.Name | Sort-Object) -join '|') -ceq (@($initialImprovedFiles | Sort-Object) -join '|')) 'Unexpected initial file in ResolucionMejorada.'
+    Record-Check 'fresh_improved_folder_only_p0_and_auxiliary' @{ files = $initialImprovedFiles }
+
     # Reinstall is a genuine replacement with a preserved full previous directory.
     $oldExtra = Join-Path $pluginPath 'datos-del-usuario.txt'
     [IO.File]::WriteAllText($oldExtra, "preserve-old-extra-$tag")

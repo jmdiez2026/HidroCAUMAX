@@ -23,9 +23,10 @@ class ToolbarTests(unittest.TestCase):
         cls.app.initQgis()
 
     def setUp(self):
-        for name in ('restore_exports', 'preserve_exports'):
+        self.storage_mocks = {}
+        for name in ('prepare_export_directory', 'restore_exports', 'preserve_exports'):
             storage = patch('caumax_consulta.improved_storage.' + name)
-            storage.start(); self.addCleanup(storage.stop)
+            self.storage_mocks[name] = storage.start(); self.addCleanup(storage.stop)
         project = QgsProject.instance()
         before = set(project.mapLayers())
         self.addCleanup(lambda: project.removeMapLayers(list(set(project.mapLayers()) - before)))
@@ -66,6 +67,14 @@ class ToolbarTests(unittest.TestCase):
             self.assertFalse(action.icon().isNull(), action.text())
             self.assertTrue(action.toolTip())
             self.assertIs(p._toolbar.widgetForAction(action).defaultAction(), action)
+
+    def test_startup_prepares_the_folder_without_recovering_old_results(self):
+        self.storage_mocks['prepare_export_directory'].assert_called_once()
+        self.storage_mocks['restore_exports'].assert_not_called()
+        self.plugin.unload()
+        self.plugin.initGui()
+        self.assertEqual(self.storage_mocks['prepare_export_directory'].call_count, 2)
+        self.storage_mocks['restore_exports'].assert_not_called()
 
     def test_delete_button_calls_session_cleanup_and_shows_a_temporary_count(self):
         p = self.plugin

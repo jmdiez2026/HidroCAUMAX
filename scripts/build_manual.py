@@ -64,7 +64,7 @@ def build():
     story.append(Spacer(1,24))
     p('HidroCAUMAX v.1.0','title')
     p('Manual de usuario','h1')
-    p('Edición para el paquete 1.0.14 · 26 de noviembre de 2026','small')
+    p('Edición para el paquete 1.0.15 · 26 de noviembre de 2026','small')
     p('Herramientas de cuencas, cartografía y caudales máximos para QGIS y CAUMAX 3.0. Este manual acompaña al complemento y se puede consultar sin conexión.')
     p('Primeros pasos','h2')
     for text in ['1. Instala y habilita CAUMAX y, después, HidroCAUMAX.',
@@ -73,7 +73,7 @@ def build():
                  '4. Usa Calcular del recuadro GEA para consultar la tabla y el gráfico de caudales.',
                  '5. Abre Generar capas resolución mejorada si necesitas MDT, direcciones y red con mayor detalle.']:
         p(text)
-    p('El nombre visible es HidroCAUMAX v.1.0. El número técnico 1.0.14 identifica esta entrega y permite ordenar las actualizaciones.','small')
+    p('El nombre visible es HidroCAUMAX v.1.0. El número técnico 1.0.15 identifica esta entrega y permite ordenar las actualizaciones.','small')
 
     heading(2)
     p('Requisitos e instalación','h2')
@@ -82,7 +82,7 @@ def build():
     table([['Botón','Función'],['HidroCAUMAX v.1.0','Restaura las herramientas añadidas a CAUMAX.'],['Capas','Alterna cargar y retirar las referencias del mapa; conserva sus archivos.'],['Abrir cuenca','Abre un proyecto de cuenca guardado.'],['Limpiar capas','Retira resultados y referencias del mapa; conserva los archivos.'],['Actualizar','Busca, descarga, verifica e instala una versión compatible.'],['Ayuda','Muestra este manual; Abrir PDF utiliza el lector del equipo.']])
     p('Carpeta de instalación','h2')
     p('En el perfil predeterminado de este equipo: <font size="8">C:\\Users\\JM_GIS\\AppData\\Roaming\\QGIS\\QGIS3\\profiles\\default\\python\\plugins\\caumax_consulta</font>. En otros equipos o perfiles cambia la parte correspondiente al usuario y al perfil.')
-    p('Dentro del complemento, <b>ResolucionMejorada</b> contiene el P0 incluido y es el destino inicial de las exportaciones. El manual reside en <b>docs/manual</b>.')
+    p('Al instalar, <b>ResolucionMejorada</b> contiene solo el ráster P0 (<b>.tif</b>) y su auxiliar (<b>.tif.aux.xml</b>). Al abrir QGIS no se recuperan MDT ni registros antiguos. Las exportaciones se añaden después, durante el uso del método racional.')
 
     heading(3)
     p('<b>Capas</b> alterna cargar y retirar las referencias. Al cargar, <b>HidroCAUMAX · Capas de referencia</b> aparece abierto encima de <b>CAUMAX_CAPAS</b>; las capas y subgrupos comienzan apagados y plegados.')
@@ -137,10 +137,11 @@ def build():
     p('Abrir el diálogo ya no carga los archivos de ResolucionMejorada ni crea el grupo <b>HidroCAUMAX mejoradas</b>. Al actualizar se retira el grupo antiguo gestionado, conservando sus archivos y las capas ajenas que hayas añadido.')
     p('Los resultados aparecen en <b>HidroCAUMAX · Drenaje TauDEM</b>. Las divisorias del mismo punto y resolución se reutilizan aunque cambie la ruta temporal del MDT. Las copias idénticas creadas por la aplicación se retiran del mapa; sus archivos permanecen en disco.')
     p('Relieve y datos originales','h2')
+    p('La referencia de <b>500 × 500 m</b> ya no crea ni carga un grupo adicional de relieve. El MDT original de CAUMAX permanece disponible para sus cálculos.','small')
     p('La rampa de elevación y el sombreado ayudan a leer el relieve. Cambiar la simbología no modifica las cotas del MDT ni los valores de dirección de flujo.')
     p('Conservar exportaciones entre versiones','h2')
-    p('Desde esta entrega se conserva una copia de las exportaciones fuera de la carpeta reemplazable del complemento, en <b>HidroCAUMAX/ResolucionMejorada</b> dentro del perfil QGIS. Al cargar el plugin se recuperan los archivos que falten sin sobrescribir los existentes.')
-    p('Si actualizas por primera vez desde una versión que aún no hacía esa copia, conserva aparte tus exportaciones antes de sustituir su carpeta. Esta precaución es especialmente relevante al usar el instalador ZIP del gestor de QGIS.','small')
+    p('Las copias de exportaciones quedan fuera de la instalación, en <b>HidroCAUMAX/ResolucionMejorada</b> dentro del perfil QGIS. <b>No se recuperan automáticamente al arrancar.</b> Abrir QGIS tampoco borra los resultados nuevos que ya hayas exportado.')
+    p('Actualizar desde la barra conserva los archivos ajenos al paquete. Si sustituyes la carpeta completa mediante ZIP o EXE, conserva tus exportaciones y recupera manualmente las que necesites; el arranque no rellena la carpeta con copias antiguas.','small')
 
     heading(8)
     p('Cuenca hidrográfica','h2')
@@ -181,7 +182,7 @@ def build():
         canvas.setStrokeColor(blue); canvas.setLineWidth(1); canvas.line(42,806,553,806)
         canvas.setFont('Manual',8); canvas.setFillColor(navy)
         canvas.drawString(42,818,'HidroCAUMAX v.1.0 | Manual de usuario')
-        canvas.drawString(42,25,'Paquete 1.0.14 · Edición 26/11/2026')
+        canvas.drawString(42,25,'Paquete 1.0.15 · Edición 26/11/2026')
         canvas.drawRightString(553,25,f'{doc.page} / {len(TITLES)}')
         canvas.restoreState()
     pdf=OUT/'Manual_HidroCAUMAX_v1.0.pdf'

@@ -118,8 +118,19 @@ def preserve_exports():
             target.unlink()
 
 
+def prepare_export_directory(legacy_alias=False):
+    """Prepare the installed folder without recovering old calculation results."""
+    folder = export_directory()
+    # The compatibility alias lives outside ResolucionMejorada. Never populate
+    # this folder from a previous snapshot merely because QGIS has started.
+    if legacy_alias and po_path().is_file():
+        _copy_missing(po_path(), PLUGIN_ROOT / 'data' / PO_FILENAME)
+    return folder
+
+
 def restore_exports(legacy_alias=False):
-    folder, backup = export_directory(), backup_directory()
+    """Explicit recovery helper only; plugin startup must not call this."""
+    folder, backup = prepare_export_directory(legacy_alias), backup_directory()
     entries = _read(backup / BACKUP_INDEX, [])
     for relative in entries if isinstance(entries, list) else []:
         if not isinstance(relative, str):
@@ -130,9 +141,6 @@ def restore_exports(legacy_alias=False):
         source, target = backup / path, folder / path
         if _plain(source) and not target.exists():
             _copy_missing(source, target)
-    # Existing QGIS projects can still refer to the previous installed P0 path.
-    if legacy_alias and po_path().is_file():
-        _copy_missing(po_path(), PLUGIN_ROOT / 'data' / PO_FILENAME)
 
 
 def _compatible(dem_path, directions_path):

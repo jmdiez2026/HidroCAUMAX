@@ -1,3 +1,13 @@
+# HidroCAUMAX v.1.0 - carpeta inicial sin recuperación automática (revisión 1.0.15, 2026-11-26)
+
+- Se elimina la recuperación automática de exportaciones al iniciar QGIS. Un MDT y su registro de una copia anterior ya no reaparecen en ResolucionMejorada al activar el plugin.
+- La instalación incluye exclusivamente el TIFF de P0 y su archivo .tif.aux.xml en esa carpeta. El empaquetado rechaza cualquier archivo adicional y exige ambos archivos.
+- Las nuevas exportaciones del método racional siguen usando esa carpeta. Se mantienen los resultados que ya existen; el arranque no borra archivos del usuario.
+- Se deja de crear y cargar el grupo HidroCAUMAX · MDT 500 × 500 m · Relieve. Se retiran sus capas gestionadas antiguas, conservando el MDT original de CAUMAX y las capas ajenas.
+- Pruebas con una copia antigua, activación repetida y exportación posterior; comprobación exacta de los dos archivos en la instalación Windows.
+
+---
+
 # HidroCAUMAX v.1.0 - presentación D8 y capas sin duplicados (revisión 1.0.14, 2026-11-26)
 
 - Generar capas D8 termina con el grupo abierto y las cuatro leyendas plegadas: red y relieve visibles, MDT y direcciones apagados. La vista previa deja de activar el MDT del resultado final.

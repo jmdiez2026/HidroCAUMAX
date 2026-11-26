@@ -47,7 +47,7 @@ class NativeCalculationLayersTests(unittest.TestCase):
         self.original = {key: 'native/'+key for key in ('MDT', 'FLOWDIRS', 'I1ID', 'P0', 'rain2', 'rain500')}
         self.native._defaultLayerPaths = self.original.copy()
         self.patches = [patch.dict(sys.modules, {self.native.__name__: self.native}),
-            patch('caumax_consulta.improved_storage.restore_exports'),
+            patch('caumax_consulta.improved_storage.prepare_export_directory'),
             patch('caumax_consulta.improved_storage.preserve_exports')]
         self.patches += [patch.object(module, name) for name in (
             'CaumaxBridge','RationalExportBridge','RationalInputsBridge','RationalLayersBridge',

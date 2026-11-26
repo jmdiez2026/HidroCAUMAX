@@ -36,6 +36,13 @@ category=Raster
 '''
 
 
+def add_bundled_p0_fixture(source):
+    folder = source / builder.IMPROVED_FOLDER
+    folder.mkdir()
+    for name in builder.BUNDLED_IMPROVED_FILES:
+        (folder/name).write_bytes(b'Bundled installation fixture\n')
+
+
 def attach_windows_fixture(test):
     """Exercise bundling with a non-executable envelope and a fake extractor.
 
@@ -96,6 +103,9 @@ class ReleasePackagingTests(unittest.TestCase):
         self.assertNotIn('caumax_consulta/data/'+name, files)
         self.assertEqual(builder.sha256(files['caumax_consulta/ResolucionMejorada/'+name]),
                          '611b41dbedfd64a0d0c84c710e85c80251b4bc8db55959ee9830cd2fa36bb871')
+        prefix = 'caumax_consulta/ResolucionMejorada/'
+        self.assertEqual({key[len(prefix):] for key in files if key.startswith(prefix)},
+                         {name, name + '.aux.xml'})
 
     def setUp(self):
         self.temporary=tempfile.TemporaryDirectory(prefix='hidrocaumax-build-')
@@ -106,6 +116,7 @@ class ReleasePackagingTests(unittest.TestCase):
         (self.source/'metadata.txt').write_text(METADATA,encoding='utf-8')
         (self.source/'__init__.py').write_text('def classFactory(iface):\n    return iface\n',encoding='utf-8')
         (self.source/'asset.txt').write_text('Bytes conservados: P₀\n',encoding='utf-8')
+        add_bundled_p0_fixture(self.source)
         self.output=self.folder/'dist'
 
     def build(self, **kwargs):
@@ -197,10 +208,41 @@ class ReleasePackagingTests(unittest.TestCase):
         cache=self.source/'__pycache__'
         cache.mkdir()
         (cache/'module.pyc').write_bytes(b'junk')
-        self.assertEqual(len(builder.source_files(self.source)),3)
+        self.assertEqual(len(builder.source_files(self.source)),5)
         (self.source/'.env').write_text('secret-placeholder',encoding='utf-8')
         with self.assertRaisesRegex(ValueError,'hidden file'):
             self.build()
+
+    def test_generated_or_extra_files_cannot_enter_the_installation_folder(self):
+        for name in ('MDT_25m.tif', 'Direccion_D8_caumax_5m.tif', 'Red_drenaje_25m.shp',
+                     '.hidrocaumax-generated-files.json', 'notes.txt', 'nested/test.tif'):
+            with self.subTest(name=name):
+                extra = self.source / builder.IMPROVED_FOLDER / name
+                extra.parent.mkdir(exist_ok=True)
+                extra.write_bytes(b'Runtime output must not be distributed')
+                try:
+                    with self.assertRaisesRegex(ValueError, 'ResolucionMejorada'):
+                        self.build()
+                    self.assertFalse(self.output.exists())
+                finally:
+                    extra.unlink()
+
+    def test_both_p0_files_are_required_and_fresh_zip_extracts_only_those_two(self):
+        for name in builder.BUNDLED_IMPROVED_FILES:
+            path = self.source / builder.IMPROVED_FOLDER / name
+            contents = path.read_bytes()
+            path.unlink()
+            try:
+                with self.subTest(missing=name), self.assertRaisesRegex(ValueError, 'ResolucionMejorada'):
+                    self.build()
+            finally:
+                path.write_bytes(contents)
+        manifest = self.build()
+        installed = self.folder / 'fresh-install'
+        with zipfile.ZipFile(self.output/manifest['package']) as archive:
+            archive.extractall(installed)
+        folder = installed / builder.PLUGIN_ID / builder.IMPROVED_FOLDER
+        self.assertEqual({path.name for path in folder.iterdir()}, builder.BUNDLED_IMPROVED_FILES)
 
     def test_symlinks_are_not_packaged(self):
         target=self.folder/'outside.txt'
@@ -263,6 +305,7 @@ class WindowsReleasePackagingTests(unittest.TestCase):
         self.source=self.folder/'src'/'caumax_consulta';self.source.mkdir(parents=True)
         (self.source/'metadata.txt').write_text(METADATA,encoding='utf-8')
         (self.source/'__init__.py').write_text('def classFactory(iface):\n    return iface\n',encoding='utf-8')
+        add_bundled_p0_fixture(self.source)
         self.output=self.folder/'dist';self.manifest=builder.build(self.source,self.output)
         self.zip_bytes=(self.output/self.manifest['package']).read_bytes()
         self.document=attach_windows_fixture(self)
@@ -351,6 +394,7 @@ class ReleasePublishingTests(unittest.TestCase):
         self.source.mkdir(parents=True)
         (self.source/'metadata.txt').write_text(METADATA,encoding='utf-8')
         (self.source/'__init__.py').write_text('def classFactory(iface):\n    return iface\n',encoding='utf-8')
+        add_bundled_p0_fixture(self.source)
         self.output=self.folder/'dist'
         self.manifest=builder.build(self.source,self.output)
         self.names=[self.manifest['package'],'SHA256SUMS.txt','plugins.xml','release_manifest.json']

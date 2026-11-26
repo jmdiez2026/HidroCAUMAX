@@ -73,6 +73,40 @@ class StorageTests(unittest.TestCase):
         pair = self.pair()
         self.assertEqual(storage.latest_pair(), pair)
 
+    def test_fresh_start_keeps_only_p0_until_the_first_successful_export(self):
+        self.raster(storage.PO_FILENAME)
+        auxiliary = self.folder/(storage.PO_FILENAME + '.aux.xml')
+        auxiliary.write_bytes(b'<PAMDataset/>')
+        expected = {p.name: p.read_bytes() for p in self.folder.iterdir()}
+        storage.prepare_export_directory(legacy_alias=True)
+        self.assertIsNone(storage.latest_pair())
+        self.assertEqual(list(storage.generated_files()), [])
+        self.assertEqual({p.name: p.read_bytes() for p in self.folder.iterdir()}, expected)
+        pair = self.pair()
+        self.assertEqual(storage.latest_pair(), pair)
+        self.assertTrue(all(path.is_file() for path in pair))
+        for name, contents in expected.items():
+            self.assertEqual((self.folder/name).read_bytes(), contents)
+
+    def test_startup_never_restores_previous_dem_or_generated_index(self):
+        self.raster(storage.PO_FILENAME)
+        (self.folder/(storage.PO_FILENAME + '.aux.xml')).write_bytes(b'<PAMDataset/>')
+        initial = {p.name: p.read_bytes() for p in self.folder.iterdir()}
+        backup = self.root/'backup'; backup.mkdir()
+        old = {'MDT_25m.tif': b'old calculation', storage.GENERATED_INDEX: b'{"old": [1, 2]}'}
+        for name, contents in old.items():
+            (backup/name).write_bytes(contents)
+        (backup/storage.BACKUP_INDEX).write_text(json.dumps(list(old)))
+        for _ in range(2):
+            storage.prepare_export_directory(legacy_alias=True)
+            self.assertEqual({p.name: p.read_bytes() for p in self.folder.iterdir()}, initial)
+        for name, contents in old.items():
+            self.assertEqual((backup/name).read_bytes(), contents)
+        # New user exports are kept when a later QGIS session opens the folder.
+        generated = self.folder/'MDT_5m.tif'; generated.write_bytes(b'new result')
+        storage.prepare_export_directory()
+        self.assertEqual(generated.read_bytes(), b'new result')
+
     def test_latest_complete_pair_survives_incomplete_and_falls_back_if_changed(self):
         first, second = self.pair('25'), self.pair('5')
         self.assertEqual(storage.latest_pair(), second)

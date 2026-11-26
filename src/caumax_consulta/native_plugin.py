@@ -48,16 +48,18 @@ class NativeCaumaxPlugin(QObject):
     def _tidy_legacy_layers():
         from .improved_layers import remove_improved_folder_group
         from .boundary_layers import deduplicate_boundaries
+        from .terrain_layers import remove_native_terrain
         remove_improved_folder_group()
         deduplicate_boundaries()
+        remove_native_terrain()
 
     def initGui(self):
-        from .improved_storage import restore_exports
+        from .improved_storage import prepare_export_directory
         try:
-            restore_exports(legacy_alias=Path(__file__).resolve().parent.parent.name == 'plugins')
+            prepare_export_directory(legacy_alias=Path(__file__).resolve().parent.parent.name == 'plugins')
         except OSError as error:
             self.iface.messageBar().pushMessage('HidroCAUMAX',
-                'No se han podido restaurar las exportaciones: ' + str(error), level=Qgis.Warning, duration=10)
+                'No se ha podido preparar la carpeta de exportación: ' + str(error), level=Qgis.Warning, duration=10)
         self.action = QAction('Restaurar herramientas HidroCAUMAX', self.iface.mainWindow())
         self.action.triggered.connect(self._activate_tools)
         self.iface.addPluginToMenu(self.MENU, self.action)

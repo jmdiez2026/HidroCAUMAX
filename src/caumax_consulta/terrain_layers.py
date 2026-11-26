@@ -7,11 +7,45 @@ from qgis.PyQt import sip
 from qgis.core import QgsCoordinateReferenceSystem, QgsGeometry, QgsProject, QgsWkbTypes
 
 from .layer_order import create_result_group, ensure_results_above_official
-from .dem_display import apply_terrain_style
+from .dem_display import apply_terrain_style, RESOLUTION_PROPERTY
 
 
 _BASIN_BOUNDS_PROPERTY = 'hidrocaumax/dem_basin_bounds'
 _BASIN_CRS_PROPERTY = 'hidrocaumax/dem_basin_crs'
+
+
+def _native_resolution(width, height):
+    return math.isclose(abs(float(width)), 500.) and math.isclose(abs(float(height)), 500.)
+
+
+def remove_native_terrain(project=None):
+    """Retire our obsolete 500 m background, preserving source data and user layers."""
+    project = project or QgsProject.instance()
+    root = project.layerTreeRoot()
+    owner = 'HidroCAUMAX/terrain_owner'
+    ids = []
+    for layer in project.mapLayers().values():
+        resolution = layer.customProperty(RESOLUTION_PROPERTY, [])
+        try:
+            native = len(resolution) == 2 and _native_resolution(*resolution)
+        except (TypeError, ValueError):
+            native = False
+        if layer.customProperty(owner, '') and native:
+            ids.append(layer.id())
+    groups = [g for g in root.findGroups() if g.customProperty(owner, '') and (
+        any(n.layerId() in ids for n in g.findLayers()) or
+        g.name() == 'HidroCAUMAX · MDT 500 × 500 m · Relieve')]
+    project.removeMapLayers(ids)
+    for group in reversed(groups):
+        if sip.isdeleted(group) or group.parent() is None:
+            continue
+        parent = group.parent()
+        index = parent.children().index(group)
+        for child in list(group.children()):
+            parent.insertChildNode(index, child.clone())
+            index += 1
+        parent.removeChildNode(group)
+    return len(ids)
 
 
 def _basin_context(analysis):
@@ -91,6 +125,10 @@ class TerrainLayers:
                             if not sip.isdeleted(layer)
                             and layer.customProperty('HidroCAUMAX/terrain_owner') == self.owner_key
                             and project.mapLayer(layer.id()) is layer), context)
+        if _native_resolution(analysis.cell_width, analysis.cell_height):
+            remove_native_terrain(project)
+            self.layers, self._group, self._signature, self.note = [], None, None, ''
+            return []
         path = Path(query.dem_path)
         self.note = ''
         if not path.is_file():
