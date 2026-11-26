@@ -197,6 +197,25 @@ def _directions_layer(path):
     return layer
 
 
+
+def _styled_mdt(analysis, dem_path):
+    """Create natural-colour and hillshade views of one unchanged elevation TIFF."""
+    from .dem_display import build_terrain_layers
+    low, high = getattr(analysis, 'z_min', None), getattr(analysis, 'z_max', None)
+    supplied = None
+    if low is not None and high is not None:
+        a, b = float(low), float(high)
+        if math.isfinite(a) and math.isfinite(b) and a <= b:
+            supplied = (a, b)
+    shade, dem = build_terrain_layers(dem_path, elevation_range=supplied)
+    resolution = f'{analysis.cell_width:g}x{analysis.cell_height:g}m'
+    dem.setName(f'MDT {resolution}')
+    shade.setName(f'Relieve sombreado MDT {resolution}')
+    # The colour layer sits directly above the shadow. Its limited transparency
+    # makes relief visible while the source DEM stays numerically unchanged.
+    dem.setOpacity(0.86)
+    return dem, shade
+
 class DrainageLayers:
     """Own persistent result layers; clear only this instance explicitly."""
     def __init__(self,iface,owner_key=None):
@@ -210,6 +229,40 @@ class DrainageLayers:
             self._group=create_result_group(QgsProject.instance(),'HidroCAUMAX · Drenaje TauDEM',10)
             self._group.setCustomProperty(OWNER_PROPERTY,self.owner_key)
         return self._group
+
+    def display_dem(self, analysis, dem_path):
+        """Show a selected MDT immediately, before TauDEM has built a network.
+
+        The temporary two-layer group becomes a four-layer result in update();
+        it preserves the user's visibility choices and the original TIFF.
+        """
+        previous = dict(self.layers)
+        old = previous.get('dem')
+        if (old is not None and not sip.isdeleted(old)
+                and len(previous) == 2
+                and Path(old.source()).resolve() == Path(dem_path).resolve()
+                and QgsProject.instance().mapLayer(old.id()) is old):
+            return old
+        dem, shade = _styled_mdt(analysis, dem_path)
+        project = QgsProject.instance()
+        root = project.layerTreeRoot()
+        group = self._ensure_group()
+        group.setName(
+            f'HidroCAUMAX · Drenaje TauDEM [{analysis.cell_width:g}×{analysis.cell_height:g} m]')
+        for index, (kind, layer) in enumerate((('dem', dem), ('hillshade', shade))):
+            layer.setCustomProperty(OWNER_PROPERTY, self.owner_key)
+            layer.setCustomProperty(ROLE_PROPERTY, kind)
+            project.addMapLayer(layer, False)
+            group.insertLayer(index, layer).setItemVisibilityChecked(True)
+        self.layers = {'dem': dem, 'hillshade': shade}
+        for layer in previous.values():
+            if (layer is not None and not sip.isdeleted(layer)
+                    and layer.customProperty(OWNER_PROPERTY) == self.owner_key
+                    and project.mapLayer(layer.id()) is layer):
+                project.removeMapLayer(layer.id())
+        from .layer_order import ensure_results_above_official
+        ensure_results_above_official(project)
+        return dem
 
     def update(self,analysis,state,visible=True):
         """Register verified TauDEM products and the native-resolution MDT.
@@ -226,17 +279,8 @@ class DrainageLayers:
         new = {'network': network, 'directions': directions}
         dem_path = state.get('dem_path')
         if dem_path:
-            from .dem_display import build_terrain_layers
-            # Building first makes failures atomic: an invalid MDT must not
-            # remove or hide the previous valid drainage result.
-            shade, dem = build_terrain_layers(dem_path)
-            size = f'{analysis.cell_width:g}x{analysis.cell_height:g}m'
-            dem.setName(f'MDT {size}')
-            shade.setName(f'Relieve sombreado MDT {size}')
-            # The coloured DEM is the third layer. The fourth (hillshade)
-            # sits underneath; slight transparency allows natural relief
-            # to remain visible while elevation colour stays legible.
-            dem.setOpacity(0.86)
+            # Build first so an invalid MDT never removes a valid earlier result.
+            dem, shade = _styled_mdt(analysis, dem_path)
             new.update(dem=dem, hillshade=shade)
         project = QgsProject.instance()
         root = project.layerTreeRoot()
