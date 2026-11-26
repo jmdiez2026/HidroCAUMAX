@@ -16,6 +16,7 @@ from .update_ui import UpdateNotifier
 from .delineation_cleanup import clear_delineations
 from .map_services import ReferenceLayerLoader
 from .native_layers_view import NativeLayersView
+from .native_calculation_layers import NativeCalculationLayers
 
 
 class NativeCaumaxPlugin(QObject):
@@ -26,6 +27,7 @@ class NativeCaumaxPlugin(QObject):
         self.iface = iface
         self._dialogs = {}
         self._saved_dialogs = []
+        self._manual = None
         self._enabled = False
         self._bridge = CaumaxBridge(iface, self._open_basin, self._new_query_started)
         self._rational = RationalExportBridge(iface)
@@ -42,8 +44,15 @@ class NativeCaumaxPlugin(QObject):
         self._updates = UpdateNotifier(iface, self)
         self._map_services = ReferenceLayerLoader(iface, self)
         self._native_layers_view = NativeLayersView(iface, self)
+        self._calculation_layers = NativeCalculationLayers(iface, self)
 
     def initGui(self):
+        from .improved_storage import restore_exports
+        try:
+            restore_exports(legacy_alias=Path(__file__).resolve().parent.parent.name == 'plugins')
+        except OSError as error:
+            self.iface.messageBar().pushMessage('HidroCAUMAX',
+                'No se han podido restaurar las exportaciones: ' + str(error), level=Qgis.Warning, duration=10)
         self.action = QAction('Restaurar herramientas HidroCAUMAX', self.iface.mainWindow())
         self.action.triggered.connect(self._activate_tools)
         self.iface.addPluginToMenu(self.MENU, self.action)
@@ -60,6 +69,9 @@ class NativeCaumaxPlugin(QObject):
         self.update_action = QAction('Buscar actualizaciones…', self.iface.mainWindow())
         self.update_action.triggered.connect(self._check_updates)
         self.iface.addPluginToMenu(self.MENU, self.update_action)
+        self.help_action = QAction('Ayuda · Manual de usuario', self.iface.mainWindow())
+        self.help_action.triggered.connect(self._show_help)
+        self.iface.addPluginToMenu(self.MENU, self.help_action)
         self._create_toolbar()
         self.set_enabled(True)
 
@@ -69,20 +81,22 @@ class NativeCaumaxPlugin(QObject):
         self._toolbar = (create(self.MENU) if callable(create)
                          else self.iface.mainWindow().addToolBar(self.MENU))
         self._toolbar.setObjectName('HidroCAUMAXToolbar')
-        self._toolbar.setToolButtonStyle(Qt.ToolButtonIconOnly)
+        self._toolbar.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.action.setIcon(QIcon(str(Path(__file__).parent / 'assets' / 'hidrocaumax.png')))
         self.open_action.setIcon(QgsApplication.getThemeIcon('/mActionFileOpen.svg'))
         self.reference_action.setIcon(QIcon(str(Path(__file__).parent / 'assets' / 'load_reference_layers.svg')))
         self.clear_layers_action.setIcon(QIcon(str(Path(__file__).parent / 'assets' / 'clear_generated_layers.svg')))
         self.update_action.setIcon(QgsApplication.getThemeIcon('/mActionRefresh.svg'))
+        self.help_action.setIcon(QIcon(str(Path(__file__).parent / 'assets' / 'help_manual.svg')))
         for action, caption, tip in (
-                (self.reference_action, 'Cargar capas', 'Cargar las capas de referencia HidroCAUMAX'),
-                (self.action, 'Herramientas HidroCAUMAX',
+                (self.action, 'HidroCAUMAX v.1.0',
                  'Herramientas activas automáticamente. Pulsar para restaurar los botones de HidroCAUMAX.'),
+                (self.reference_action, 'Capas', 'Cargar las capas de referencia HidroCAUMAX'),
                 (self.open_action, 'Abrir cuenca', 'Abrir un proyecto de cuenca guardado'),
-                (self.clear_layers_action, 'Eliminar capas',
+                (self.clear_layers_action, 'Limpiar capas',
                  'Retirar de QGIS todas las capas generadas por HidroCAUMAX. Conserva los archivos en disco.'),
-                (self.update_action, 'Actualizar', 'Buscar actualizaciones de HidroCAUMAX')):
+                (self.update_action, 'Actualizar', 'Descargar, verificar e instalar una nueva versión de HidroCAUMAX'),
+                (self.help_action, 'Ayuda', 'Abrir el manual de usuario incluido en PDF')):
             action.setIconText(caption)
             action.setToolTip(tip)
             action.setStatusTip(tip)
@@ -122,6 +136,14 @@ class NativeCaumaxPlugin(QObject):
 
     def _check_updates(self, *args):
         self._updates.check(manual=True)
+
+    def _show_help(self, *args):
+        if self._manual is None:
+            from .manual_dialog import ManualDialog
+            self._manual = ManualDialog(self.iface.mainWindow())
+        self._manual.show()
+        self._manual.raise_()
+        self._manual.activateWindow()
 
     def _clear_generated_layers(self, *args):
         # Clear live work first so its late results cannot repopulate the map.
@@ -168,6 +190,7 @@ class NativeCaumaxPlugin(QObject):
             self._rational_layers.start()
             self._visible_dem.start()
             self._native_layers_view.start()
+            self._calculation_layers.start()
             self._updates.check()
         else:
             self._updates.cancel()
@@ -179,6 +202,7 @@ class NativeCaumaxPlugin(QObject):
             self._rational_layers.stop()
             self._visible_dem.stop()
             self._native_layers_view.stop()
+            self._calculation_layers.stop()
 
     @staticmethod
     def _key(query):
@@ -258,6 +282,24 @@ class NativeCaumaxPlugin(QObject):
                 pass
 
     def unload(self):
+        if self._manual is not None:
+            self._manual.close()
+            self._manual.deleteLater()
+            self._manual = None
+        if hasattr(self, 'help_action'):
+            try:
+                self.help_action.triggered.disconnect(self._show_help)
+            except (RuntimeError, TypeError):
+                pass
+            self.iface.removePluginMenu(self.MENU, self.help_action)
+            self.help_action.deleteLater()
+        from .improved_storage import preserve_exports
+        try:
+            preserve_exports()
+        except OSError as error:
+            self.iface.messageBar().pushMessage('HidroCAUMAX',
+                'No se ha podido conservar la carpeta ResolucionMejorada: ' + str(error),
+                level=Qgis.Warning, duration=10)
         self._enabled = False
         self._remove_toolbar()
         self._map_services.dispose()
@@ -270,6 +312,7 @@ class NativeCaumaxPlugin(QObject):
         self._rational_layers.stop()
         self._visible_dem.stop()
         self._native_layers_view.stop()
+        self._calculation_layers.stop()
         if hasattr(self, 'action'):
             try:
                 self.action.triggered.disconnect(self._activate_tools)

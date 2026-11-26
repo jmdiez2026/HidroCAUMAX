@@ -52,9 +52,12 @@ def plan(root: Path, target: str) -> dict[Path, bytes]:
     current_parts = version_parts(existing)
     if target_parts < current_parts:
         raise ValueError(f'No se puede retroceder de {existing} a {target}.')
-    current_name = 'HidroCAUMAX ' + public_tag(existing)
-    if document.get('general', 'name') != current_name:
+    current_name = document.get('general', 'name')
+    family_name = lambda version: 'HidroCAUMAX v.' + '.'.join(version.split('.')[:2])
+    family = current_name == family_name(existing)
+    if current_name not in ('HidroCAUMAX ' + public_tag(existing), family_name(existing)):
         raise ValueError('El nombre visible y la versión instalada son incoherentes.')
+    next_name = family_name(target) if family else 'HidroCAUMAX ' + public_tag(target)
     if target_parts == current_parts:
         if target == '1.0.0':
             raise ValueError('v1.0 ya está publicada. La próxima versión debe ser 1.0.1 o superior.')
@@ -72,15 +75,15 @@ def plan(root: Path, target: str) -> dict[Path, bytes]:
 
     path, content = source(PLUGIN / 'metadata.txt')
     content = _one(content, '\nname=' + current_name + '\n',
-                   '\nname=HidroCAUMAX ' + next_tag + '\n', str(path))
+                   '\nname=' + next_name + '\n', str(path))
     content = _one(content, '\nversion=' + existing + '\n',
                    '\nversion=' + target + '\n', str(path))
     files[path] = content
 
-    for filename in ('basin_dialog.py', 'reports.py', 'rational_export.py'):
+    for filename in (('basin_dialog.py', 'reports.py', 'rational_export.py', 'native_plugin.py') if family
+                     else ('basin_dialog.py', 'reports.py', 'rational_export.py')):
         path, content = source(PLUGIN / filename)
-        files[path] = _many(content, 'HidroCAUMAX ' + old_tag,
-                            'HidroCAUMAX ' + next_tag, filename)
+        files[path] = _many(content, current_name, next_name, filename)
 
     path, content = source(PLUGIN / 'ai_analysis.py')
     files[path] = _one(content, "b'HidroCAUMAX/" + old_tag[1:] + "'",
@@ -101,16 +104,20 @@ def plan(root: Path, target: str) -> dict[Path, bytes]:
     files[path] = content
 
     path, content = source(PLUGIN / 'README.md')
-    content = _one(content, '# HidroCAUMAX ' + old_tag + '\n',
-                   '# HidroCAUMAX ' + next_tag + '\n', str(path))
-    content = _one(content,
-        f'La versión técnica del paquete es **{existing}** y la identificación pública y del diálogo es **{old_tag}**',
-        f'La versión técnica del paquete es **{target}** y la identificación pública y del diálogo es **{next_tag}**', str(path))
+    content = _one(content, '# ' + current_name + '\n', '# ' + next_name + '\n', str(path))
+    if family:
+        content = _one(content,
+            f'La versión técnica del paquete es **{existing}** y la identificación visible es **{current_name}**',
+            f'La versión técnica del paquete es **{target}** y la identificación visible es **{next_name}**', str(path))
+    else:
+        content = _one(content,
+            f'La versión técnica del paquete es **{existing}** y la identificación pública y del diálogo es **{old_tag}**',
+            f'La versión técnica del paquete es **{target}** y la identificación pública y del diálogo es **{next_tag}**', str(path))
     content = _many(content, old_zip, next_zip, str(path))
     content = _many(content, f'/releases/tag/{old_tag}',
                     f'/releases/tag/{next_tag}', str(path))
-    content = _many(content, f'El nombre visible es **HidroCAUMAX {old_tag}**',
-                    f'El nombre visible es **HidroCAUMAX {next_tag}**', str(path))
+    content = _many(content, f'El nombre visible es **{current_name}**',
+                    f'El nombre visible es **{next_name}**', str(path))
     files[path] = content
     return {path: content.encode('utf-8') for path, content in files.items()
             if path.read_bytes() != content.encode('utf-8')}

@@ -11,7 +11,7 @@ from qgis.core import (QgsApplication, QgsCoordinateReferenceSystem, QgsCoordina
 from qgis.gui import QgsMapCanvas
 import qgis.utils
 
-from caumax_consulta.native_layers_view import IBERIA_BOUNDS, NativeLayersView
+from caumax_consulta.native_layers_view import IBERIA_BOUNDS, NativeLayersView, terrain_background, TERRAIN_PROPERTY, style_query_network, NETWORK_PINK
 
 
 class NativeLayersViewTests(unittest.TestCase):
@@ -22,6 +22,7 @@ class NativeLayersViewTests(unittest.TestCase):
 
     def setUp(self):
         self.project = QgsProject.instance()
+        self.before = set(self.project.mapLayers())
         self.canvas = QgsMapCanvas()
         self.canvas.setAttribute(Qt.WA_DontShowOnScreen)
         self.canvas.resize(1230, 790)
@@ -39,6 +40,7 @@ class NativeLayersViewTests(unittest.TestCase):
 
     def tearDown(self):
         self.bridge.stop()
+        self.project.removeMapLayers([key for key in self.project.mapLayers() if key not in self.before and key != (self.layer.id() if self.layer else '')])
         self.registry.stop()
         if self.layer and not sip.isdeleted(self.layer):
             self.project.removeMapLayer(self.layer.id())
@@ -123,3 +125,41 @@ class NativeLayersViewTests(unittest.TestCase):
         self.app.processEvents()
         self.assertEqual(self.canvas.extent(), self.original)
         reference_action.deleteLater()
+
+    def test_terrain_switch_is_idempotent_and_keeps_other_layers_and_extent(self):
+        self.native_load()
+        ign=QgsVectorLayer('Point?crs=EPSG:25830','Mapas raster del IGN','memory')
+        self.project.addMapLayer(ign,False)
+        ign_node=self.group.addLayer(ign)
+        self.assertTrue(terrain_background(self.project,self.group))
+        first=[layer for layer in self.project.mapLayers().values() if layer.customProperty(TERRAIN_PROPERTY,False)]
+        self.assertEqual(len(first),1)
+        self.assertFalse(ign_node.itemVisibilityChecked())
+        self.assertTrue(self.project.layerTreeRoot().findLayer(first[0].id()).itemVisibilityChecked())
+        self.assertTrue(self.project.layerTreeRoot().findLayer(self.layer.id()).itemVisibilityChecked())
+        self.assertEqual(self.canvas.extent(),self.original)
+        terrain_background(self.project,self.group)
+        self.assertEqual(len([layer for layer in self.project.mapLayers().values() if layer.customProperty(TERRAIN_PROPERTY,False)]),1)
+        satellite=QgsVectorLayer('Point?crs=EPSG:25830','Google Satellite','memory')
+        satellite.setCustomProperty('HidroCAUMAX/service_id','google_satellite')
+        self.project.addMapLayer(satellite,False)
+        self.group.addLayer(satellite).setItemVisibilityChecked(False)
+        terrain_background(self.project,self.group)
+        root=self.project.layerTreeRoot()
+        self.assertEqual(root.children()[-2].layer(),first[0])
+        self.assertEqual(root.children()[-1].layer(),satellite)
+        self.assertFalse(root.children()[-1].itemVisibilityChecked())
+        terrain_background(self.project,self.group)
+        self.assertEqual(len([n for n in root.findLayers() if n.layerId()==satellite.id()]),1)
+
+    def test_only_named_50km_network_gets_pink_and_keeps_width_and_geometry(self):
+        pink=QgsVectorLayer('LineString?crs=EPSG:25830','Red > 50 km²','memory')
+        other=QgsVectorLayer('LineString?crs=EPSG:25830','Red 10 km²','memory')
+        width=pink.renderer().symbol().width()
+        color=other.renderer().symbol().color().name()
+        for layer in (pink,other): self.project.addMapLayer(layer)
+        style_query_network(self.project)
+        self.assertEqual(pink.renderer().symbol().color().name(),NETWORK_PINK)
+        self.assertEqual(pink.renderer().symbol().width(),width)
+        self.assertEqual(other.renderer().symbol().color().name(),color)
+        self.assertEqual(pink.featureCount(),0)

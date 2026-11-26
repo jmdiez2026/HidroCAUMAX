@@ -116,6 +116,9 @@ class RationalLayersBridgeTests(unittest.TestCase):
             panel_module.__name__: panel_module,
         })
         self.modules.start()
+        loader = patch('caumax_consulta.improved_layers.load_improved_layers', return_value={'failed': []})
+        self.load_improved = loader.start()
+        self.addCleanup(loader.stop)
         self.dialog = RationalMethodDialog(self.window)
         self.dialog.setAttribute(Qt.WA_DontShowOnScreen)
         self.dialog.txtX.setText('342324.8')
@@ -143,6 +146,28 @@ class RationalLayersBridgeTests(unittest.TestCase):
             binding.button.click()
             self.app.processEvents()
         return binding
+
+    def test_improved_folder_is_loaded_on_every_explicit_click_including_reopen(self):
+        binding = self.attach(expand=True)
+        self.load_improved.assert_called_once_with()
+        first = binding.layers_dialog
+        binding.button.click()
+        self.assertEqual(self.load_improved.call_count, 2)
+        self.assertIs(binding.layers_dialog, first)
+
+    def test_red_clean_button_is_last_at_right_and_uses_shared_cleanup(self):
+        binding = self.attach()
+        self.app.processEvents()
+        clean = binding.clean_button
+        self.assertIs(binding.action_row.itemAt(binding.action_row.count()-1).widget(), clean)
+        self.assertEqual(clean.text(), 'Limpiar capas')
+        self.assertFalse(clean.icon().isNull())
+        self.assertIn('#FADBD8', clean.styleSheet())
+        self.assertLess(binding.button.geometry().right(), clean.x())
+        with patch('caumax_consulta.clean_layers_ui.confirm_cleanup', return_value='Limpieza terminada') as cleanup:
+            clean.click()
+        cleanup.assert_called_once_with(self.dialog)
+        self.assertEqual(binding.error.text(), 'Limpieza terminada')
 
     def test_separate_gea_calculate_leaves_native_button_unchanged_and_cleans_up(self):
         button = self.dialog.btnCalculate
@@ -254,9 +279,10 @@ class RationalLayersBridgeTests(unittest.TestCase):
         self.app.processEvents()
         original = self.dialog.size()
         original_spacing = self.dialog.layout().spacing()
-        self.attach()
+        binding = self.attach()
         self.app.processEvents()
-        self.assertEqual(self.dialog.width(), original.width())
+        self.assertGreaterEqual(self.dialog.width(), original.width())
+        self.assertLessEqual(binding.clean_button.geometry().right(), binding.clean_button.parentWidget().width())
         self.assertLess(self.dialog.height(), original.height())
         self.bridge.stop()
         self.app.processEvents()

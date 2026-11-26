@@ -67,6 +67,8 @@ class RationalLayersPanelTests(unittest.TestCase):
         self.iface = SimpleNamespace(mainWindow=lambda: self.window, mapCanvas=lambda: self.canvas)
         self.manager = Manager()
         self.patches = [
+            patch('caumax_consulta.improved_storage.PLUGIN_ROOT', folder/'plugin'),
+            patch('caumax_consulta.improved_storage.backup_directory', return_value=folder/'backup'),
             patch('caumax_consulta.boundary_layers.storage_directory', return_value=folder/'boundaries'),
             patch.object(controller_module, 'QgsApplication', SimpleNamespace(taskManager=lambda: self.manager)),
             patch.object(controller_module, 'ResolutionController', Resolution),
@@ -335,6 +337,24 @@ class RationalLayersPanelTests(unittest.TestCase):
         self.assertIn(',', self.panel.drainage_threshold.text())
         self.assertLessEqual(self.panel.resolution_combo.width(),
                              self.panel.fontMetrics().horizontalAdvance('500×500 m') + 38)
+
+    def test_clean_button_and_default_export_folder(self):
+        self.prepared()
+        panel = self.panel
+        panel.resize(760, 480); self.window.show(); panel.show(); self.app.processEvents()
+        clean, outlet = panel.delete_layers_button, panel.outlet_button
+        self.assertEqual(clean.text(), 'Limpiar capas')
+        self.assertFalse(clean.icon().isNull())
+        self.assertIn('#FADBD8', clean.styleSheet())
+        self.assertIs(clean.parent(), outlet.parent())
+        self.assertLess(outlet.geometry().right(), clean.x())
+        self.assertLessEqual(abs(clean.geometry().center().y()-outlet.geometry().center().y()), 1)
+        folder = Path(self.temp.name)/'plugin'/'ResolucionMejorada'
+        with patch.object(module.QFileDialog, 'getSaveFileName', return_value=('', '')) as chooser:
+            for kind, name in (('dem','MDT_25m.tif'), ('directions','Direccion_D8_caumax_25m.tif'),
+                               ('network','Red_drenaje_25m.shp')):
+                panel._export(kind)
+                self.assertEqual(Path(chooser.call_args.args[2]), folder/name)
 
     def test_actual_panel_autosizes_at_rest_during_work_and_after_cancel(self):
         from caumax_consulta.rational_layers_dialog import RationalLayersDialog

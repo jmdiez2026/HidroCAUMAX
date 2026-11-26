@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from qgis.PyQt import sip
-from qgis.PyQt.QtCore import QObject, QTimer, pyqtSignal
+from qgis.PyQt.QtCore import QObject, QTimer, Qt, pyqtSignal
 from qgis.core import (Qgis, QgsApplication, QgsCoordinateReferenceSystem,
                        QgsDataSourceUri, QgsLayerTreeGroup, QgsProject,
                        QgsRasterLayer, QgsRectangle, QgsTask)
@@ -18,6 +18,7 @@ ROOT_TITLE = 'HidroCAUMAX · Capas de referencia'
 ROOT_PROPERTY = 'HidroCAUMAX/reference_group'
 SERVICE_PROPERTY = 'HidroCAUMAX/service_id'
 LAYER_PROPERTY = 'HidroCAUMAX/layer_id'
+FLAT_SERVICE_IDS = frozenset(('aemet', 'google_satellite', 'pfafstetter', 'corine'))
 
 
 @dataclass(frozen=True)
@@ -184,11 +185,12 @@ GOOGLE_SERVICE = XyzServiceSpec('google_satellite', 'Google Satellite',
     attribution='© Google y proveedores de imágenes', attribution_url='https://maps.google.com')
 PO_TITLE = 'Po España (CLC2000) 100mx100m · AdrLBallesteros'
 PO_SERVICE = LocalRasterServiceSpec('po_clc2000', PO_TITLE,
-    Path(__file__).resolve().parent / 'data' / 'Po_Spain_CLC2000_100x100_30N_AdrLBallesteros.tif',
+    Path(__file__).resolve().parent / 'ResolucionMejorada' / 'Po_Spain_CLC2000_100x100_30N_AdrLBallesteros.tif',
     (StationLayerSpec('runoff_threshold', PO_TITLE, visible=False),),
     description='Umbral de escorrentía Po · España · CLC2000 · AdrLBallesteros. '
                 'Ráster local de 100 × 100 m, ETRS89 / UTM huso 30N (EPSG:25830), '
-                'incluido en el complemento. Referencia visual; no modifica los cálculos de CAUMAX.')
+                'incluido en ResolucionMejorada. Se propone como P0 al configurar las capas de cálculo; '
+                'cargar su referencia en el mapa no cambia la configuración.')
 REFERENCE_SERVICES = ((AEMET_SERVICE, FLOOD_EXTENT_SERVICE, WMS_SERVICES[0], GOOGLE_SERVICE)
                       + WMS_SERVICES[1:] + (PO_SERVICE,))
 
@@ -298,6 +300,9 @@ def _prepare_layers(pending, layer_factory, cancelled=lambda: False, progress=la
                     if not layer.isValid():
                         error = layer.error().summary() or 'La fuente de referencia no está disponible.'
                     else:
+                        if service.service_id == 'po_clc2000':
+                            from .po_style import apply_po_style
+                            apply_po_style(layer)
                         layer.setCustomProperty(SERVICE_PROPERTY, service.service_id)
                         layer.setCustomProperty(LAYER_PROPERTY, spec.layer_id)
                         metadata = layer.metadata()
@@ -332,26 +337,54 @@ def _prepare_layers(pending, layer_factory, cancelled=lambda: False, progress=la
     return prepared, failures
 
 
+def _collapse_service_children(node, expanded):
+    if (expanded and isinstance(node, QgsLayerTreeGroup)
+            and node.customProperty(SERVICE_PROPERTY, '') in ('agroclima', 'snczi')):
+        for child in node.children():
+            child.setExpanded(False)
+
+
+def _bind_collapsed_groups(group):
+    for node in group.findGroups():
+        if node.customProperty(SERVICE_PROPERTY, '') not in ('agroclima', 'snczi'):
+            continue
+        previous = getattr(node, '_hidrocaumax_collapse_slot', None)
+        if previous is _collapse_service_children:
+            continue
+        if previous is not None:
+            try:
+                node.expandedChanged.disconnect(previous)
+            except (TypeError, RuntimeError):
+                pass
+        try:
+            node.expandedChanged.connect(_collapse_service_children, Qt.UniqueConnection)
+            node._hidrocaumax_collapse_slot = _collapse_service_children
+        except TypeError:
+            pass
+
+
 def _root_group(project, create=True):
-    """Keep the existing reference block first inside the native CAUMAX group."""
+    """Place the reference block immediately above CAUMAX_CAPAS at root level."""
     root = project.layerTreeRoot()
     group = next((item for item in root.findGroups(recursive=True)
                   if item.customProperty(ROOT_PROPERTY, '') == 'v1'), None)
     if group is None and not create:
         return None
-    target = root.findGroup('CAUMAX_CAPAS') or root
-    ancestor = target
-    while ancestor is not None:
-        if ancestor is group:
-            target = root  # Never move a group into one of its own descendants.
-            break
-        ancestor = ancestor.parent()
+    official = root.findGroup('CAUMAX_CAPAS')
+    while official is not None and official.parent() is not root:
+        official = official.parent()
+    if official is group:
+        official = None
+    target = root
+    position = target.children().index(official) if official is not None else 0
+    placed = (group is not None and group.parent() is target and
+              target.children().index(group) == (position - 1 if official is not None else 0))
     current = list(root.customLayerOrder()) if root.hasCustomLayerOrder() else None
     if group is None:
-        group = target.insertGroup(0, ROOT_TITLE)
+        group = target.insertGroup(position, ROOT_TITLE)
         group.setCustomProperty(ROOT_PROPERTY, 'v1')
         group.setExpanded(True)
-    elif group.parent() is not target or target.children()[0] is not group:
+    elif not placed:
         # Keep a clone in the tree while detaching: the registry bridge must
         # never interpret this move as deletion of the registered map layers.
         descendants, exclusive_groups = [], []
@@ -367,28 +400,59 @@ def _root_group(project, create=True):
                     remember(child)
         remember(group)
         placeholder = group.clone()
-        target.insertChildNode(0, placeholder)
+        target.insertChildNode(position, placeholder)
         for parent, _, _ in exclusive_groups:
             parent.setIsMutuallyExclusive(False)
         group.parent().takeChild(group)
         for parent, children in reversed(descendants):
             parent.insertChildNodes(0, children)
-        target.insertChildNode(0, group)
+        target.insertChildNode(target.children().index(placeholder), group)
         for parent, selected, checked in exclusive_groups:
             parent.setIsMutuallyExclusive(True, selected)
             parent.setItemVisibilityChecked(checked)
         target.removeChildNode(placeholder)
+    # Upgrade existing projects as well as new loads, retaining layer IDs,
+    # styles and effective visibility when removing a disabled wrapper.
+    for wrapper in list(group.children()):
+        service_id = wrapper.customProperty(SERVICE_PROPERTY, '')
+        if not isinstance(wrapper, QgsLayerTreeGroup) or service_id not in FLAT_SERVICE_IDS:
+            continue
+        for node in list(wrapper.children()):
+            layer = node.layer() if hasattr(node, 'layer') else None
+            if layer is None or layer.customProperty(SERVICE_PROPERTY, '') != service_id:
+                continue
+            visible = node.isVisible()
+            placeholder = node.clone()
+            group.insertChildNode(group.children().index(wrapper), placeholder)
+            wrapper.takeChild(node)
+            group.insertChildNode(group.children().index(placeholder), node)
+            group.removeChildNode(placeholder)
+            node.setCustomProperty(SERVICE_PROPERTY, service_id)
+            node.setItemVisibilityChecked(visible)
+            node.setExpanded(False)
+        if not wrapper.children():
+            group.removeChildNode(wrapper)
     if current is not None:
         reference_ids = {node.layerId() for node in group.findLayers()}
         references = [layer for layer in current if layer.id() in reference_ids]
         others = [layer for layer in current if layer.id() not in reference_ids]
-        native_ids = {node.layerId() for node in target.findLayers()} - reference_ids
-        index = (0 if target is root else
+        native_ids = ({node.layerId() for node in official.findLayers()} - reference_ids
+                      if official is not None else set())
+        index = (0 if official is None else
                  next((i for i, layer in enumerate(others) if layer.id() in native_ids), None))
         if index is not None:
             updated = others[:index] + references + others[index:]
             if root.customLayerOrder() != updated:
                 root.setCustomLayerOrder(updated)
+    _bind_collapsed_groups(group)
+    for node in group.findLayers():
+        layer = node.layer()
+        if (layer is not None and layer.customProperty(SERVICE_PROPERTY, '') == 'po_clc2000'
+                and not layer.customProperty('HidroCAUMAX/po_style', '')):
+            from .po_style import apply_po_style
+            apply_po_style(layer)
+    from .native_layers_view import place_satellite_below_terrain
+    place_satellite_below_terrain(project)
     return group
 
 
@@ -397,6 +461,9 @@ def _publish_layers(project, prepared, services, failures=()):
     original_crs = QgsCoordinateReferenceSystem(project.crs())
     existing = _owned_layers(project)
     root, groups, created, added = _root_group(project, create=bool(prepared)), {}, set(), 0
+    ordered = list(REFERENCE_SERVICES) + [item for item in services
+        if item.service_id not in {known.service_id for known in REFERENCE_SERVICES}]
+    order = {item.service_id: index for index, item in enumerate(ordered)}
     try:
         for service, spec, layer in prepared:
             key = service.service_id, spec.layer_id
@@ -405,11 +472,24 @@ def _publish_layers(project, prepared, services, failures=()):
                 continue
             if root is None:
                 root = _root_group(project)
-            if isinstance(service, LocalRasterServiceSpec):
+            if service.service_id == 'google_satellite':
                 project.addMapLayer(layer, False)
-                node = root.addLayer(layer)
+                node = project.layerTreeRoot().addLayer(layer)
                 node.setCustomProperty(SERVICE_PROPERTY, service.service_id)
                 node.setItemVisibilityChecked(False)
+                node.setExpanded(False)
+                existing[key] = layer
+                added += 1
+                continue
+            if isinstance(service, LocalRasterServiceSpec) or service.service_id in FLAT_SERVICE_IDS:
+                project.addMapLayer(layer, False)
+                position = next((index for index, node in enumerate(root.children())
+                    if order.get(str(node.customProperty(SERVICE_PROPERTY, '')), len(order))
+                    > order[service.service_id]), len(root.children()))
+                node = root.insertLayer(position, layer)
+                node.setCustomProperty(SERVICE_PROPERTY, service.service_id)
+                node.setItemVisibilityChecked(False)
+                node.setExpanded(False)
                 existing[key] = layer
                 added += 1
                 continue
@@ -419,7 +499,6 @@ def _publish_layers(project, prepared, services, failures=()):
                               if isinstance(node, QgsLayerTreeGroup)
                               and node.customProperty(SERVICE_PROPERTY, '') == service.service_id), None)
                 if group is None:
-                    order = {item.service_id: index for index, item in enumerate(services)}
                     position = next((index for index, node in enumerate(root.children())
                         if order.get(str(node.customProperty(SERVICE_PROPERTY, '')), len(order))
                         > order[service.service_id]), len(root.children()))
@@ -433,6 +512,7 @@ def _publish_layers(project, prepared, services, failures=()):
             node = group.addLayer(layer)
             # Repeating the command does not change the user's selected scene.
             node.setItemVisibilityChecked(False)
+            node.setExpanded(False)
             existing[key] = layer
             added += 1
         for service in services:
@@ -649,6 +729,14 @@ class ReferenceLayerLoader(QObject):
         if self._disposed:
             return
         self.cancel()
+        for node in self.project.layerTreeRoot().findGroups():
+            callback = getattr(node, '_hidrocaumax_collapse_slot', None)
+            if callback is not None:
+                try:
+                    node.expandedChanged.disconnect(callback)
+                    del node._hidrocaumax_collapse_slot
+                except (TypeError, RuntimeError):
+                    pass
         self._disposed = True
         try:
             self.project.cleared.disconnect(self.cancel)

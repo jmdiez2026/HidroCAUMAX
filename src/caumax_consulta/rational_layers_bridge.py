@@ -26,6 +26,7 @@ BUTTON_NAME = 'btnGenerarCapasResolucionMejoradaHidroCAUMAX'
 PANEL_NAME = 'HidroCAUMAXRationalLayersContainer'
 BASIN_BUTTON_NAME = 'btnCuencaHidrograficaRacionalHidroCAUMAX'
 FREQUENCY_BUTTON_NAME = 'btnCalcularFrecuenciaHidroCAUMAX'
+CLEAN_BUTTON_NAME = 'btnLimpiarCapasHidroCAUMAX'
 _FLOW_INPUTS = ('txtArea', 'txtConcentrationTime', 'txtI1Id', 'txtRainfall',
                 'txtIntensityFactor', 'txtP0', 'txtP0Corrector', 'txtUniformity',
                 'txtCorrectedRainfall', 'txtP0CorrectorReturnPeriod', 'txtRainfallCorrection')
@@ -106,9 +107,11 @@ class _Binding:
     fitting: bool = False
     basin_button: object = None
     frequency_button: object = None
+    clean_button: object = None
     native_height: object = None
     native_width: object = None
     fitted_height: object = None
+    fitted_width: object = None
     decimal_presentation: object = None
     hidden_native_outline: object = None
     native_outline_visibility: object = None
@@ -139,18 +142,22 @@ class RationalLayersBridge(QObject):
         self.on_basin_refined = on_basin_refined
         self._running = False
         self._bindings = {}
+        from .recommended_p0 import RecommendedP0Presentation
+        self._recommended_p0 = RecommendedP0Presentation(self)
         self.timer = QTimer(self)
         self.timer.setInterval(400)
         self.timer.timeout.connect(self.scan)
 
     def start(self):
         self._running = True
+        self._recommended_p0.start()
         self.scan()
         if not self.timer.isActive():
             self.timer.start()
 
     def stop(self):
         self._running = False
+        self._recommended_p0.stop()
         self.timer.stop()
         for key in tuple(self._bindings):
             self._detach(key)
@@ -440,6 +447,10 @@ class RationalLayersBridge(QObject):
         button.setToolTip('Abrir en una ventana independiente las opciones de generación para el punto actual.')
         row.addWidget(button, 0, Qt.AlignLeft)
         row.addStretch()
+        from .clean_layers_ui import clean_button
+        clean = clean_button(frame)
+        clean.setObjectName(CLEAN_BUTTON_NAME)
+        row.addWidget(clean, 0, Qt.AlignRight)
         layout.addWidget(frame)
         error = QLabel(container)
         error.setTextFormat(Qt.PlainText)
@@ -454,6 +465,7 @@ class RationalLayersBridge(QObject):
         binding.decimal_presentation = RationalDecimalPresentation(dialog)
         binding.basin_button, binding.action_row = basin_button, row
         binding.frequency_button = frequency_button
+        binding.clean_button = clean
         self._group_save_button(binding)
         binding.native_height = native_height
         binding.native_width = native_width
@@ -463,6 +475,7 @@ class RationalLayersBridge(QObject):
                       lambda checked=False: self._request_frequency(binding))
         self._connect(binding, button.clicked, lambda checked=False: self._open_layers_dialog(binding))
         self._connect(binding, basin_button.clicked, lambda checked=False: self._request_basin(binding))
+        self._connect(binding, clean.clicked, lambda checked=False: self._request_cleanup(binding))
         for field_widget in (dialog.txtX, dialog.txtY):
             self._connect(binding, field_widget.textChanged, lambda *unused: self._coordinates_changed(binding))
         for name in _FLOW_INPUTS:
@@ -504,6 +517,13 @@ class RationalLayersBridge(QObject):
                 and self.on_frequency_requested is not None and not binding.calculating):
             self.on_frequency_requested(binding.dialog)
 
+    def _request_cleanup(self, binding):
+        from .clean_layers_ui import confirm_cleanup
+        message = confirm_cleanup(binding.dialog)
+        if message:
+            binding.error.setText(message)
+            binding.error.show()
+
     def _fit_native_height(self, binding):
         if not self._running or self._bindings.get(id(binding.dialog)) is not binding:
             return
@@ -516,6 +536,7 @@ class RationalLayersBridge(QObject):
             height = max(1, dialog.minimumSizeHint().height())
             dialog.resize(binding.native_width, height)
             binding.fitted_height = dialog.height()
+            binding.fitted_width = dialog.width()
         except RuntimeError:
             pass
 
@@ -609,6 +630,19 @@ class RationalLayersBridge(QObject):
         """Open the complete D8 tools in a separate, non-modal QGIS window."""
         if not self._running or self._bindings.get(id(binding.dialog)) is not binding:
             return
+        from .improved_layers import load_improved_layers
+        import_error = False
+        try:
+            imported = load_improved_layers()
+            if imported['failed']:
+                import_error = True
+                binding.error.setText('No se pudieron cargar estas capas de ResolucionMejorada: ' +
+                                      '; '.join(imported['failed']))
+                binding.error.show()
+        except OSError as error:
+            import_error = True
+            binding.error.setText('No se pudo abrir ResolucionMejorada: ' + str(error))
+            binding.error.show()
         existing = binding.layers_dialog
         if existing is not None:
             try:
@@ -653,7 +687,8 @@ class RationalLayersBridge(QObject):
             binding.layers_dialog, binding.scroll, binding.panel = window, scroll, panel
             window.finished.connect(lambda *unused: self._layers_closed(binding, window))
             window.fit_content(panel, scroll)
-            binding.error.hide()
+            if not import_error:
+                binding.error.hide()
             window.show()
             self._refresh(binding)
         except Exception as error:
@@ -700,6 +735,7 @@ class RationalLayersBridge(QObject):
             self._layers_closed(binding, binding.layers_dialog)
         try:
             restore_height = binding.dialog.height() == binding.fitted_height
+            restore_width = binding.dialog.width() == binding.fitted_width
             button = binding.container.findChild(QPushButton, SAVE_BUTTON_NAME)
             if button is not None and button.property(EXPORT_OWNER_PROPERTY):
                 _place_export_button(binding.dialog, button, grouped=False)
@@ -710,6 +746,7 @@ class RationalLayersBridge(QObject):
             binding.container.deleteLater()
             if restore_height and binding.native_height is not None:
                 binding.dialog.layout().activate()
-                binding.dialog.resize(binding.dialog.width(), binding.native_height)
+                binding.dialog.resize(binding.native_width if restore_width else binding.dialog.width(),
+                                      binding.native_height)
         except RuntimeError:
             pass

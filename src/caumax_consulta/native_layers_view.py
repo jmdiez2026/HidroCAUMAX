@@ -1,14 +1,94 @@
 """Frame Iberia after the explicit native CAUMAX layer-loading command."""
 from qgis.PyQt import sip
 from qgis.PyQt.QtCore import QObject, QTimer
+from qgis.PyQt.QtGui import QColor
 from qgis.core import (QgsCoordinateReferenceSystem, QgsCoordinateTransform,
-                       QgsCsException, QgsProject, QgsRectangle)
+                       QgsCsException, QgsProject, QgsRectangle, QgsRasterLayer,
+                       QgsDataSourceUri, QgsVectorLayer, QgsRenderContext, QgsWkbTypes)
 import qgis.utils
 
 
 # Geographic frame inferred from the requested overview: mainland Iberia,
 # Balearic Islands and a small surrounding margin. QGIS fits the canvas ratio.
 IBERIA_BOUNDS = (-11.0, 35.6, 5.5, 44.2)
+TERRAIN_URL = 'https://mt1.google.com/vt/lyrs=p&x={x}&y={y}&z={z}'
+TERRAIN_PROPERTY = 'HidroCAUMAX/startup_terrain'
+NETWORK_PINK = '#ff1493'
+
+
+def place_satellite_below_terrain(project):
+    root = project.layerTreeRoot()
+    satellite = next((layer for layer in project.mapLayers().values()
+        if layer.customProperty('HidroCAUMAX/service_id', '') == 'google_satellite'), None)
+    if satellite is None:
+        return
+    node = root.findLayer(satellite.id())
+    terrain = next((layer for layer in project.mapLayers().values()
+        if layer.customProperty(TERRAIN_PROPERTY, False)
+        or (layer.providerType() == 'wms' and QgsDataSourceUri(layer.source()).param('url') == TERRAIN_URL)), None)
+    terrain_node = root.findLayer(terrain.id()) if terrain is not None else None
+    target = root.children().index(terrain_node)+1 if terrain_node is not None and terrain_node.parent() is root else len(root.children())
+    placed = node is not None and node.parent() is root and (
+        root.children().index(node) == target if terrain_node is not None else root.children()[-1] is node)
+    if node is not None and not placed:
+        clone = node.clone()
+        root.insertChildNode(target, clone)
+        node.parent().removeChildNode(node)
+    if terrain is not None and root.hasCustomLayerOrder():
+        order = [layer for layer in root.customLayerOrder() if layer.id() != satellite.id()]
+        position = next((i+1 for i, layer in enumerate(order) if layer.id() == terrain.id()), len(order))
+        root.setCustomLayerOrder(order[:position]+[satellite]+order[position:])
+
+
+def style_query_network(project):
+    """Highlight only the named >50 km2 pickable network, once per layer."""
+    for layer in project.mapLayers().values():
+        name = ''.join(layer.name().lower().split()).replace('²', '2').replace('^2', '2')
+        if (name != 'red>50km2' or not isinstance(layer, QgsVectorLayer)
+                or layer.geometryType() != QgsWkbTypes.LineGeometry
+                or layer.customProperty('HidroCAUMAX/query_network_pink', False)):
+            continue
+        renderer = layer.renderer()
+        if renderer is None:
+            continue
+        renderer = renderer.clone()
+        for symbol in renderer.symbols(QgsRenderContext()):
+            symbol.setColor(QColor(NETWORK_PINK))
+        layer.setRenderer(renderer)
+        layer.setCustomProperty('HidroCAUMAX/query_network_pink', True)
+        layer.triggerRepaint()
+
+
+def terrain_background(project, native_group):
+    """Switch the native overview background without changing extent or CRS."""
+    root = project.layerTreeRoot()
+    terrain = next((layer for layer in project.mapLayers().values()
+        if layer.customProperty(TERRAIN_PROPERTY, False)
+        or (layer.providerType() == 'wms' and QgsDataSourceUri(layer.source()).param('url') == TERRAIN_URL)), None)
+    if terrain is None:
+        uri = QgsDataSourceUri()
+        for key, value in (('type','xyz'),('url',TERRAIN_URL),('zmin','0'),('zmax','19'),('crs','EPSG:3857')):
+            uri.setParam(key,value)
+        terrain = QgsRasterLayer(bytes(uri.encodedUri()).decode(), 'Google Terrain', 'wms')
+        if not terrain.isValid():
+            return False
+        terrain.setCustomProperty(TERRAIN_PROPERTY, True)
+        terrain.setAttribution('© Google y proveedores cartográficos')
+        terrain.setAttributionUrl('https://maps.google.com')
+        project.addMapLayer(terrain, False)
+        root.addLayer(terrain)
+    node = root.findLayer(terrain.id())
+    if node is not None:
+        node.setItemVisibilityChecked(True)
+        node.setExpanded(False)
+    for original in native_group.findLayers():
+        if original.layer() and original.layer().name() == 'Mapas raster del IGN':
+            original.setItemVisibilityChecked(False)
+    if root.hasCustomLayerOrder():
+        order = [layer for layer in root.customLayerOrder() if layer.id() != terrain.id()]
+        root.setCustomLayerOrder(order + [terrain])
+    place_satellite_below_terrain(project)
+    return True
 
 
 class NativeLayersView(QObject):
@@ -48,6 +128,7 @@ class NativeLayersView(QObject):
     def _scan(self):
         if not self._running:
             return
+        style_query_network(QgsProject.instance())
         plugin = qgis.utils.plugins.get('caumax')
         action = getattr(plugin, 'actionLoadProject', None)
         if action is not None and sip.isdeleted(action):
@@ -73,6 +154,8 @@ class NativeLayersView(QObject):
         group = project.layerTreeRoot().findGroup('CAUMAX_CAPAS')
         if group is None or not any(n.layer() and n.layer().isValid() for n in group.findLayers()):
             return
+        terrain_background(project, group)
+        style_query_network(project)
         canvas = self.iface.mapCanvas()
         crs = canvas.mapSettings().destinationCrs()
         if not crs.isValid():

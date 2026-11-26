@@ -1,3 +1,23 @@
+# HidroCAUMAX v1.0.10 — carpeta de exportaciones, capas mejoradas y P0 (2026-11-26)
+
+- Nombre visible HidroCAUMAX v.1.0; paquete y actualizaciones 1.0.10.
+- Actualización directa desde la barra: descarga verificada, protección de trabajo pendiente, copia de recuperación y recarga con comprobación de versión.
+- Ayuda al extremo derecho, con manual PDF de diez páginas, visor sin conexión y apertura en el lector del equipo.
+- Fondo inicial Google Terrain, IGN apagado y encuadre conservado; Red > 50 km² en rosa intenso.
+
+- P0 incluido en ResolucionMejorada; carpeta inicial para exportar MDT, direcciones D8 y red. Conservación fuera del directorio del plugin para futuras actualizaciones, restauración sin sobrescritura y limpieza sin resurrección de archivos.
+- Configurar capas de cálculo propone la última pareja compatible registrada, P0 incluido, torrencialidad original y cuenca mínima 2 km². Respeta precipitaciones y la aceptación/cancelación del diálogo nativo.
+- Generar capas resolución mejorada carga el grupo HidroCAUMAX mejoradas encima de CAUMAX_CAPAS. Solo Red_drenaje_25m.shp activada, leyendas plegadas y sin duplicados al repetir.
+- Limpiar capas rojo claro con icono E3 al extremo derecho del recuadro GEA y en la fila de Ajustar punto de cierre; limpieza compartida con revisión previa.
+- Barra con textos breves y Capas inmediatamente después del logo HidroCAUMAX.
+- Calcular de HidroCAUMAX aplica el valor medio regional recomendado de P0 antes de obtener los cuantiles. La ventana de recomendaciones utiliza comas. Calcular original sigue independiente.
+- Referencias fuera de CAUMAX_CAPAS e inmediatamente encima; grupo abierto, entradas nuevas apagadas y plegadas. AEMET, Pfafstetter y Corine directamente en el grupo general; Google Satellite fuera, bajo Google Terrain, con migración de contenedores anteriores sin duplicar capas.
+- Mantiene fórmulas CAUMAX, malla y codificación ESRI D8. Pruebas de almacenamiento, actualización, capas, Qt, cuantiles y paquete; ver docs/verification-1.0.10.md del repositorio.
+
+- Rampa P0 RdYlGn: 16 cuantiles, interpolación lineal, 0–152 y etiquetas enteras. Agroclima y peligrosidad SNCZI abren con las leyendas plegadas.
+
+---
+
 # HidroCAUMAX v1.0.9 — activación automática, barra y recuadro GEA (2026-11-26)
 
 - Las herramientas se activan al cargar el complemento y al terminar el arranque de QGIS. El logo restaura los botones y ya no permite desactivarlos accidentalmente.

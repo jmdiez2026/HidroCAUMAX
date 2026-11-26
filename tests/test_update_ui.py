@@ -71,8 +71,10 @@ class UpdateUiTests(unittest.TestCase):
         self.window = QMainWindow()
         self.bar = QgsMessageBar(self.window)
         self.iface = SimpleNamespace(mainWindow=lambda:self.window, messageBar=lambda:self.bar)
+        self.updater = Mock(busy=False)
         for mocked in (patch.object(ui, 'UpdateChecker', FakeChecker),
-                       patch.object(ui, 'QgsSettings', lambda:self.settings)):
+                       patch.object(ui, 'QgsSettings', lambda:self.settings),
+                       patch.object(ui, 'controller', return_value=self.updater)):
             mocked.start()
             self.addCleanup(mocked.stop)
         self.notifier = ui.UpdateNotifier(self.iface, self.window)
@@ -140,25 +142,25 @@ class UpdateUiTests(unittest.TestCase):
         self.notifier.checker.finish('timeout', 'Tiempo de espera agotado.')
         self.assertIn('Tiempo de espera agotado.', self.bar.currentItem().text())
 
-    def test_manual_available_repeats_one_notice_without_installing(self):
+    def test_manual_available_starts_verified_updater_without_manager(self):
         self.notifier.check()
         self.notifier.checker.finish()
         self.notifier.check(manual=True)
         self.notifier.checker.finish()
-        self.assertEqual(len(self.bar.items()), 1)
+        self.assertEqual(len(self.bar.items()), 0)
+        self.updater.start.assert_called_once_with(INFO)
         self.manager.showPluginManagerWhenReady.assert_not_called()
 
-    def test_update_click_adds_missing_repository_and_hands_off_to_manager_only(self):
+    def test_update_click_rechecks_and_installs_without_manager_or_repository_edit(self):
         self.notifier.check()
         self.notifier.checker.finish()
         self.assertEqual(self.values(), {})
         self.bar.currentItem().findChild(QPushButton).click()
-        self.manager.reloadAndExportData.assert_called_once_with()
-        self.manager.showPluginManagerWhenReady.assert_called_once_with(0)
-        prefix = 'app/plugin_repositories/HidroCAUMAX/'
-        self.assertEqual(self.settings.value(prefix+'url'), ui.REPOSITORY_URL)
-        self.assertTrue(self.settings.value(prefix+'enabled', type=bool))
-        self.assertEqual(set(self.values()), {prefix+'url', prefix+'enabled'})
+        self.notifier.checker.finish()
+        self.updater.start.assert_called_once_with(INFO)
+        self.manager.reloadAndExportData.assert_not_called()
+        self.manager.showPluginManagerWhenReady.assert_not_called()
+        self.assertEqual(self.values(), {})
 
     def test_existing_repository_settings_are_preserved_including_disabled_and_auth(self):
         self.seed_repository('Personal name', ui.REPOSITORY_URL, enabled=False, valid=False, authcfg='sample')

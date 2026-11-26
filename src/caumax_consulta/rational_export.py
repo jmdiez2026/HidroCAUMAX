@@ -32,7 +32,7 @@ QPushButton:disabled { background-color: #EAF3F8; color: #7A8790; }'''
 ACTION_FRAME_NAME = 'HidroCAUMAXRationalActionFrame'
 ACTION_BUTTON_STYLE = BUTTON_STYLE.replace('padding: 5px 9px', 'padding: 3px 6px')
 EXPORT_OWNER_PROPERTY = 'HidroCAUMAX/rational_export_owned'
-_TITLE = 'HidroCAUMAX v1.0.9 · Guardar cuenca'
+_TITLE = 'HidroCAUMAX v.1.0 · Guardar cuenca'
 
 
 def _place_export_button(dialog, button, grouped=True):

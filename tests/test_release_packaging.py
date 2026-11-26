@@ -89,6 +89,14 @@ def attach_windows_fixture(test):
 
 
 class ReleasePackagingTests(unittest.TestCase):
+    def test_actual_package_has_original_p0_in_improved_folder(self):
+        files = builder.source_files(ROOT/'src/caumax_consulta')
+        name = 'Po_Spain_CLC2000_100x100_30N_AdrLBallesteros.tif'
+        self.assertIn('caumax_consulta/ResolucionMejorada/'+name, files)
+        self.assertNotIn('caumax_consulta/data/'+name, files)
+        self.assertEqual(builder.sha256(files['caumax_consulta/ResolucionMejorada/'+name]),
+                         '611b41dbedfd64a0d0c84c710e85c80251b4bc8db55959ee9830cd2fa36bb871')
+
     def setUp(self):
         self.temporary=tempfile.TemporaryDirectory(prefix='hidrocaumax-build-')
         self.addCleanup(self.temporary.cleanup)

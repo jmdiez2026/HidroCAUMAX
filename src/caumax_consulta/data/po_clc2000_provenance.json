@@ -1,6 +1,6 @@
 {
   "title": "Po España (CLC2000) 100mx100m · AdrLBallesteros",
-  "file": "Po_Spain_CLC2000_100x100_30N_AdrLBallesteros.tif",
+  "file": "../ResolucionMejorada/Po_Spain_CLC2000_100x100_30N_AdrLBallesteros.tif",
   "source": "Archivo CLC2000 proporcionado por el mantenedor del complemento",
   "attribution": "AdrLBallesteros",
   "sha256": "611b41dbedfd64a0d0c84c710e85c80251b4bc8db55959ee9830cd2fa36bb871",
@@ -9,5 +9,5 @@
   "dimensions": [10350, 8708],
   "nodata": 255,
   "processing": "Archivo original sin reproyección ni modificación de celdas",
-  "role": "Referencia visual; no sustituye automáticamente Po en los cálculos"
+  "role": "Referencia local y P0 propuesto al abrir Configurar capas de cálculo; se aplica al aceptar el diálogo nativo"
 }

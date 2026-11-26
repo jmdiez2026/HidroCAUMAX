@@ -498,6 +498,13 @@ class RationalFrequencyBridge(QObject):
         button = getattr(owner, 'btnCalculate', None)
         if key in self._requested or button is None or not button.isEnabled():
             return
+        from .recommended_p0 import apply_recommended_mean
+        try:
+            apply_recommended_mean(owner)
+        except (AttributeError, KeyError, TypeError, ValueError, RuntimeError) as error:
+            self.iface.messageBar().pushWarning('HidroCAUMAX',
+                'No se pudo aplicar el coeficiente corrector de P0: ' + str(error))
+            return
         self._requested.add(key)
         try:
             owner.calculate()

@@ -40,10 +40,10 @@ class RationalLayersPanel(DrainageControls):
         progress_row.addWidget(self.cancel_button)
         self.layout().addLayout(progress_row)
         self.cancel_button.clicked.connect(self._cancel_generation)
-        self.delete_layers_button = QPushButton('Eliminar capas', self)
+        from .clean_layers_ui import clean_button
+        self.delete_layers_button = clean_button(self)
         self.delete_layers_button.setObjectName('hidrocaumax_delete_generated_layers')
         self.delete_layers_button.clicked.connect(self._delete_generated_layers)
-        progress_row.addWidget(self.delete_layers_button, 0, Qt.AlignRight)
         self._products = self._state = self._selector = None
         self._basin = None
         self._outlines = {}
@@ -73,6 +73,7 @@ class RationalLayersPanel(DrainageControls):
         self.outlet_button.setToolTip('Corrección manual opcional del cierre del MDT seleccionado.')
         row.addWidget(self.outlet_button)
         row.addStretch(1)
+        row.addWidget(self.delete_layers_button, 0, Qt.AlignRight)
         self.layout().insertWidget(1, resolution_row)
         self.context_label = QLabel(self)
         self.context_label.setWordWrap(True)
@@ -344,33 +345,10 @@ class RationalLayersPanel(DrainageControls):
         self._status('Generación de capas D8 cancelada. Puedes volver a generar las capas.', 0)
 
     def _delete_generated_layers(self):
-        from .generated_cleanup import deletion_plan, delete_generated
-        plan = deletion_plan()
-        if not plan['layers'] and not plan['files']:
-            self._status('No hay capas ni archivos generados por HidroCAUMAX para eliminar.', 0)
-            return
-        prompt = QMessageBox(self)
-        prompt.setWindowTitle('Eliminar capas de HidroCAUMAX')
-        prompt.setIcon(QMessageBox.Warning)
-        prompt.setText(f"Se retirarán {len(plan['layers'])} capas de QGIS y se eliminarán "
-                       f"{len(plan['files'])} archivos del disco duro.")
-        prompt.setInformativeText('Se incluyen las exportaciones registradas en este proyecto y las capas '
-            'temporales de sesiones anteriores. Los datos originales se conservan. Esta acción no se puede deshacer.')
-        prompt.setDetailedText('Capas:\n' + '\n'.join(plan['layers'].values()) +
-                               '\n\nArchivos:\n' + '\n'.join(sorted(plan['files'])) +
-                               '\n\nOrígenes conservados:\n' + '\n'.join(plan['protected']))
-        remove = prompt.addButton('Eliminar capas', QMessageBox.DestructiveRole)
-        cancel = prompt.addButton('Cancelar', QMessageBox.RejectRole)
-        prompt.setDefaultButton(cancel)
-        prompt.exec()
-        if prompt.clickedButton() is not remove:
-            return
-        result = delete_generated(plan)
-        message = f"Se han retirado {result['layers']} capas y eliminado {len(result['removed'])} archivos."
-        if result['failed']:
-            message += f" No se han podido eliminar {len(result['failed'])} archivos."
-            QMessageBox.warning(self, 'Archivos conservados', '\n'.join(result['failed']))
-        self._status(message, 0)
+        from .clean_layers_ui import confirm_cleanup
+        message = confirm_cleanup(self)
+        if message:
+            self._status(message, 0)
 
     def _status(self, text, progress=0):
         if self._disposed:
@@ -663,8 +641,9 @@ class RationalLayersPanel(DrainageControls):
                  'directions': f'Direccion_D8_caumax_{size}.tif',
                  'network': f'Red_drenaje_{size}.shp'}
         filters = 'Shapefile (*.shp)' if kind == 'network' else 'GeoTIFF (*.tif *.tiff)'
+        from .improved_storage import export_directory, record_exports
         destination, _ = QFileDialog.getSaveFileName(self, 'Exportar capa hidrológica',
-            str(Path.home() / names[kind]), filters)
+            str(export_directory() / names[kind]), filters)
         if not destination:
             return
         try:
@@ -678,6 +657,12 @@ class RationalLayersPanel(DrainageControls):
             export_key = 'directions_caumax' if kind == 'directions' else kind
             state['metadata'].setdefault('exports', {})[export_key] = str(path)
             self._status('Archivo guardado: ' + str(path), 100)
+            if Path(path).is_file():
+                try:
+                    record_exports(state['metadata']['exports'])
+                except OSError as error:
+                    self._status('Archivo guardado: ' + str(path) +
+                        '. No se ha podido conservar para futuras actualizaciones: ' + str(error), 100)
         except Exception as error:
             self._failed(str(error))
 

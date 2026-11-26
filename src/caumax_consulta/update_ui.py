@@ -1,9 +1,10 @@
-"""Nonmodal update notices; installation remains in QGIS's plugin manager."""
+"""Nonmodal notices; a user's Update click downloads and installs directly."""
 from qgis.PyQt.QtCore import QObject, QTimer
 from qgis.PyQt.QtWidgets import QApplication, QDialog, QLineEdit, QPushButton
 from qgis.core import Qgis, QgsSettings
 
 from .update_checker import REPOSITORY_URL, UpdateChecker
+from .automatic_update import controller
 
 
 def ensure_repository(settings=None):
@@ -46,6 +47,8 @@ class UpdateNotifier(QObject):
     def check(self, manual=False):
         if self._disposed:
             return False
+        if manual and controller(self.iface).busy:
+            return False
         # A manual request made while an automatic GET is pending shares it,
         # but receives an explicit result once that same request finishes.
         self._manual = self._manual or bool(manual)
@@ -64,8 +67,8 @@ class UpdateNotifier(QObject):
                     except RuntimeError:
                         pass
                 button = QPushButton('Actualizar', widget)
-                button.setToolTip('Abrir el gestor de complementos de QGIS. La instalación requiere tu acción.')
-                button.clicked.connect(self.open_manager)
+                button.setToolTip('Descargar, verificar e instalar la actualización en QGIS.')
+                button.clicked.connect(lambda: self.check(manual=True))
                 widget.layout().addWidget(button)
                 self._update_notice = widget
             self._notices.append(widget)
@@ -78,11 +81,15 @@ class UpdateNotifier(QObject):
         if self._disposed:
             return
         version = info['version']
+        if self._manual:
+            self._clear_notices()
+            controller(self.iface).start(info)
+            return
         if self._manual or version not in self._seen:
             self._seen.add(version)
             self._message(
                 f"Versión {version} disponible; instalada: {info['installed_version']}. "
-                'Puedes revisarla e instalarla en el gestor de complementos.',
+                'Pulsa Actualizar para descargarla e instalarla.',
                 duration=0, update=True)
 
     def _completed(self, status, detail):
@@ -149,6 +156,9 @@ class UpdateNotifier(QObject):
         if self._disposed:
             return
         self._disposed = True
+        updater = getattr(self.iface, '_hidrocaumax_updater', None)
+        if updater is not None and not updater.installing:
+            updater.cancel()
         self._manual = False
         self._filter_timer.stop()
         self.checker.available.disconnect(self._available)

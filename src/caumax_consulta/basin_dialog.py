@@ -101,7 +101,7 @@ class BasinDialog(QDialog):
     def __init__(self, query, iface, parent=None, saved_session=None):
         super().__init__(parent)
         self.setObjectName('CaumaxCuencaHidrograficaDialog')
-        self.setWindowTitle('HidroCAUMAX v1.0.9 · Cuenca hidrográfica')
+        self.setWindowTitle('HidroCAUMAX v.1.0 · Cuenca hidrográfica')
         self.setStyleSheet(BLUE_BUTTON_STYLE)
         self.setAttribute(Qt.WA_DeleteOnClose)
         self.setModal(False)
@@ -1210,7 +1210,8 @@ class BasinDialog(QDialog):
         size=f'{self.analysis.cell_width:g}m'
         names={'dem':f'MDT_{size}.tif','directions':f'Direccion_D8_caumax_{size}.tif','network':f'Red_drenaje_{size}.shp'}
         filters='Shapefile (*.shp)' if kind=='network' else 'GeoTIFF (*.tif *.tiff)'
-        destination,_=QFileDialog.getSaveFileName(self,'Exportar capa hidrológica',str(Path.home()/names[kind]),filters)
+        from .improved_storage import export_directory, record_exports
+        destination,_=QFileDialog.getSaveFileName(self,'Exportar capa hidrológica',str(export_directory()/names[kind]),filters)
         if not destination:return
         try:
             from .hydro_export import export_dem,export_directions,export_network
@@ -1221,6 +1222,12 @@ class BasinDialog(QDialog):
             state['metadata'].setdefault('exports',{})[export_key]=str(path)
             self.drainage_status.setText('Archivo guardado: '+str(path))
             self._cache_variant_state()
+            if Path(path).is_file():
+                try:
+                    record_exports(state['metadata']['exports'])
+                except OSError as error:
+                    self.drainage_status.setText('Archivo guardado: '+str(path)+
+                        '. No se ha podido conservar para futuras actualizaciones: '+str(error))
         except Exception as error:
             QMessageBox.critical(self,'Exportar capa hidrológica',str(error))
 

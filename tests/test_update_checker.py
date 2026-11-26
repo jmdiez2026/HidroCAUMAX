@@ -301,7 +301,10 @@ class NetworkTests(unittest.TestCase):
         with patch.object(updates, 'TIMEOUT_MS', 10):
             self.checker.check()
         reply = self.manager.replies[-1]
-        QTest.qWait(30)
+        for _ in range(50):
+            if reply.aborted:
+                break
+            QTest.qWait(10)
         self.assertTrue(reply.aborted)
         self.assertEqual(self.events[-1][1], 'timeout')
         self.finish(reply=reply)

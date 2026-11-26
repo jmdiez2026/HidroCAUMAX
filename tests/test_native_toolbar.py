@@ -47,10 +47,12 @@ class ToolbarTests(unittest.TestCase):
         self.window.deleteLater()
         self.app.sendPostedEvents(None, QEvent.DeferredDelete)
 
-    def test_five_buttons_share_menu_actions_and_delete_precedes_update(self):
+    def test_six_buttons_share_menu_actions_and_help_is_last(self):
         p = self.plugin
         self.assertEqual(p._toolbar.objectName(), 'HidroCAUMAXToolbar')
-        expected = [p.reference_action, p.action, p.open_action, p.clear_layers_action, p.update_action]
+        expected = [p.action, p.reference_action, p.open_action, p.clear_layers_action, p.update_action, p.help_action]
+        self.assertEqual(p._toolbar.toolButtonStyle(), Qt.ToolButtonTextBesideIcon)
+        self.assertEqual([a.iconText() for a in expected], ['HidroCAUMAX v.1.0', 'Capas', 'Abrir cuenca', 'Limpiar capas', 'Actualizar', 'Ayuda'])
         self.assertEqual(p._toolbar.actions(), expected)
         for action in expected:
             self.assertIn(unittest.mock.call('HidroCAUMAX', action), self.iface.addPluginToMenu.call_args_list)

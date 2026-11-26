@@ -16,7 +16,7 @@ from qgis.PyQt import sip
 from qgis.PyQt.QtCore import QCoreApplication, QEvent, QEventLoop, QThread, QTimer
 from qgis.PyQt.QtWidgets import QMainWindow
 from qgis.core import (Qgis, QgsApplication, QgsCoordinateReferenceSystem, QgsDataSourceUri,
-                       QgsProject, QgsRasterLayer, QgsRectangle, QgsVectorLayer)
+                       QgsProject, QgsRasterLayer, QgsRectangle, QgsVectorLayer, QgsLayerTreeGroup)
 from qgis.gui import QgsLayerTreeMapCanvasBridge, QgsMapCanvas, QgsMessageBar
 
 from caumax_consulta.delineation_cleanup import clear_delineation_layers
@@ -66,6 +66,15 @@ class ReferenceLayerTests(unittest.TestCase):
         self.assertEqual((layer.rasterUnitsPerPixelX(), layer.rasterUnitsPerPixelY()), (100, 100))
         self.assertFalse(node.isVisible())
         self.assertEqual(Path(layer.source()), maps.PO_SERVICE.path)
+        renderer=layer.renderer()
+        self.assertEqual(renderer.type(),'singlebandpseudocolor')
+        self.assertEqual((renderer.classificationMin(),renderer.classificationMax()),(0,152))
+        colors=renderer.shader().rasterShaderFunction()
+        self.assertEqual(len(colors.colorRampItemList()),16)
+        self.assertEqual(len({item.color.name() for item in colors.colorRampItemList()}),16)
+        self.assertEqual(colors.colorRampItemList()[0].color.name(),'#d7191c')
+        self.assertEqual(colors.colorRampItemList()[-1].color.name(),'#1a9641')
+        self.assertEqual(colors.labelPrecision(),0)
         node.setItemVisibilityChecked(True)
         report = maps.load_reference_layers(self.project, services=(maps.PO_SERVICE,))
         self.assertEqual((report.added, report.existing), (0, 1))
@@ -170,11 +179,11 @@ class ReferenceLayerTests(unittest.TestCase):
         self.assertIs(self.project.mapLayer(foreign.id()), foreign)
         self.assertEqual(clear_delineation_layers(self.project), 0)
         self.assertEqual(len(self.project.mapLayers()), self.total + 1)
-        land = groups['corine'].children()[0].layer()
+        land = groups['corine'].layer()
         self.assertIn('SIOSE de Alta Resolución 2017', land.metadata().abstract())
         self.assertIn('no descarga un ráster local', land.metadata().abstract())
 
-    def test_repeat_moves_existing_block_inside_caumax_first_without_recreating_layers(self):
+    def test_repeat_moves_existing_block_above_caumax_without_recreating_layers(self):
         self.load()
         references, groups = self.groups()
         references.setName('Referencias renombradas')
@@ -209,9 +218,9 @@ class ReferenceLayerTests(unittest.TestCase):
             self.assertTrue(loader.load())
         manager.assert_not_called()
         self.assertEqual(self.requests, [])
-        self.assertIs(official.children()[0], references)
-        self.assertEqual([node.name() for node in official.children()[1:]], ['Red10km2', 'Ríos'])
-        self.assertEqual(list(root.children()), root_nodes)
+        self.assertIs(root.children()[root.children().index(official)-1], references)
+        self.assertEqual([node.name() for node in official.children()], ['Red10km2', 'Ríos'])
+        self.assertEqual([n for n in root.children() if n is not references], root_nodes)
         self.assertEqual(references.name(), 'Referencias renombradas')
         self.assertEqual(references.findLayers(), original_nodes)
         self.assertEqual(references.findGroups(), original_groups)
@@ -225,27 +234,30 @@ class ReferenceLayerTests(unittest.TestCase):
         self.assertEqual(self.canvas.mapSettings().destinationCrs(), before_crs)
         self.assertEqual(self.project.crs().authid(), 'EPSG:4326')
 
-    def test_new_block_is_first_inside_caumax_and_its_custom_drawing_order(self):
+    def test_new_block_is_above_caumax_with_collapsed_inactive_entries(self):
         root = self.project.layerTreeRoot()
         official = root.addGroup('CAUMAX_CAPAS')
         native = QgsVectorLayer('LineString?crs=EPSG:25830', 'Red10km2', 'memory')
         self.project.addMapLayer(native, False); official.addLayer(native)
         root.setCustomLayerOrder([native]); root.setHasCustomLayerOrder(True)
         self.load()
-        references = official.children()[0]
+        references = root.children()[root.children().index(official)-1]
         self.assertEqual(references.customProperty(maps.ROOT_PROPERTY), 'v1')
-        self.assertEqual(official.children()[1].name(), 'Red10km2')
+        self.assertEqual(official.children()[0].name(), 'Red10km2')
+        self.assertTrue(references.isExpanded())
+        self.assertTrue(all(not n.isExpanded() and not n.itemVisibilityChecked() for n in references.children()))
+        self.assertTrue(all(not n.isExpanded() and not n.itemVisibilityChecked() for n in references.findLayers()))
         self.assertEqual(root.customLayerOrder()[-1], native)
         self.assertEqual(len(root.customLayerOrder()), self.total + 1)
 
-    def test_google_xyz_is_inserted_after_snczi_hidden_and_repeated_visibility_is_kept(self):
+    def test_google_xyz_is_outside_reference_group_hidden_and_repeat_keeps_visibility(self):
         services = (maps.WMS_SERVICES[0], maps.GOOGLE_SERVICE, maps.WMS_SERVICES[1])
         report = maps.load_reference_layers(self.project, services=services, layer_factory=self.layer_factory)
         self.assertEqual((report.added, report.failed), (5, 0))
         root, groups = self.groups()
-        self.assertEqual(list(groups), ['snczi', 'google_satellite', 'pfafstetter'])
-        google = groups['google_satellite']
-        node = google.children()[0]
+        self.assertEqual(list(groups), ['snczi', 'pfafstetter'])
+        google = self.project.layerTreeRoot().children()[-1]
+        node = google
         self.assertFalse(google.itemVisibilityChecked())
         self.assertFalse(node.itemVisibilityChecked())
         self.assertEqual(node.layer().attribution(), '© Google y proveedores de imágenes')
@@ -260,6 +272,36 @@ class ReferenceLayerTests(unittest.TestCase):
         self.assertTrue(node.itemVisibilityChecked())
         request = next(item for item in self.requests if item[1] == 'Google Satellite')
         self.assertEqual(request[2], 'wms')
+
+    def test_requested_single_layers_are_direct_and_legacy_wrappers_migrate_without_duplicates(self):
+        services=(maps.AEMET_SERVICE,maps.GOOGLE_SERVICE,maps.WMS_SERVICES[1],maps.WMS_SERVICES[-1])
+        with patch.object(maps, 'FLAT_SERVICE_IDS', frozenset()):
+            maps.load_reference_layers(self.project,services=services,layer_factory=self.layer_factory)
+        root, wrappers=self.groups()
+        self.assertTrue(all(isinstance(n,QgsLayerTreeGroup) for n in root.children()))
+        old_ids=set(self.project.mapLayers())
+        wrappers['pfafstetter'].children()[0].setItemVisibilityChecked(True)
+        self.assertFalse(wrappers['pfafstetter'].itemVisibilityChecked())
+        report=maps.load_reference_layers(self.project,services=services,layer_factory=self.layer_factory)
+        self.assertEqual(report.added,0)
+        self.assertEqual(set(self.project.mapLayers()),old_ids)
+        self.assertFalse(root.findGroups())
+        self.assertEqual([n.layer().name() for n in root.children()], [s.layers[0].title for s in services if s.service_id!='google_satellite'])
+        self.assertTrue(all(not n.itemVisibilityChecked() and not n.isExpanded() for n in root.children()))
+
+    def test_opening_requested_groups_collapses_children_without_changing_checks(self):
+        self.load()
+        _,groups=self.groups()
+        for name in ('agroclima','snczi'):
+            group=groups[name]
+            group.setExpanded(False)
+            for node in group.children(): node.setExpanded(True)
+            before=[node.itemVisibilityChecked() for node in group.children()]
+            group.setExpanded(True)
+            self.assertTrue(all(not node.isExpanded() for node in group.children()))
+            self.assertEqual([node.itemVisibilityChecked() for node in group.children()],before)
+            group.children()[0].setExpanded(True)
+            self.assertTrue(group.children()[0].isExpanded())
 
     def test_one_unavailable_service_does_not_repeat_timeouts_or_block_other_sources(self):
         def factory(uri, title, provider):

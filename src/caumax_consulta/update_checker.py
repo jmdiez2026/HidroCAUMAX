@@ -109,7 +109,8 @@ def parse_update_feed(raw, current_version, qgis_version):
         version = entry.get('version', '').strip()
         numeric = version_tuple(version)
         visible_name = 'HidroCAUMAX v1.0' if version == '1.0.0' else 'HidroCAUMAX v' + version
-        if name not in ('HidroCAUMAX', visible_name):
+        family_name = 'HidroCAUMAX v.' + '.'.join(version.split('.')[:2])
+        if name not in ('HidroCAUMAX', visible_name, family_name):
             raise ValueError('El nombre del complemento no coincide con su versión.')
         child_version = _field(entry, 'version', required=False)
         if child_version and child_version != version:

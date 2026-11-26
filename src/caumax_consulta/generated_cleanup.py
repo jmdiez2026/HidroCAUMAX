@@ -87,6 +87,9 @@ def _generated_raster(path):
 def deletion_plan(project=None, roots=None):
     project = project or QgsProject.instance()
     files, layers, protected = {}, {}, []
+    from .improved_storage import generated_files
+    for path in generated_files():
+        files[str(path.resolve())] = _stamp(path)
     records = _registry(project)
     for name, stamp in records.items():
         path = Path(name)

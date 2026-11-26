@@ -256,7 +256,7 @@ class NativeFormulaTests(unittest.TestCase):
                     if isinstance(n, ast.ClassDef) and n.name == 'RationalMethodDialog')
         methods = [n for n in node.body if isinstance(n, ast.FunctionDef)
                    and n.name in ('calculate', 'getFlow', 'factorsFromRainfall')]
-        cls.namespace = dict(math=math, ZONES='zones', ZONE_NAME_FIELD='zone', MDT='dem',
+        cls.namespace = dict(math=math, ZONES='zones', ZONE_NAME_FIELD='zone', ZONE_BETA='beta', MDT='dem',
                              usesOnlyDefaultLayers=lambda: True, QMessageBox=Mock(),
                              waitcursor=lambda method: method)
         exec(compile(ast.Module(body=methods, type_ignores=[]), str(source), 'exec'), cls.namespace)
@@ -293,6 +293,7 @@ class NativeFormulaTests(unittest.TestCase):
         d.outletMarker = types.SimpleNamespace(setCenter=lambda p: None)
         self.zone = 21
         self.corrections = dict(zip(PERIODS, (.72, .90, 1., 1.17, 1.44, 1.75)))
+        self.corrections['beta'] = .70
         self.namespace['getValueAtPoint'] = lambda layer, pt, field=None: (
             self.zone if field == 'zone' else self.corrections[field] if layer == 'zones' else 100)
         self.inputs = RationalInputsBridge(self.iface)
@@ -392,3 +393,25 @@ class NativeFormulaTests(unittest.TestCase):
         self.presentation.request_calculation(d)
         self.assertFalse(self.presentation.dialogs)
         self.assertFalse(self.presentation._requested)
+
+    def test_our_calculate_applies_current_regional_mean_before_native_quantiles(self):
+        d = self.owner
+        d.txtP0Corrector.setText('0.35')
+        d.btnCalculate.click()
+        self.assertEqual(d.txtP0Corrector.text(), '0.35')
+        self.presentation.request_calculation(d)
+        self.assertEqual(d.txtP0Corrector.text(), '0.70')
+        first = self.presentation.dialogs[id(d)].model.accepted_flow
+        self.corrections['beta'] = 1.20
+        self.presentation.request_calculation(d)
+        self.assertEqual(d.txtP0Corrector.text(), '1.20')
+        self.assertNotEqual(self.presentation.dialogs[id(d)].model.accepted_flow, first)
+
+    def test_missing_recommendation_keeps_input_and_does_not_calculate(self):
+        self.corrections['beta'] = None
+        previous = self.owner.txtP0Corrector.text()
+        self.presentation.request_calculation(self.owner)
+        self.assertEqual(self.owner.txtP0Corrector.text(), previous)
+        self.assertFalse(self.presentation.dialogs)
+        self.assertFalse(self.events)
+        self.assertTrue(self.bar.pushWarning.called)
