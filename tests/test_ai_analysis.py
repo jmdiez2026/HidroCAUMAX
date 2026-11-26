@@ -37,6 +37,12 @@ def structured():
         priority_checks='Comprobar cierre, cobertura y representatividad del MDT.'))
 
 
+def compact():
+    return json.dumps({'parameter_interpretations': {
+        metric.key: 'Lectura técnica concreta sin inferir peligrosidad ni conformidad.'
+        for metric in METRICS}}, ensure_ascii=False)
+
+
 def sample_state():
     values = {metric.key: float(index + 1) for index, metric in enumerate(METRICS)}
     values['hypsometric'] = .44
@@ -147,6 +153,23 @@ class ContextTests(unittest.TestCase):
         self.assertNotIn('distribution',json.dumps(context))
         self.assertNotIn(rain['2']['distribution']['data'],json.dumps(context))
 
+    def test_abridged_ai_payload_only_requests_table_comments(self):
+        context = ai.build_context(*sample_state())
+        payload = ai.build_payload(context)
+        user = json.loads(payload['messages'][1]['content'].split('\\n', 1)[1])
+        self.assertEqual(len(user['parameters']), 19)
+        self.assertEqual([row['key'] for row in user['parameters']],
+                         [metric.key for metric in METRICS])
+        self.assertTrue(all(set(row) == {'key', 'parameter', 'value', 'unit', 'limitations'}
+                            for row in user['parameters']))
+        self.assertNotIn('overview', payload['messages'][0]['content'])
+        self.assertIn('19', payload['messages'][0]['content'])
+        self.assertNotIn('original_cell_center', json.dumps(user))
+        self.assertNotIn('statistics', json.dumps(user))
+        self.assertNotIn('rainfall_results', json.dumps(user))
+        self.assertEqual(payload['response_format'], {'type':'json_object'})
+        self.assertLess(len(json.dumps(payload, ensure_ascii=False)), 16000)
+
     def test_payload_keeps_normative_limits_and_longest_path_qualification(self):
         system=ai.build_payload(ai.build_context(*sample_state()))['messages'][0]['content']
         self.assertIn('MAYOR LONGITUD',system)
@@ -170,6 +193,24 @@ class DecodeTests(unittest.TestCase):
     def test_oversized_response_is_rejected_before_json_parsing(self):
         with self.assertRaisesRegex(ValueError,'tamaño'):
             ai.decode_response(b'x'*(ai.MAX_RESPONSE_BYTES+1))
+
+    def test_compact_ai_json_populates_all_nineteen_rows(self):
+        context = ai.build_context(*sample_state())
+        rendered = ai.render_structured_analysis(compact(), context)
+        self.assertEqual(rendered.count('Lectura técnica concreta'), len(METRICS))
+        self.assertIn('| Parámetro | Valor | Unidad | Interpretación IA |', rendered)
+        self.assertNotIn('## Precipitación máxima diaria', rendered)
+        self.assertIn('Norma 5.2-IC', rendered)
+        for metric in METRICS:
+            self.assertIn(metric.label, rendered)
+        broken = json.loads(compact())
+        broken['parameter_interpretations'].pop('area_km2')
+        with self.assertRaisesRegex(ValueError, '19 interpretaciones'):
+            ai.render_structured_analysis(json.dumps(broken), context)
+        broken = json.loads(compact())
+        broken['parameter_interpretations']['fake'] = 'Texto ajeno.'
+        with self.assertRaisesRegex(ValueError, '19 interpretaciones'):
+            ai.render_structured_analysis(json.dumps(broken), context)
 
     def test_structured_output_requires_all_nineteen_keys_and_sections(self):
         original=json.loads(structured())
@@ -439,6 +480,16 @@ class RequestTests(unittest.TestCase):
         self.assertFalse(self.received)
         self.assertEqual(len(self.finished),1)
 
+    def test_compact_response_success_even_when_provider_marks_length(self):
+        self.request.start()
+        self.complete(response(compact(), 'length'))
+        self.assertTrue(self.request.is_finished)
+        self.assertEqual(len(self.received), 1)
+        self.assertEqual(set(self.received[0]), {metric.key for metric in METRICS})
+        self.assertIn('Interpretación completada', self.request.status_text)
+        self.assertIn(self.request.key, ai._CACHE)
+        self.assertEqual(len(self.finished), 1)
+
     def test_callback_receives_all_reviewed_rows_without_markdown_parsing(self):
         result=json.loads(structured())
         result['parameter_interpretations']={metric.key:'Lectura específica de '+metric.key+'.'
@@ -475,7 +526,7 @@ class RequestTests(unittest.TestCase):
         missing['parameter_interpretations'].pop('area_km2')
         cases=((response('{"parameter_interpretations":'),200),
                (response(json.dumps(missing)),200),
-               (response(structured(),'length'),200),
+               (response(compact()[:-15],'length'),200),
                (response(structured()),503))
         for raw,status in cases:
             with self.subTest(status=status,raw=raw[:60]):
