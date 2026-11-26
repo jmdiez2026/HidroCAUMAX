@@ -8,10 +8,11 @@ from unittest.mock import patch
 
 import numpy as np
 from osgeo import gdal, ogr, osr
-from qgis.core import QgsApplication, QgsProject
+from qgis.core import QgsApplication, QgsProject, QgsVectorLayer
 
 from caumax_consulta import improved_storage as storage
-from caumax_consulta.improved_layers import load_improved_layers, GROUP_NAME, VISIBLE_FILE
+from caumax_consulta.improved_layers import (load_improved_layers, GROUP_NAME, VISIBLE_FILE,
+                                           remove_improved_folder_group)
 
 
 class StorageTests(unittest.TestCase):
@@ -166,6 +167,25 @@ class StorageTests(unittest.TestCase):
         second = load_improved_layers(self.project)
         self.assertEqual(len(second['loaded']), 4)
         self.assertEqual([n.name() for n in second['group'].findLayers() if n.itemVisibilityChecked()], ['Red_drenaje_25m'])
+
+    def test_obsolete_folder_group_is_removed_without_deleting_files_or_user_layers(self):
+        self.pair(); self.shape(); self.raster(storage.PO_FILENAME)
+        imported = load_improved_layers(self.project)
+        before = {p.name: p.read_bytes() for p in self.folder.iterdir() if p.is_file()}
+        foreign = QgsVectorLayer('Point?crs=EPSG:25830', 'Capa propia', 'memory')
+        self.project.addMapLayer(foreign, False)
+        imported['group'].addLayer(foreign).setItemVisibilityChecked(False)
+        count = len(imported['loaded'])
+        self.assertEqual(remove_improved_folder_group(self.project), count)
+        self.assertIsNone(self.project.layerTreeRoot().findGroup(GROUP_NAME))
+        self.assertIs(self.project.mapLayer(foreign.id()), foreign)
+        self.assertFalse(self.project.layerTreeRoot().findLayer(foreign.id()).itemVisibilityChecked())
+        # Closing a GDAL layer may create a statistics .aux.xml sidecar; all
+        # pre-existing data and registry files must remain byte-for-byte.
+        self.assertTrue(set(before) <= {p.name for p in self.folder.iterdir()})
+        for name, payload in before.items():
+            self.assertEqual((self.folder/name).read_bytes(), payload, name)
+        self.assertEqual(remove_improved_folder_group(self.project), 0)
 
     def test_network_reexport_does_not_change_latest_pair_and_cleanup_survives_project_reopen(self):
         first = self.pair('25'); second = self.pair('5')

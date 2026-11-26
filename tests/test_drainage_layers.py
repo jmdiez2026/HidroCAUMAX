@@ -125,13 +125,13 @@ class DrainageLayersTests(unittest.TestCase):
         self.assertEqual(Path(layers['hillshade'].source()), Path(state['dem_path']))
         self.assertIsInstance(layers['dem'].renderer(), QgsSingleBandPseudoColorRenderer)
         self.assertIsInstance(layers['hillshade'].renderer(), QgsHillshadeRenderer)
-        self.assertTrue(all(node.itemVisibilityChecked() for node in
-                            group.children()[2:4]))
+        self.assertEqual(controller.visibility(),
+                         dict(network=True, directions=False, dem=False, hillshade=True))
         self.assertAlmostEqual(layers['dem'].opacity(), 0.86)
         # Subsequent network updates keep manual layer visibility choices.
-        group.children()[2].setItemVisibilityChecked(False)
+        group.children()[2].setItemVisibilityChecked(True)
         next_layers = controller.update(self.analysis, state)
-        self.assertFalse(self.project.layerTreeRoot().findLayer(
+        self.assertTrue(self.project.layerTreeRoot().findLayer(
             next_layers['dem'].id()).itemVisibilityChecked())
         self.assertEqual([node.layer().name() for node in group.children()][2],
                          'MDT 25x25m')
@@ -225,14 +225,14 @@ class DrainageLayersTests(unittest.TestCase):
         self.assertTrue(all(not node.isExpanded() for node in group.children()))
         self.assertEqual(Path(layers['dem'].source()), path)
         self.assertEqual(Path(layers['hillshade'].source()), path)
-        self.assertTrue(group.children()[2].itemVisibilityChecked())
+        self.assertFalse(group.children()[2].itemVisibilityChecked())
         self.assertTrue(group.children()[3].itemVisibilityChecked())
         self.assertEqual(layers['dem'].renderer().type(), 'singlebandpseudocolor')
         self.assertEqual(layers['hillshade'].renderer().type(), 'hillshade')
         # The user's legend visibility choices survive a second D8 refresh.
-        group.children()[2].setItemVisibilityChecked(False)
+        group.children()[2].setItemVisibilityChecked(True)
         after = controller.update(self.analysis, state)
-        self.assertFalse(self.project.layerTreeRoot()
+        self.assertTrue(self.project.layerTreeRoot()
             .findLayer(after['dem'].id()).itemVisibilityChecked())
         self.assertEqual(after['dem'].name(), 'MDT 25x25m')
 

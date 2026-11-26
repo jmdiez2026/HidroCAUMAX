@@ -1,3 +1,13 @@
+# HidroCAUMAX v.1.0 - presentación D8 y capas sin duplicados (revisión 1.0.14, 2026-11-26)
+
+- Generar capas D8 termina con el grupo abierto y las cuatro leyendas plegadas: red y relieve visibles, MDT y direcciones apagados. La vista previa deja de activar el MDT del resultado final.
+- Se elimina la carga automática del grupo HidroCAUMAX mejoradas. Se retira el grupo antiguo gestionado al activar el plugin, abrir un proyecto o abrir el diálogo D8, conservando los archivos y las capas ajenas.
+- La identidad de una divisoria ya no depende de la ruta temporal del MDT. Repetir el cálculo para el mismo punto y resolución reutiliza sus capas; las copias idénticas de versiones anteriores se retiran sin borrar los GeoPackages ni capas ajenas o en edición.
+- Se mantiene la configuración manual y Valores por defecto de CAUMAX original, con p0.tif. Comprobado en el perfil instalado tras actualizar de 1.0.12 a 1.0.13.
+- Manual actualizado y pruebas de presentación, reapertura, copias antiguas y conservación de archivos.
+
+---
+
 # HidroCAUMAX v.1.0 - limpieza de referencias y configuración nativa (revisión 1.0.13, 2026-11-26)
 
 - Corregido Limpiar capas: el botón rojo GEA/D8 y la barra retiran también el grupo de referencias, sus capas y Google Satellite. Se cancelan las cargas pendientes para impedir reapariciones tardías.

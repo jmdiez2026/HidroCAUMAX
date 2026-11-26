@@ -10,7 +10,8 @@ from qgis.PyQt import sip
 from qgis.PyQt.QtCore import Qt
 from qgis.core import QgsApplication, QgsCoordinateReferenceSystem, QgsGeometry, QgsProject, QgsVectorLayer
 
-from caumax_consulta.boundary_layers import BoundaryLayers, OWNER_PROPERTY, KIND_PROPERTY
+from caumax_consulta.boundary_layers import (BoundaryLayers, OWNER_PROPERTY, KIND_PROPERTY,
+                                           deduplicate_boundaries)
 import test_drainage_dialog as fixture
 
 
@@ -121,6 +122,59 @@ class BoundaryLayersTests(unittest.TestCase):
         self.update(visibility={'original': False, 'suavizada': True})
         self.assertTrue(root.findLayer(old['suavizada'].id()).isVisible())
         self.assertFalse(root.findLayer(new['original'].id()).isVisible())
+
+    def test_new_cache_path_and_reopened_controller_reuse_the_same_result(self):
+        first = self.update()
+        ids = {kind: layer.id() for kind, layer in first.items()}
+        self.query.dem_path = str(self.folder/'another_generation'/'dem_taudem.tif')
+        reopened = BoundaryLayers(self.folder/'stored')
+        again = reopened.update(self.analysis, self.query, self.original, self.smooth, degree=3)
+        self.assertEqual({kind: layer.id() for kind, layer in again.items()}, ids)
+        self.assertEqual(len([g for g in self.project.layerTreeRoot().findGroups()
+                              if g.customProperty(OWNER_PROPERTY)]), 1)
+
+    def test_legacy_identical_copies_removed_but_files_foreign_layers_and_edits_remain(self):
+        original = self.update(smooth=False)['original']
+        root = self.project.layerTreeRoot()
+        copies = []
+        for index in range(2):
+            group = root.addGroup('HidroCAUMAX · Divisoria 25x25 m')
+            group.setCustomProperty(OWNER_PROPERTY, 'legacy_'+str(index))
+            layer = QgsVectorLayer(original.source(), original.name(), 'ogr')
+            layer.setCustomProperty(OWNER_PROPERTY, 'legacy_'+str(index))
+            layer.setCustomProperty(KIND_PROPERTY, 'original')
+            self.project.addMapLayer(layer, False); group.addLayer(layer)
+            copies.append(layer)
+        foreign = QgsVectorLayer(original.source(), original.name(), 'ogr')
+        self.project.addMapLayer(foreign, False)
+        root.findLayer(copies[0].id()).parent().addLayer(foreign)
+        path = Path(original.source().split('|')[0]); before = path.read_bytes()
+        copy_ids = [layer.id() for layer in copies]
+        self.assertEqual(deduplicate_boundaries(self.project, [original.id()]), 2)
+        self.assertTrue(all(self.project.mapLayer(key) is None for key in copy_ids))
+        self.assertIs(self.project.mapLayer(original.id()), original)
+        self.assertIs(self.project.mapLayer(foreign.id()), foreign)
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(deduplicate_boundaries(self.project), 0)
+        foreign.setCustomProperty(OWNER_PROPERTY, 'legacy_edit')
+        foreign.setCustomProperty(KIND_PROPERTY, 'original')
+        self.assertTrue(foreign.startEditing())
+        try:
+            self.assertEqual(deduplicate_boundaries(self.project), 0)
+            self.assertIs(self.project.mapLayer(foreign.id()), foreign)
+        finally:
+            foreign.rollBack()
+
+    def test_distinct_query_points_are_not_merged_even_with_the_same_polygon(self):
+        first = self.update(smooth=False)['original']
+        self.query.x += 1.
+        second = self.update(smooth=False)['original']
+        self.assertNotEqual(first.id(), second.id())
+        self.assertTrue(next(first.getFeatures()).geometry().isGeosEqual(
+            next(second.getFeatures()).geometry()))
+        self.assertEqual(deduplicate_boundaries(self.project), 0)
+        self.assertIs(self.project.mapLayer(first.id()), first)
+        self.assertIs(self.project.mapLayer(second.id()), second)
 
     def test_qgis_project_round_trip_keeps_geometries_styles_and_visibility(self):
         layers = self.update(visibility={'original': False, 'suavizada': True})

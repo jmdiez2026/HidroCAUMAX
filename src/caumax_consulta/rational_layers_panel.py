@@ -541,7 +541,7 @@ class RationalLayersPanel(DrainageControls):
             state['network_visible'] = self.drainage_visible.isChecked()
             state['directions_visible'] = False
             state['metadata']['visible'] = state['network_visible']
-            self._layers.update(analysis, state)
+            self._layers.update(analysis, state, reset_presentation=True)
         except Exception as error:
             self._failed(str(error))
             return

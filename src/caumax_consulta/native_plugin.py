@@ -44,6 +44,13 @@ class NativeCaumaxPlugin(QObject):
         self._map_services = ReferenceLayerLoader(iface, self)
         self._native_layers_view = NativeLayersView(iface, self)
 
+    @staticmethod
+    def _tidy_legacy_layers():
+        from .improved_layers import remove_improved_folder_group
+        from .boundary_layers import deduplicate_boundaries
+        remove_improved_folder_group()
+        deduplicate_boundaries()
+
     def initGui(self):
         from .improved_storage import restore_exports
         try:
@@ -73,6 +80,10 @@ class NativeCaumaxPlugin(QObject):
         self.iface.addPluginToMenu(self.MENU, self.help_action)
         self._create_toolbar()
         self._sync_reference_action()
+        self._tidy_legacy_layers()
+        self._legacy_project_signal = getattr(self.iface, 'projectRead', None)
+        if self._legacy_project_signal is not None:
+            self._legacy_project_signal.connect(self._tidy_legacy_layers)
         self.set_enabled(True)
 
     def _sync_reference_action(self):
@@ -290,6 +301,10 @@ class NativeCaumaxPlugin(QObject):
                 pass
 
     def unload(self):
+        signal = getattr(self, '_legacy_project_signal', None)
+        if signal is not None:
+            signal.disconnect(self._tidy_legacy_layers)
+            self._legacy_project_signal = None
         if self._manual is not None:
             self._manual.close()
             self._manual.deleteLater()

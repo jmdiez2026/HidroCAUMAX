@@ -1,4 +1,4 @@
-"""Load installed/exported local datasets once, above the native CAUMAX group."""
+"""Remove the obsolete automatic export-folder group without deleting files."""
 from pathlib import Path
 
 from qgis.core import QgsProject, QgsProviderRegistry, QgsProviderSublayerDetails, QgsVectorLayer, QgsWkbTypes
@@ -13,6 +13,27 @@ VISIBLE_FILE = 'Red_drenaje_25m.shp'
 # Sidecars (.dbf/.shx/.prj/.aux.xml/.ovr) belong to their parent dataset.
 DATA_SUFFIXES = {'.tif', '.tiff', '.shp', '.gpkg', '.geojson', '.json', '.kml',
                  '.gml', '.sqlite', '.asc', '.img', '.vrt', '.grd', '.dem'}
+
+
+def remove_improved_folder_group(project=None):
+    """Remove only marked folder imports; retain user layers and source files."""
+    project = project or QgsProject.instance()
+    root = project.layerTreeRoot()
+    groups = [g for g in root.findGroups() if g.customProperty(GROUP_PROPERTY, False)]
+    ids = {n.layerId() for group in groups for n in group.findLayers()
+           if n.layer() is not None and n.layer().customProperty(SOURCE_PROPERTY, '')}
+    project.removeMapLayers(list(ids))
+    for group in reversed(groups):
+        parent = group.parent()
+        if parent is None:
+            continue
+        # Any user-added contents keep their layers, subgroups and checkboxes.
+        index = parent.children().index(group)
+        for child in list(group.children()):
+            parent.insertChildNode(index, child.clone())
+            index += 1
+        parent.removeChildNode(group)
+    return len(ids)
 
 
 def _group(project):

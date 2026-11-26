@@ -235,7 +235,8 @@ class DrainageLayers:
         """Show a selected MDT immediately, before TauDEM has built a network.
 
         The temporary two-layer group becomes a four-layer result in update();
-        it preserves the user's visibility choices and the original TIFF.
+        the completed result starts with only the network and hillshade visible.
+        The original TIFF is unchanged.
         """
         previous = dict(self.layers)
         old = previous.get('dem')
@@ -267,7 +268,7 @@ class DrainageLayers:
         ensure_results_above_official(project)
         return dem
 
-    def update(self,analysis,state,visible=True):
+    def update(self,analysis,state,visible=True,reset_presentation=False):
         """Register verified TauDEM products and the native-resolution MDT.
 
         Display order in the result group: drainage network, ESRI D8 raster,
@@ -298,11 +299,17 @@ class DrainageLayers:
 
         flags = {
             'network': bool(state.get('network_visible', visible)),
-            'directions': bool(state.get('directions_visible', False)),
-            'dem': last_visibility('dem', True),
-            'hillshade': last_visibility('hillshade', True),
+            'directions': False if reset_presentation else bool(state.get('directions_visible', False)),
+            # The preview is visible while TauDEM works, but its checkbox is
+            # not an initial visibility preference for the completed result.
+            'dem': (last_visibility('dem', False)
+                    if not reset_presentation and 'network' in previous else False),
+            'hillshade': True if reset_presentation else last_visibility('hillshade', True),
         }
         group = self._ensure_group()
+        if reset_presentation:
+            group.setItemVisibilityChecked(True)
+            group.setExpanded(True)
         group.setName(
             f'HidroCAUMAX · Drenaje TauDEM [{analysis.cell_width:g}×{analysis.cell_height:g} m]')
         # Insert by final visual order, not by reversing a sequence of index 0

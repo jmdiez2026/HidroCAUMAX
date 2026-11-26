@@ -630,19 +630,8 @@ class RationalLayersBridge(QObject):
         """Open the complete D8 tools in a separate, non-modal QGIS window."""
         if not self._running or self._bindings.get(id(binding.dialog)) is not binding:
             return
-        from .improved_layers import load_improved_layers
-        import_error = False
-        try:
-            imported = load_improved_layers()
-            if imported['failed']:
-                import_error = True
-                binding.error.setText('No se pudieron cargar estas capas de ResolucionMejorada: ' +
-                                      '; '.join(imported['failed']))
-                binding.error.show()
-        except OSError as error:
-            import_error = True
-            binding.error.setText('No se pudo abrir ResolucionMejorada: ' + str(error))
-            binding.error.show()
+        from .improved_layers import remove_improved_folder_group
+        remove_improved_folder_group()
         existing = binding.layers_dialog
         if existing is not None:
             try:
@@ -687,8 +676,7 @@ class RationalLayersBridge(QObject):
             binding.layers_dialog, binding.scroll, binding.panel = window, scroll, panel
             window.finished.connect(lambda *unused: self._layers_closed(binding, window))
             window.fit_content(panel, scroll)
-            if not import_error:
-                binding.error.hide()
+            binding.error.hide()
             window.show()
             self._refresh(binding)
         except Exception as error:

@@ -1,7 +1,6 @@
 """Durable, reusable watershed outlines backed by profile-local GeoPackages."""
 import hashlib
 import json
-import os
 from pathlib import Path
 
 from qgis.PyQt import sip
@@ -14,6 +13,7 @@ from .layer_order import activate_result_group, create_result_group, ensure_resu
 
 OWNER_PROPERTY = 'HidroCAUMAX/boundary_owner'
 KIND_PROPERTY = 'HidroCAUMAX/boundary_kind'
+QUERY_PROPERTY = 'HidroCAUMAX/boundary_query'
 _NAMES = {'original': 'Divisoria original', 'suavizada': 'Divisoria suavizada'}
 
 
@@ -31,11 +31,59 @@ def storage_directory():
 def boundary_key(analysis, query):
     crs = QgsCoordinateReferenceSystem.fromWkt(analysis.crs_wkt)
     query_crs = getattr(query, 'crs', crs)
-    identity = [os.path.normcase(os.path.abspath(str(query.dem_path))),
-                crs.authid() or crs.toWkt(), query_crs.authid() or query_crs.toWkt(),
+    # A downloaded/clipped/TauDEM MDT can have a different cache path while
+    # representing the same calculation point and resolution.
+    identity = [crs.authid() or crs.toWkt(), query_crs.authid() or query_crs.toWkt(),
                 float(query.x), float(query.y), float(analysis.outlet_x), float(analysis.outlet_y),
                 float(analysis.cell_width), float(analysis.cell_height)]
     return hashlib.sha256(json.dumps(identity, ensure_ascii=True).encode('utf-8')).hexdigest()[:32]
+
+
+def deduplicate_boundaries(project=None, preferred_ids=()):
+    """Retire exact owned copies from QGIS, keeping their GeoPackages on disk."""
+    project = project or QgsProject.instance()
+    root = project.layerTreeRoot()
+    preferred = set(preferred_ids)
+    candidates = [layer for layer in project.mapLayers().values()
+                  if isinstance(layer, QgsVectorLayer) and layer.isValid()
+                  and not layer.isEditable() and layer.customProperty(OWNER_PROPERTY, '')
+                  and layer.customProperty(KIND_PROPERTY) in _NAMES]
+    def priority(layer):
+        node = root.findLayer(layer.id())
+        return (layer.id() not in preferred, not bool(node and node.isVisible()))
+    candidates.sort(key=priority)
+    kept = {}
+    duplicates = []
+    fields = ('TIPO', 'GRADO', 'RES_X_M', 'RES_Y_M', 'X_CIERRE', 'Y_CIERRE')
+    for layer in candidates:
+        if any(layer.fields().indexFromName(name) < 0 for name in fields):
+            continue
+        records = list(layer.getFeatures())
+        if len(records) != 1:
+            continue
+        feature = records[0]
+        geometry = QgsGeometry(feature.geometry())
+        if geometry.isNull() or geometry.isEmpty():
+            continue
+        geometry.convertToMultiType()
+        geometry.normalize()
+        signature = (layer.crs().authid() or layer.crs().toWkt(),
+                     str(layer.customProperty(KIND_PROPERTY)),
+                     tuple(feature[name] for name in fields), bytes(geometry.asWkb()))
+        query = layer.customProperty(QUERY_PROPERTY, '')
+        equivalent = next((other for other in kept.get(signature, [])
+                           if not query or not other.customProperty(QUERY_PROPERTY, '')
+                           or query == other.customProperty(QUERY_PROPERTY)), None)
+        if equivalent is not None:
+            duplicates.append(layer.id())
+        else:
+            kept.setdefault(signature, []).append(layer)
+    if duplicates:
+        project.removeMapLayers(duplicates)
+    for group in reversed(root.findGroups()):
+        if group.customProperty(OWNER_PROPERTY, '') and not group.children():
+            group.parent().removeChildNode(group)
+    return len(duplicates)
 
 
 def boundary_symbol(kind):
@@ -57,7 +105,7 @@ def _polygon(geometry):
 
 
 class BoundaryLayers:
-    """One pair per query/DEM; dialog disposal never removes project layers."""
+    """One pair per query/resolution; closing a dialog keeps project layers."""
     def __init__(self, directory=None):
         self.directory = Path(directory) if directory is not None else storage_directory()
         self.layers = {}
@@ -183,6 +231,7 @@ class BoundaryLayers:
             if layer is None:
                 layer = self._open_or_create(key, kind, crs, geometry, attributes)
             self._populate(layer, geometry, attributes)
+            layer.setCustomProperty(QUERY_PROPERTY, key)
             layer.setName(title + (f' · suavizada (grado {int(degree)})'
                                    if kind == 'suavizada' else ''))
             layers[kind] = layer
@@ -195,6 +244,7 @@ class BoundaryLayers:
                 group.addLayer(layer).setExpanded(False)
         self.layers, self.key = layers, key
         self.set_visibility(visibility or {'original': True, 'suavizada': smooth is not None})
+        deduplicate_boundaries(project, [layer.id() for layer in layers.values()])
         activate_result_group(project, group, OWNER_PROPERTY)
         ensure_results_above_official(project)
         return dict(layers)

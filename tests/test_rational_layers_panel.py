@@ -221,10 +221,27 @@ class RationalLayersPanelTests(unittest.TestCase):
         self.assertEqual(dem.name(), 'MDT 25x25m')
         group = QgsProject.instance().layerTreeRoot().findLayer(dem.id()).parent()
         self.assertEqual([node.layer().id() for node in group.children()][2], dem.id())
-        self.assertTrue(QgsProject.instance().layerTreeRoot()
+        self.assertFalse(QgsProject.instance().layerTreeRoot()
                         .findLayer(dem.id()).itemVisibilityChecked())
         self.assertEqual(panel._layers.visibility(),
-                         dict(network=True, directions=False, dem=True, hillshade=True))
+                         dict(network=True, directions=False, dem=False, hillshade=True))
+        self.assertTrue(group.isExpanded())
+        self.assertTrue(all(not node.isExpanded() for node in group.children()))
+        # A new Generate click restores the requested presentation even when
+        # the preview or previous result was manually changed or collapsed.
+        group.setItemVisibilityChecked(False)
+        group.setExpanded(False)
+        for node in group.children():
+            node.setExpanded(True)
+            node.setItemVisibilityChecked(node.layer() is dem)
+        panel.drainage_prepare_button.click()
+        products, state = panel._controller.drainage.complete()
+        group = panel._layers._group
+        self.assertEqual(panel._layers.visibility(),
+                         dict(network=True, directions=False, dem=False, hillshade=True))
+        self.assertTrue(group.itemVisibilityChecked())
+        self.assertTrue(group.isExpanded())
+        self.assertTrue(all(not node.isExpanded() for node in group.children()))
         panel.drainage_visible.setChecked(False)
         self.assertFalse(panel._layers.visibility()['network'])
         self.assertTrue(all(button.isEnabled() for button in panel.product_buttons))

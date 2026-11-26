@@ -64,7 +64,7 @@ def build():
     story.append(Spacer(1,24))
     p('HidroCAUMAX v.1.0','title')
     p('Manual de usuario','h1')
-    p('Edición para el paquete 1.0.13 · 26 de noviembre de 2026','small')
+    p('Edición para el paquete 1.0.14 · 26 de noviembre de 2026','small')
     p('Herramientas de cuencas, cartografía y caudales máximos para QGIS y CAUMAX 3.0. Este manual acompaña al complemento y se puede consultar sin conexión.')
     p('Primeros pasos','h2')
     for text in ['1. Instala y habilita CAUMAX y, después, HidroCAUMAX.',
@@ -73,7 +73,7 @@ def build():
                  '4. Usa Calcular del recuadro GEA para consultar la tabla y el gráfico de caudales.',
                  '5. Abre Generar capas resolución mejorada si necesitas MDT, direcciones y red con mayor detalle.']:
         p(text)
-    p('El nombre visible es HidroCAUMAX v.1.0. El número técnico 1.0.13 identifica esta entrega y permite ordenar las actualizaciones.','small')
+    p('El nombre visible es HidroCAUMAX v.1.0. El número técnico 1.0.14 identifica esta entrega y permite ordenar las actualizaciones.','small')
 
     heading(2)
     p('Requisitos e instalación','h2')
@@ -123,6 +123,7 @@ def build():
     p('El proceso conserva el punto original y busca un cierre compatible con la cuenca de referencia. <b>Ajustar punto de cierre</b> permite revisarlo con el mapa y los controles de desplazamiento. Comprueba la divisoria antes de exportar.')
     p('3. Genera los productos','h2')
     p('Pulsa <b>Generar capas D8</b>. El umbral de inicio de corriente regula la densidad de la red: un umbral menor genera más tramos. El modo Automático propone y ajusta un umbral a partir de la cuenca. El MDT se muestra cuando está preparado; la red y las direcciones se añaden al terminar.')
+    p('Al terminar, <b>HidroCAUMAX · Drenaje TauDEM</b> queda abierto y sus cuatro leyendas plegadas. Se muestran la <b>red</b> y el <b>relieve sombreado</b>; el <b>MDT</b> y las <b>direcciones D8</b> quedan desactivados. Mostrar red permite ocultar la red.','small')
     p('4. Cancela si es necesario','h2')
     p('<b>Cancelar</b> solo aparece durante la generación. Detiene las tareas y evita publicar resultados tardíos. Espera a que el estado indique la cancelación y vuelve a generar con la resolución o el umbral elegidos.')
     p('Compatibilidad de direcciones','h2')
@@ -131,10 +132,10 @@ def build():
     heading(7)
     p('Exportar los tres productos','h2')
     p('Usa los botones <b>Exportar MDT (TIFF)</b>, <b>Exportar dirección de drenaje (TIFF)</b> y <b>Exportar Red de Drenaje (SHP)</b>. La carpeta propuesta es <b>ResolucionMejorada</b>; puedes elegir otro destino. Un Shapefile consta de varios archivos y debes conservarlos juntos.')
-    p('Para que la selección automática de cálculo encuentre una pareja nueva, exporta el MDT y las direcciones de la misma generación en la carpeta predeterminada. Una exportación incompleta, una malla diferente o archivos cambiados después no se aceptan como una pareja válida.')
-    p('Grupo HidroCAUMAX mejoradas','h2')
-    p('Cada vez que abres Generar capas resolución mejorada, se cargan los conjuntos de datos GIS admitidos que haya en esa carpeta dentro del grupo <b>HidroCAUMAX mejoradas</b>, encima de CAUMAX_CAPAS. Se reutilizan los ya cargados, sin duplicarlos.')
-    p('Inicialmente solo queda marcada <b>Red_drenaje_25m.shp</b>. Si ese archivo no existe, todas quedan apagadas. Las leyendas se presentan plegadas. El grupo de resultados de una generación D8 nueva conserva su presentación propia.')
+    p('Para calcular con capas mejoradas, exporta el MDT y las direcciones de la misma generación y selecciónalos manualmente en <b>Configurar capas de cálculo</b>. Deben tener una malla compatible. <b>Valores por defecto</b> recupera los archivos originales, incluido <b>p0.tif</b> de CAUMAX.')
+    p('Archivos guardados y resultados del cálculo','h2')
+    p('Abrir el diálogo ya no carga los archivos de ResolucionMejorada ni crea el grupo <b>HidroCAUMAX mejoradas</b>. Al actualizar se retira el grupo antiguo gestionado, conservando sus archivos y las capas ajenas que hayas añadido.')
+    p('Los resultados aparecen en <b>HidroCAUMAX · Drenaje TauDEM</b>. Las divisorias del mismo punto y resolución se reutilizan aunque cambie la ruta temporal del MDT. Las copias idénticas creadas por la aplicación se retiran del mapa; sus archivos permanecen en disco.')
     p('Relieve y datos originales','h2')
     p('La rampa de elevación y el sombreado ayudan a leer el relieve. Cambiar la simbología no modifica las cotas del MDT ni los valores de dirección de flujo.')
     p('Conservar exportaciones entre versiones','h2')
@@ -180,7 +181,7 @@ def build():
         canvas.setStrokeColor(blue); canvas.setLineWidth(1); canvas.line(42,806,553,806)
         canvas.setFont('Manual',8); canvas.setFillColor(navy)
         canvas.drawString(42,818,'HidroCAUMAX v.1.0 | Manual de usuario')
-        canvas.drawString(42,25,'Paquete 1.0.13 · Edición 26/11/2026')
+        canvas.drawString(42,25,'Paquete 1.0.14 · Edición 26/11/2026')
         canvas.drawRightString(553,25,f'{doc.page} / {len(TITLES)}')
         canvas.restoreState()
     pdf=OUT/'Manual_HidroCAUMAX_v1.0.pdf'

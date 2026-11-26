@@ -147,12 +147,12 @@ class RationalLayersBridgeTests(unittest.TestCase):
             self.app.processEvents()
         return binding
 
-    def test_improved_folder_is_loaded_on_every_explicit_click_including_reopen(self):
+    def test_improved_folder_is_not_loaded_when_opening_or_reopening_d8_dialog(self):
         binding = self.attach(expand=True)
-        self.load_improved.assert_called_once_with()
+        self.load_improved.assert_not_called()
         first = binding.layers_dialog
         binding.button.click()
-        self.assertEqual(self.load_improved.call_count, 2)
+        self.load_improved.assert_not_called()
         self.assertIs(binding.layers_dialog, first)
 
     def test_red_clean_button_is_last_at_right_and_uses_shared_cleanup(self):
