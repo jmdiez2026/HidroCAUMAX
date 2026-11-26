@@ -31,6 +31,10 @@ class NativeDecimalTests(unittest.TestCase):
         self.dialog.txtRainfall = QLineEdit('92.10', self.dialog)
         self.dialog.txtRainfall.setObjectName('txtRainfall')
         self.dialog.txtRainfall.setReadOnly(True)
+        for name in ('txtI1Id', 'txtIntensity'):
+            widget = QLineEdit('', self.dialog)
+            widget.setObjectName(name)
+            setattr(self.dialog, name, widget)
         self.native_writes = []
         self.dialog.txtArea.textChanged.connect(self.native_writes.append)
         self.presentation = RationalDecimalPresentation(self.dialog)
@@ -64,6 +68,22 @@ class NativeDecimalTests(unittest.TestCase):
         self.dialog.txtResultFlow.setText('')
         self.assertEqual(self.editor('txtResultFlow').text(), '')
         self.assertEqual(self.dialog.txtResultFlow.text(), '')
+
+    def test_ca_umax_blocked_signals_do_not_leave_numeric_cells_blank(self):
+        # CAUMAX updates I1/Id and I with blockSignals(True), so the
+        # presentation must synchronize from the actual native field.
+        for name, numeric in (('txtI1Id', '9.00'), ('txtIntensity', '11.61')):
+            native = getattr(self.dialog, name)
+            overlay = self.editor(name)
+            self.assertEqual(overlay.text(), '')
+            native.blockSignals(True)
+            native.setText(numeric)
+            native.blockSignals(False)
+            self.assertEqual(overlay.text(), '')
+        self.presentation.sync()
+        self.assertEqual(self.editor('txtI1Id').text(), '9,00')
+        self.assertEqual(self.editor('txtIntensity').text(), '11,61')
+        self.assertEqual(self.dialog.txtIntensity.text(), '11.61')
 
     def test_user_can_type_spanish_comma_without_breaking_native_float_parsing(self):
         editor = self.editor('txtArea')
