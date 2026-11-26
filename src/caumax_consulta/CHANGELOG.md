@@ -1,3 +1,13 @@
+# HidroCAUMAX v1.0.4 — caudal punta con dos decimales (2026-11-26)
+
+- Método racional: resultado `Caudal (m³/s)` con **dos cifras decimales y coma** en la interfaz (`10,35`).
+- Captura reversible del caudal nativo no redondeado, tanto para períodos de retorno estándar como para interpolaciones cuando T se introduce manualmente.
+- El cálculo, las fórmulas y los archivos originales de CAUMAX permanecen intactos; el resultado aceptado se presenta en el campo con dos decimales.
+- Si el cálculo no aporta valor sin redondear, no se inventan cifras: se añaden dos decimales al valor aceptado.
+- Pruebas de regresión de precisión, actualización de la interfaz, resultados cancelados y escritura nativa.
+
+---
+
 # HidroCAUMAX v1.0.1 — actualizaciones desde QGIS (2026-11-25)
 
 - Mantiene todas las funciones de v1.0 y la carpeta de complemento `caumax_consulta`.
