@@ -135,6 +135,23 @@ class ResolutionControllerTests(unittest.TestCase):
         self.wait(lambda:not c.busy)
         self.assertFalse(self.errors)
 
+    def test_live_rational_query_without_snapshot_prepares_fine_resolutions(self):
+        # The native rational dialog supplies paths and a point, not the
+        # portable rational_context used by saved basin projects.
+        live=SimpleNamespace(x=self.query.x,y=self.query.y,crs=self.query.crs,
+            source_kind='rational',dem_path=self.query.dem_path,
+            directions_path=self.query.directions_path)
+        self.assertEqual(rc._reference_area_m2(self.base,live),self.base.area_m2)
+        frozen=SimpleNamespace(source_kind='rational',
+            rational_context={'area_m2':self.base.area_m2+500.})
+        self.assertEqual(rc._reference_area_m2(self.base,frozen),
+            self.base.area_m2+500.)
+        controller=self.controller(query=live)
+        self.assertEqual(controller.reference_area_m2,self.base.area_m2)
+        self.discover(controller)
+        self.assertTrue(next(item for item in controller.options
+            if item['key']=='25')['available'])
+
     def test_discovery_has_original_and_only_operational_native_resolutions(self):
         c=self.controller()
         self.assertEqual(self.options_events,[])
