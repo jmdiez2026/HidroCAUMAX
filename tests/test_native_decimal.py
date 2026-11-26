@@ -26,6 +26,8 @@ class NativeDecimalTests(unittest.TestCase):
         self.dialog.txtX.setObjectName('txtX')
         self.dialog.txtArea = QLineEdit('14.750', self.dialog)
         self.dialog.txtArea.setObjectName('txtArea')
+        self.dialog.txtResultFlow = QLineEdit('10', self.dialog)
+        self.dialog.txtResultFlow.setObjectName('txtResultFlow')
         self.dialog.txtRainfall = QLineEdit('92.10', self.dialog)
         self.dialog.txtRainfall.setObjectName('txtRainfall')
         self.dialog.txtRainfall.setReadOnly(True)
@@ -52,6 +54,16 @@ class NativeDecimalTests(unittest.TestCase):
         self.dialog.txtArea.setText('16.125')
         self.assertEqual(self.editor('txtArea').text(), '16,125')
         self.assertEqual(self.native_writes, ['16.125'])
+
+    def test_result_flow_always_shows_two_decimals_with_comma(self):
+        self.assertEqual(self.editor('txtResultFlow').text(), '10,00')
+        self.dialog.txtResultFlow.setText('10.346')
+        self.assertEqual(self.editor('txtResultFlow').text(), '10,35')
+        self.dialog.txtResultFlow.setText('0')
+        self.assertEqual(self.editor('txtResultFlow').text(), '0,00')
+        self.dialog.txtResultFlow.setText('')
+        self.assertEqual(self.editor('txtResultFlow').text(), '')
+        self.assertEqual(self.dialog.txtResultFlow.text(), '')
 
     def test_user_can_type_spanish_comma_without_breaking_native_float_parsing(self):
         editor = self.editor('txtArea')
