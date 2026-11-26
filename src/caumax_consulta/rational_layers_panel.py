@@ -360,6 +360,16 @@ class RationalLayersPanel(DrainageControls):
         finally:
             self._outline_loading = False
         self._draw_outlines()
+        # Generate was explicitly requested: make the downloaded native-grid
+        # MDT visible in QGIS immediately. StreamNet and TauDEM exports can
+        # finish later; a network error must not hide a valid elevation model.
+        pending = self._controller._pending
+        if pending is not None and pending[0] == key and key != '500':
+            try:
+                self._layers.display_dem(analysis, query.dem_path)
+            except (RuntimeError, OSError, TypeError, ValueError) as error:
+                self._status('No se puede cargar el MDT seleccionado en QGIS: '
+                             + str(error), 0)
         if self._on_basin_refined is not None:
             self._on_basin_refined(key, analysis, query)
 
