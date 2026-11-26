@@ -571,6 +571,7 @@ class _ReferenceTask(QgsTask):
 
 class ReferenceLayerLoader(QObject):
     busy_changed = pyqtSignal(bool)
+    state_changed = pyqtSignal()
 
     def __init__(self, iface, parent=None, *, services=REFERENCE_SERVICES,
                  project=None, layer_factory=QgsRasterLayer, station_factory=None):
@@ -587,6 +588,58 @@ class ReferenceLayerLoader(QObject):
         self._failures = []
         self._disposed = False
         self.project.cleared.connect(self.cancel)
+        self.project.layersAdded.connect(self._state_changed)
+        self.project.layersRemoved.connect(self._state_changed)
+        self.project.readProject.connect(self._state_changed)
+        self.busy_changed.connect(self._state_changed)
+
+    def _reference_ids(self):
+        # Ownership survives renaming, moving and restoring a saved project.
+        # Do not infer ownership from a layer/group title or its data source.
+        return [layer.id() for layer in self.project.mapLayers().values()
+                if layer.customProperty(SERVICE_PROPERTY, '')
+                and layer.customProperty(LAYER_PROPERTY, '')]
+
+    @property
+    def has_references(self):
+        return bool(self._reference_ids())
+
+    def _state_changed(self, *unused):
+        if not self._disposed:
+            self.state_changed.emit()
+
+    def toggle(self, *unused):
+        if self._disposed:
+            return False
+        if self.busy or self.has_references:
+            self.remove()
+            return True
+        return self.load()
+
+    def remove(self):
+        """Detach references only; never delete their files or foreign layers."""
+        if self._disposed:
+            return 0
+        self.cancel()  # Discard late provider results before removing the layers.
+        identifiers = self._reference_ids()
+        self.project.removeMapLayers(identifiers)
+        root = self.project.layerTreeRoot()
+        def prune(parent):
+            for node in list(parent.children()):
+                if not isinstance(node, QgsLayerTreeGroup):
+                    continue
+                prune(node)
+                if not node.children() and (node.customProperty(ROOT_PROPERTY, '') == 'v1'
+                                            or node.customProperty(SERVICE_PROPERTY, '')):
+                    parent.removeChildNode(node)
+        prune(root)
+        self._state_changed()
+        bar = self._bar()
+        if bar is not None:
+            bar.pushMessage('HidroCAUMAX',
+                f'Capas de referencia retiradas: {len(identifiers)}. Pulsa Capas para cargarlas de nuevo.',
+                level=Qgis.Info, duration=5)
+        return len(identifiers)
 
     @property
     def busy(self):
@@ -619,6 +672,7 @@ class ReferenceLayerLoader(QObject):
         pending = [(service, specs) for service, specs in pending if service.service_id not in retiring]
         if not pending:
             self._report(self._publish_preserving_view([], self._failures))
+            self._state_changed()
             return True
         # Independent services publish as soon as ready. No national image is
         # downloaded here: native WMS/XYZ providers render the current canvas
@@ -738,6 +792,12 @@ class ReferenceLayerLoader(QObject):
                 except (TypeError, RuntimeError):
                     pass
         self._disposed = True
+        for signal in (self.project.layersAdded, self.project.layersRemoved, self.project.readProject,
+                       self.busy_changed):
+            try:
+                signal.disconnect(self._state_changed)
+            except (TypeError, RuntimeError):
+                pass
         try:
             self.project.cleared.disconnect(self.cancel)
         except (TypeError, RuntimeError):

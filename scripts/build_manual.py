@@ -64,7 +64,7 @@ def build():
     story.append(Spacer(1,24))
     p('HidroCAUMAX v.1.0','title')
     p('Manual de usuario','h1')
-    p('Edición para el paquete 1.0.11 · 26 de noviembre de 2026','small')
+    p('Edición para el paquete 1.0.12 · 26 de noviembre de 2026','small')
     p('Herramientas de cuencas, cartografía y caudales máximos para QGIS y CAUMAX 3.0. Este manual acompaña al complemento y se puede consultar sin conexión.')
     p('Primeros pasos','h2')
     for text in ['1. Instala y habilita CAUMAX y, después, HidroCAUMAX.',
@@ -73,23 +73,24 @@ def build():
                  '4. Usa Calcular del recuadro GEA para consultar la tabla y el gráfico de caudales.',
                  '5. Abre Generar capas resolución mejorada si necesitas MDT, direcciones y red con mayor detalle.']:
         p(text)
-    p('El nombre visible es HidroCAUMAX v.1.0. El número técnico 1.0.11 identifica esta entrega y permite ordenar las actualizaciones.','small')
+    p('El nombre visible es HidroCAUMAX v.1.0. El número técnico 1.0.12 identifica esta entrega y permite ordenar las actualizaciones.','small')
 
     heading(2)
     p('Requisitos e instalación','h2')
     p('Esta entrega declara compatibilidad con QGIS 3.34 a 3.99, con Qt 5, y requiere CAUMAX 3.0. La comprobación de escritorio se realiza en QGIS 3.44.15. TauDEM y sus dependencias están incluidos para Windows de 64 bits.')
     p('Descarga el ZIP de la publicación y utiliza <b>Complementos → Administrar e instalar complementos → Instalar a partir de ZIP</b>. También se distribuye un instalador para Windows. Habilita el complemento para que la barra y las herramientas se activen automáticamente.')
-    table([['Botón','Función'],['HidroCAUMAX v.1.0','Restaura las herramientas añadidas a CAUMAX.'],['Capas','Carga las referencias cartográficas.'],['Abrir cuenca','Abre un proyecto de cuenca guardado.'],['Limpiar capas','Retira los resultados generados del mapa; conserva los archivos.'],['Actualizar','Busca, descarga, verifica e instala una versión compatible.'],['Ayuda','Muestra este manual; Abrir PDF utiliza el lector del equipo.']])
+    table([['Botón','Función'],['HidroCAUMAX v.1.0','Restaura las herramientas añadidas a CAUMAX.'],['Capas','Alterna cargar y retirar las referencias del mapa; conserva sus archivos.'],['Abrir cuenca','Abre un proyecto de cuenca guardado.'],['Limpiar capas','Retira los resultados generados del mapa; conserva los archivos.'],['Actualizar','Busca, descarga, verifica e instala una versión compatible.'],['Ayuda','Muestra este manual; Abrir PDF utiliza el lector del equipo.']])
     p('Carpeta de instalación','h2')
     p('En el perfil predeterminado de este equipo: <font size="8">C:\\Users\\JM_GIS\\AppData\\Roaming\\QGIS\\QGIS3\\profiles\\default\\python\\plugins\\caumax_consulta</font>. En otros equipos o perfiles cambia la parte correspondiente al usuario y al perfil.')
     p('Dentro del complemento, <b>ResolucionMejorada</b> contiene el P0 incluido y es el destino inicial de las exportaciones. El manual reside en <b>docs/manual</b>.')
 
     heading(3)
-    p('Pulsa <b>Capas</b>. El grupo <b>HidroCAUMAX · Capas de referencia</b> se coloca inmediatamente encima de <b>CAUMAX_CAPAS</b>. El grupo general se abre; sus nuevas entradas aparecen apagadas y con la leyenda plegada.')
+    p('<b>Capas</b> alterna cargar y retirar las referencias. Al cargar, <b>HidroCAUMAX · Capas de referencia</b> aparece abierto encima de <b>CAUMAX_CAPAS</b>; las capas y subgrupos comienzan apagados y plegados.')
     table([['Entrada','Contenido'],['Estaciones AEMET','Inventario histórico de precipitación; no equivale a un catálogo completo de estaciones activas.'],['Extensión zonas inundables','Escenarios SNCZI T=10, 50, 100 y 500 años.'],['Peligrosidad SNCZI','Cartografía de peligrosidad de inundación.'],['Google Satellite','Fondo de imagen por teselas.'],['Tramos de ríos · Pfafstetter','Red hidrográfica clasificada.'],['Caracterización agroclimática','Variables cartográficas del servicio MAPA.'],['IGME','Mapa hidrogeológico a escala 1:1.000.000.'],['Corine Land Cover','Servicio de ocupación del suelo; la fuente cambia según la escala.'],['Po España (CLC2000)','Ráster local de 100 × 100 m, atribuido a AdrLBallesteros; última capa.']])
     p('Qué se descarga al navegar','h2')
     p('Marca la capa que quieras consultar. Los servicios WMS y XYZ solicitan las imágenes de la zona visible y del zoom actual. Las capas apagadas no solicitan imágenes del mapa. La preparación inicial puede consultar el catálogo del servicio.')
-    p('AEMET, Pfafstetter y Corine están directamente dentro del grupo general. <b>Google Satellite</b> se coloca fuera, inmediatamente debajo de <b>Google Terrain</b>, inicialmente apagada. Repetir Capas incorpora las entradas que falten y conserva la visibilidad elegida.')
+    p('AEMET, Pfafstetter y Corine están directamente dentro del grupo general. <b>Google Satellite</b> se coloca fuera, debajo de <b>Google Terrain</b>, inicialmente apagada.')
+    p('Pulsa <b>Capas</b> de nuevo para retirar las referencias, incluido Satellite. Durante la carga, la pulsación cancela y retira lo ya añadido. La siguiente pulsación vuelve a cargar. Conserva los archivos, las capas ajenas y los resultados D8, mejorados y de CAUMAX. El botón queda marcado si hay referencias o una carga en curso; su ayuda indica la acción.','small')
     p('Al abrir <b>Caracterización agroclimática</b> o <b>Peligrosidad de inundación · SNCZI</b> se ve la lista completa con las leyendas plegadas. Puedes desplegar después una capa individual. El P0 utiliza rojo → amarillo → verde, con 16 clases por cuantiles, interpolación lineal y etiquetas enteras.','small')
     p('La capa <b>Red &gt; 50 km²</b> se representa en rosa intenso para localizarla al seleccionar un punto. Se conserva su geometría, su grosor y el resto de capas.')
     p('Al cargar las capas originales de CAUMAX, se desactiva <b>Mapas raster del IGN</b> y se añade <b>Google Terrain</b> visible como fondo, fuera del grupo. Se mantiene el encuadre inicial de la península y Baleares. Repetir la carga reutiliza el fondo. Después puedes navegar normalmente; Terrain requiere conexión.')
@@ -179,7 +180,7 @@ def build():
         canvas.setStrokeColor(blue); canvas.setLineWidth(1); canvas.line(42,806,553,806)
         canvas.setFont('Manual',8); canvas.setFillColor(navy)
         canvas.drawString(42,818,'HidroCAUMAX v.1.0 | Manual de usuario')
-        canvas.drawString(42,25,'Paquete 1.0.11 · Edición 26/11/2026')
+        canvas.drawString(42,25,'Paquete 1.0.12 · Edición 26/11/2026')
         canvas.drawRightString(553,25,f'{doc.page} / {len(TITLES)}')
         canvas.restoreState()
     pdf=OUT/'Manual_HidroCAUMAX_v1.0.pdf'

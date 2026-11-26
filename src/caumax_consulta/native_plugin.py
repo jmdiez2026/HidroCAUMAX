@@ -59,9 +59,10 @@ class NativeCaumaxPlugin(QObject):
         self.open_action = QAction('Abrir proyecto de cuenca…', self.iface.mainWindow())
         self.open_action.triggered.connect(self._open_saved_project)
         self.iface.addPluginToMenu(self.MENU, self.open_action)
-        self.reference_action = QAction('Cargar capas HidroCAUMAX', self.iface.mainWindow())
-        self.reference_action.triggered.connect(self._map_services.load)
-        self._map_services.busy_changed.connect(self.reference_action.setDisabled)
+        self.reference_action = QAction('Cargar o retirar capas HidroCAUMAX', self.iface.mainWindow())
+        self.reference_action.setCheckable(True)
+        self.reference_action.triggered.connect(self._map_services.toggle)
+        self._map_services.state_changed.connect(self._sync_reference_action)
         self.iface.addPluginToMenu(self.MENU, self.reference_action)
         self.clear_layers_action = QAction('Eliminar capas creadas por HidroCAUMAX', self.iface.mainWindow())
         self.clear_layers_action.triggered.connect(self._clear_generated_layers)
@@ -73,7 +74,18 @@ class NativeCaumaxPlugin(QObject):
         self.help_action.triggered.connect(self._show_help)
         self.iface.addPluginToMenu(self.MENU, self.help_action)
         self._create_toolbar()
+        self._sync_reference_action()
         self.set_enabled(True)
+
+    def _sync_reference_action(self):
+        loading = self._map_services.busy
+        present = self._map_services.has_references
+        self.reference_action.setChecked(loading or present)
+        tip = ('Cancelar la carga y retirar las capas de referencia HidroCAUMAX' if loading else
+               'Retirar de QGIS las capas de referencia HidroCAUMAX' if present else
+               'Cargar las capas de referencia HidroCAUMAX')
+        self.reference_action.setToolTip(tip)
+        self.reference_action.setStatusTip(tip)
 
     def _create_toolbar(self):
         """Share the menu actions so busy and trigger states agree."""
@@ -343,8 +355,8 @@ class NativeCaumaxPlugin(QObject):
             self.clear_layers_action.deleteLater()
         if hasattr(self, 'reference_action'):
             try:
-                self.reference_action.triggered.disconnect(self._map_services.load)
-                self._map_services.busy_changed.disconnect(self.reference_action.setDisabled)
+                self.reference_action.triggered.disconnect(self._map_services.toggle)
+                self._map_services.state_changed.disconnect(self._sync_reference_action)
             except (RuntimeError, TypeError):
                 pass
             self.iface.removePluginMenu(self.MENU, self.reference_action)

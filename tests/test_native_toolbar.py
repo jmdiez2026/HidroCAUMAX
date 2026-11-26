@@ -9,6 +9,7 @@ from qgis.PyQt.QtWidgets import QMainWindow, QToolBar
 from qgis.core import QgsApplication, QgsProject, QgsVectorLayer
 
 from caumax_consulta import native_plugin as native
+from caumax_consulta import map_services as maps
 
 
 class QgisStartup(QObject):
@@ -22,6 +23,9 @@ class ToolbarTests(unittest.TestCase):
         cls.app.initQgis()
 
     def setUp(self):
+        project = QgsProject.instance()
+        before = set(project.mapLayers())
+        self.addCleanup(lambda: project.removeMapLayers(list(set(project.mapLayers()) - before)))
         self.window = QMainWindow()
         self.window.setAttribute(Qt.WA_DontShowOnScreen)
         self.startup = QgisStartup()
@@ -139,13 +143,69 @@ class ToolbarTests(unittest.TestCase):
         self.assertTrue(toolbar.isVisible())
         self.assertTrue(self.plugin._enabled)
 
-    def test_reference_busy_state_disables_the_same_toolbar_button(self):
+    def test_reference_action_tracks_real_project_state_and_external_removals(self):
         p = self.plugin
         button = p._toolbar.widgetForAction(p.reference_action)
+        project = QgsProject.instance()
+        self.assertTrue(p.reference_action.isCheckable())
+        self.assertFalse(p.reference_action.isChecked())
+        foreign = QgsVectorLayer('Point?crs=EPSG:25830', 'Google Satellite', 'memory')
+        project.addMapLayer(foreign)
+        self.assertFalse(p.reference_action.isChecked())
+        owned = QgsVectorLayer('Point?crs=EPSG:25830', 'Referencia renombrada', 'memory')
+        owned.setCustomProperty(maps.SERVICE_PROPERTY, 'aemet')
+        owned.setCustomProperty(maps.LAYER_PROPERTY, 'stations')
+        project.addMapLayer(owned)
+        self.assertTrue(p.reference_action.isChecked())
+        self.assertTrue(button.isChecked())
+        self.assertIn('Retirar', button.toolTip())
+        project.removeMapLayer(owned.id())
+        self.assertFalse(p.reference_action.isChecked())
+        self.assertIn('Cargar', button.toolTip())
+        # An emitted bool alone must never fabricate a busy or present state.
         p._map_services.busy_changed.emit(True)
-        self.assertFalse(button.isEnabled())
-        p._map_services.busy_changed.emit(False)
         self.assertTrue(button.isEnabled())
+        self.assertFalse(button.isChecked())
+
+    def test_reference_button_can_cancel_then_reload_and_remove_from_toolbar(self):
+        p = self.plugin
+        loader = p._map_services
+        button = p._toolbar.widgetForAction(p.reference_action)
+        project = QgsProject.instance()
+        loader.services = (next(s for s in maps.WMS_SERVICES if s.service_id == 'corine'),)
+        loader.layer_factory = Mock(side_effect=lambda uri, title, provider:
+            QgsVectorLayer('Point?crs=EPSG:25830', title, 'memory'))
+        manager = SimpleNamespace(addTask=Mock())
+        with patch.object(maps.QgsApplication, 'taskManager', return_value=manager), patch.object(loader, '_bar', return_value=None):
+            QTest.mouseClick(button, Qt.LeftButton)
+            self.assertTrue(loader.busy)
+            self.assertTrue(button.isEnabled())
+            self.assertTrue(button.isChecked())
+            self.assertIn('Cancelar', button.toolTip())
+            canceled = next(iter(loader._tasks))
+            QTest.mouseClick(button, Qt.LeftButton)
+            self.assertTrue(canceled.isCanceled())
+            self.assertFalse(loader.busy)
+            self.assertFalse(button.isChecked())
+            # A retry while the provider is retiring resets the optimistic QAction check.
+            QTest.mouseClick(button, Qt.LeftButton)
+            self.assertEqual(manager.addTask.call_count, 1)
+            self.assertFalse(button.isChecked())
+            self.assertFalse(canceled.run())
+            canceled.finished(False)
+            for _ in range(2):
+                QTest.mouseClick(button, Qt.LeftButton)
+                task = next(iter(loader._tasks))
+                self.assertTrue(task.run())
+                task.finished(True)
+                self.assertTrue(button.isChecked())
+                self.assertIn('Retirar', button.toolTip())
+                self.assertTrue(loader.has_references)
+                QTest.mouseClick(button, Qt.LeftButton)
+                self.assertFalse(loader.has_references)
+                self.assertFalse(button.isChecked())
+                self.assertFalse(project.mapLayers())
+        self.assertEqual(loader.layer_factory.call_count, 2)
 
     def test_unload_removes_toolbar_and_reload_does_not_duplicate_it(self):
         p = self.plugin

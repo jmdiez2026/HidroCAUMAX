@@ -1,3 +1,13 @@
+# HidroCAUMAX v.1.0 - alternancia de referencias (revisión 1.0.12, 2026-11-26)
+
+- El botón Capas alterna cargar y retirar de QGIS las referencias gestionadas por HidroCAUMAX, incluida Google Satellite fuera del grupo general.
+- Pulsarlo durante la preparación cancela las tareas y retira las referencias parciales; la siguiente pulsación permite cargarlas de nuevo. El estado marcado refleja la presencia de referencias o una carga en curso, y la ayuda del botón describe la acción.
+- La retirada conserva los archivos del disco, las capas ajenas y los resultados D8, de resolución mejorada y de CAUMAX. Limpiar capas mantiene su alcance propio sobre los resultados.
+- Documentación y manual de diez páginas actualizados. Pruebas de actualización preparadas para la revisión técnica 1.0.12 y la siguiente 1.0.13.
+- La identificación visible continúa siendo HidroCAUMAX v.1.0.
+
+---
+
 # HidroCAUMAX v.1.0 - interpretación automática (revisión 1.0.11, 2026-11-26)
 
 - Retirados los dos botones Análisis IA y la consulta externa desde la ventana de cuenca. Las 19 interpretaciones se generan localmente al finalizar el cálculo, también al recuperar proyectos.

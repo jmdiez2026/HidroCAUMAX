@@ -14,22 +14,22 @@ import prepare_next_version
 class FutureQgisUpdates(unittest.TestCase):
     def test_version_identity_and_published_feed(self):
         metadata=build_release.read_metadata(ROOT/'src/caumax_consulta')
-        self.assertEqual(metadata['version'],'1.0.11')
+        self.assertEqual(metadata['version'],'1.0.12')
         self.assertEqual(metadata['name'],'HidroCAUMAX v.1.0')
-        self.assertEqual(prepare_next_version.public_tag(metadata['version']),'v1.0.11')
+        self.assertEqual(prepare_next_version.public_tag(metadata['version']),'v1.0.12')
         xml=ET.fromstring(build_release.repository_xml(metadata,build_release.DEFAULT_REPOSITORY,
-            'v1.0.11','HidroCAUMAX_v1_0_11.zip'))
+            'v1.0.12','HidroCAUMAX_v1_0_12.zip'))
         entry=xml.find('pyqgis_plugin')
-        self.assertEqual(entry.get('version'),'1.0.11')
+        self.assertEqual(entry.get('version'),'1.0.12')
         self.assertEqual(entry.findtext('file_name'),'caumax_consulta.zip')
         self.assertEqual(entry.findtext('download_url'),
-            'https://github.com/jmdiez2026/HidroCAUMAX/releases/download/v1.0.11/HidroCAUMAX_v1_0_11.zip')
+            'https://github.com/jmdiez2026/HidroCAUMAX/releases/download/v1.0.12/HidroCAUMAX_v1_0_12.zip')
     def test_next_version_can_be_prepared_without_touching_current_source(self):
-        updates=prepare_next_version.plan(ROOT,'1.0.12')
+        updates=prepare_next_version.plan(ROOT,'1.0.13')
         paths={p.relative_to(ROOT).as_posix() for p in updates}
         self.assertIn('src/caumax_consulta/metadata.txt',paths)
-        self.assertEqual(prepare_next_version.public_tag('1.0.12'),'v1.0.12')
-        self.assertIn(b'version=1.0.12',updates[ROOT/'src/caumax_consulta/metadata.txt'])
+        self.assertEqual(prepare_next_version.public_tag('1.0.13'),'v1.0.13')
+        self.assertIn(b'version=1.0.13',updates[ROOT/'src/caumax_consulta/metadata.txt'])
     def test_git_workflow_detects_metadata_change_and_verifies_tag(self):
         workflow=(ROOT/'.github/workflows/release.yml').read_text()
         self.assertIn("'src/caumax_consulta/metadata.txt'",workflow)
