@@ -110,9 +110,13 @@ class DrainageLayersTests(unittest.TestCase):
         state['caumax_d8_path'] = str(self.directions())
         state['dem_path'] = str(self.elevation())
         controller = self.controller()
+        early = controller.display_dem(self.analysis, state['dem_path'])
+        group = controller._group
+        self.assertIs(early, controller.layers['dem'])
+        self.assertEqual([item.layer().name() for item in group.children()],
+                         ['MDT 25x25m', 'Relieve sombreado MDT 25x25m'])
         layers = controller.update(self.analysis, state)
         self.assertEqual(set(layers), {'network', 'directions', 'dem', 'hillshade'})
-        group = controller._group
         names = [node.layer().name() for node in group.children()]
         self.assertEqual(names[2], 'MDT 25x25m')
         self.assertEqual(names[3], 'Relieve sombreado MDT 25x25m')
