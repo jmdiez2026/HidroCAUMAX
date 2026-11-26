@@ -164,10 +164,16 @@ def clear_delineation_layers(project=None):
     return len(layer_ids)
 
 
-def clear_delineations(*, close_dialogs=False, project=None, include_exports=False):
+def clear_delineations(*, close_dialogs=False, project=None, include_exports=False,
+                       include_references=False):
     """Clear every query, keeping dialogs open unless a new red point begins."""
     project = QgsProject.instance() if project is None else project
     before = set(project.mapLayers())
+    # Only explicit Limpiar capas opts in. Starting another basin query must
+    # preserve the user's reference maps and their in-progress requests.
+    if include_references:
+        from .map_services import clear_reference_layers
+        clear_reference_layers(project)
     for participant in tuple(_participants):
         try:
             if not getattr(participant, '_disposed', False):

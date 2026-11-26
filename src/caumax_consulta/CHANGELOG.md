@@ -1,3 +1,14 @@
+# HidroCAUMAX v.1.0 - limpieza de referencias y configuración nativa (revisión 1.0.13, 2026-11-26)
+
+- Corregido Limpiar capas: el botón rojo GEA/D8 y la barra retiran también el grupo de referencias, sus capas y Google Satellite. Se cancelan las cargas pendientes para impedir reapariciones tardías.
+- La confirmación del botón rojo incluye las referencias aunque no existan resultados generados. Cancelar conserva capas y solicitudes. Se retiran también los grupos propios vacíos; se preserva cualquier contenido ajeno.
+- Los archivos de referencia, incluido P0, se excluyen del borrado incluso ante un registro antiguo erróneo o una referencia incorporada mientras estaba abierta la confirmación. La barra sigue conservando todos los archivos; el botón rojo mantiene la revisión del borrado de productos generados.
+- La limpieza automática al iniciar otra consulta mantiene las referencias. Capas conserva su alternancia y actualiza su estado después de limpiar.
+- Retirada la autoconfiguración de Configurar capas de cálculo. El diálogo y Valores por defecto funcionan como en CAUMAX original: rutas nativas y cuenca mínima original de 10 km². Se conservan la selección guardada y la edición manual; no se vuelven a imponer MDT/D8 mejorados ni P0 al restaurar valores.
+- Pruebas reproducibles de confirmación, cancelación, datos protegidos, grupos, solicitudes pendientes y estado de la barra. Manual actualizado; nombre visible HidroCAUMAX v.1.0.
+
+---
+
 # HidroCAUMAX v.1.0 - alternancia de referencias (revisión 1.0.12, 2026-11-26)
 
 - El botón Capas alterna cargar y retirar de QGIS las referencias gestionadas por HidroCAUMAX, incluida Google Satellite fuera del grupo general.

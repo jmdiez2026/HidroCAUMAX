@@ -16,7 +16,6 @@ from .update_ui import UpdateNotifier
 from .delineation_cleanup import clear_delineations
 from .map_services import ReferenceLayerLoader
 from .native_layers_view import NativeLayersView
-from .native_calculation_layers import NativeCalculationLayers
 
 
 class NativeCaumaxPlugin(QObject):
@@ -44,7 +43,6 @@ class NativeCaumaxPlugin(QObject):
         self._updates = UpdateNotifier(iface, self)
         self._map_services = ReferenceLayerLoader(iface, self)
         self._native_layers_view = NativeLayersView(iface, self)
-        self._calculation_layers = NativeCalculationLayers(iface, self)
 
     def initGui(self):
         from .improved_storage import restore_exports
@@ -64,7 +62,7 @@ class NativeCaumaxPlugin(QObject):
         self.reference_action.triggered.connect(self._map_services.toggle)
         self._map_services.state_changed.connect(self._sync_reference_action)
         self.iface.addPluginToMenu(self.MENU, self.reference_action)
-        self.clear_layers_action = QAction('Eliminar capas creadas por HidroCAUMAX', self.iface.mainWindow())
+        self.clear_layers_action = QAction('Limpiar resultados y referencias de HidroCAUMAX', self.iface.mainWindow())
         self.clear_layers_action.triggered.connect(self._clear_generated_layers)
         self.iface.addPluginToMenu(self.MENU, self.clear_layers_action)
         self.update_action = QAction('Buscar actualizaciones…', self.iface.mainWindow())
@@ -106,7 +104,7 @@ class NativeCaumaxPlugin(QObject):
                 (self.reference_action, 'Capas', 'Cargar las capas de referencia HidroCAUMAX'),
                 (self.open_action, 'Abrir cuenca', 'Abrir un proyecto de cuenca guardado'),
                 (self.clear_layers_action, 'Limpiar capas',
-                 'Retirar de QGIS todas las capas generadas por HidroCAUMAX. Conserva los archivos en disco.'),
+                 'Retirar de QGIS los resultados y las referencias de HidroCAUMAX. Conserva los archivos en disco.'),
                 (self.update_action, 'Actualizar', 'Descargar, verificar e instalar una nueva versión de HidroCAUMAX'),
                 (self.help_action, 'Ayuda', 'Abrir el manual de usuario incluido en PDF')):
             action.setIconText(caption)
@@ -162,10 +160,10 @@ class NativeCaumaxPlugin(QObject):
         # Ownership markers also find previous queries and reopened projects.
         self.clear_layers_action.setEnabled(False)
         try:
-            count = clear_delineations(close_dialogs=False, include_exports=True)
-            message = (f'Se han retirado {count} capas generadas por HidroCAUMAX. '
+            count = clear_delineations(close_dialogs=False, include_exports=True, include_references=True)
+            message = (f'Se han retirado {count} capas de HidroCAUMAX (resultados y referencias). '
                        'Los archivos se conservan en disco.' if count else
-                       'No hay capas generadas por HidroCAUMAX cargadas en el proyecto.')
+                       'No hay capas de HidroCAUMAX cargadas en el proyecto.')
             self.iface.messageBar().pushMessage('HidroCAUMAX', message, level=Qgis.Info, duration=5)
         finally:
             self.clear_layers_action.setEnabled(True)
@@ -202,7 +200,6 @@ class NativeCaumaxPlugin(QObject):
             self._rational_layers.start()
             self._visible_dem.start()
             self._native_layers_view.start()
-            self._calculation_layers.start()
             self._updates.check()
         else:
             self._updates.cancel()
@@ -214,7 +211,6 @@ class NativeCaumaxPlugin(QObject):
             self._rational_layers.stop()
             self._visible_dem.stop()
             self._native_layers_view.stop()
-            self._calculation_layers.stop()
 
     @staticmethod
     def _key(query):
@@ -324,7 +320,6 @@ class NativeCaumaxPlugin(QObject):
         self._rational_layers.stop()
         self._visible_dem.stop()
         self._native_layers_view.stop()
-        self._calculation_layers.stop()
         if hasattr(self, 'action'):
             try:
                 self.action.triggered.disconnect(self._activate_tools)

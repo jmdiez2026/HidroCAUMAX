@@ -11,22 +11,27 @@ def clean_button(parent):
     button.setStyleSheet('QPushButton { background-color: #FADBD8; border: 1px solid #CF8D89; '
         'border-radius: 3px; padding: 2px 4px; } QPushButton:hover { background-color: #F5B7B1; } '
         'QPushButton:disabled { background-color: #F3E8E7; color: #888888; }')
-    button.setToolTip('Retirar las capas generadas y eliminar sus archivos, previa revisión de la lista.')
+    button.setToolTip('Retirar resultados y referencias de HidroCAUMAX; revisar el borrado de archivos generados. '
+                      'Los archivos de referencia se conservan.')
     return button
 
 
 def confirm_cleanup(parent):
     from .generated_cleanup import deletion_plan, delete_generated
     plan = deletion_plan()
-    if not plan['layers'] and not plan['files']:
-        return 'No hay capas ni archivos generados por HidroCAUMAX para eliminar.'
+    if not (plan['layers'] or plan['files'] or plan.get('reference_groups') or plan.get('references_loading')):
+        return 'No hay resultados ni referencias de HidroCAUMAX para limpiar.'
     prompt = QMessageBox(parent)
     prompt.setWindowTitle('Limpiar capas de HidroCAUMAX')
-    prompt.setIcon(QMessageBox.Warning)
+    prompt.setIcon(QMessageBox.Warning if plan['files'] else QMessageBox.Question)
     prompt.setText(f"Se retirarán {len(plan['layers'])} capas de QGIS y se eliminarán "
                    f"{len(plan['files'])} archivos del disco duro.")
-    prompt.setInformativeText('Se incluyen las exportaciones registradas en este proyecto y las capas '
-        'temporales de sesiones anteriores. Los datos originales se conservan. Esta acción no se puede deshacer.')
+    text = ('Se retirarán también las referencias de HidroCAUMAX y sus grupos vacíos; '
+        'se cancelará su carga si está pendiente. Los archivos de referencia, incluido P0, se conservan.')
+    if plan['files']:
+        text += (' Se incluyen archivos generados registrados y temporales de sesiones anteriores. '
+                 'El borrado de esos archivos no se puede deshacer.')
+    prompt.setInformativeText(text)
     prompt.setDetailedText('Capas:\n' + '\n'.join(plan['layers'].values()) +
         '\n\nArchivos:\n' + '\n'.join(sorted(plan['files'])) +
         '\n\nOrígenes conservados:\n' + '\n'.join(plan['protected']))

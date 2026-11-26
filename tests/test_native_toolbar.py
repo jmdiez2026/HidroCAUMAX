@@ -23,6 +23,9 @@ class ToolbarTests(unittest.TestCase):
         cls.app.initQgis()
 
     def setUp(self):
+        for name in ('restore_exports', 'preserve_exports'):
+            storage = patch('caumax_consulta.improved_storage.' + name)
+            storage.start(); self.addCleanup(storage.stop)
         project = QgsProject.instance()
         before = set(project.mapLayers())
         self.addCleanup(lambda: project.removeMapLayers(list(set(project.mapLayers()) - before)))
@@ -68,7 +71,7 @@ class ToolbarTests(unittest.TestCase):
         p = self.plugin
         with patch.object(native, 'clear_delineations', return_value=7) as cleanup:
             QTest.mouseClick(p._toolbar.widgetForAction(p.clear_layers_action), Qt.LeftButton)
-        cleanup.assert_called_once_with(close_dialogs=False, include_exports=True)
+        cleanup.assert_called_once_with(close_dialogs=False, include_exports=True, include_references=True)
         self.assertIn('7 capas', self.messages.pushMessage.call_args.args[1])
         self.assertEqual(self.messages.pushMessage.call_args.kwargs['duration'], 5)
         self.assertTrue(p.clear_layers_action.isEnabled())
@@ -129,6 +132,21 @@ class ToolbarTests(unittest.TestCase):
         p._updates.check.reset_mock()
         QTest.mouseClick(p._toolbar.widgetForAction(p.update_action), Qt.LeftButton)
         p._updates.check.assert_called_once_with(manual=True)
+
+    def test_clean_button_removes_references_and_resets_capas_action(self):
+        project = QgsProject.instance()
+        group = project.layerTreeRoot().addGroup(maps.ROOT_TITLE)
+        group.setCustomProperty(maps.ROOT_PROPERTY, 'v1')
+        reference = QgsVectorLayer('Point?crs=EPSG:25830', 'Referencia', 'memory')
+        reference.setCustomProperty(maps.SERVICE_PROPERTY, 'aemet')
+        reference.setCustomProperty(maps.LAYER_PROPERTY, 'stations')
+        project.addMapLayer(reference, False); group.addLayer(reference)
+        self.assertTrue(self.plugin.reference_action.isChecked())
+        self.plugin.clear_layers_action.trigger()
+        self.assertFalse(project.mapLayers())
+        self.assertFalse(project.layerTreeRoot().findGroups())
+        self.assertFalse(self.plugin.reference_action.isChecked())
+        self.assertIn('1 capas', self.messages.pushMessage.call_args.args[1])
 
     def test_toolbar_visible_on_load_and_after_qgis_restores_hidden_state(self):
         toolbar = self.plugin._toolbar

@@ -570,6 +570,9 @@ class ReferenceMenuTests(unittest.TestCase):
         cls.app = QgsApplication.instance() or QgsApplication([], False)
 
     def test_menu_command_busy_state_and_unload(self):
+        for name in ('restore_exports', 'preserve_exports'):
+            storage = patch('caumax_consulta.improved_storage.' + name)
+            storage.start(); self.addCleanup(storage.stop)
         from caumax_consulta import native_plugin as native
         window = QMainWindow()
         self.addCleanup(window.deleteLater)

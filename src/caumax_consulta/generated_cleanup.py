@@ -84,9 +84,24 @@ def _generated_raster(path):
         dataset = None
 
 
+def _reference_files(project):
+    from .map_services import reference_layers
+    protected = set()
+    for layer in reference_layers(project):
+        if layer.providerType() not in ('gdal', 'ogr'):
+            continue
+        path = Path(layer.source().split('|', 1)[0])
+        if _plain_file(path):
+            protected.update(str(file.resolve()) for file in _family(path))
+    return protected
+
+
 def deletion_plan(project=None, roots=None):
     project = project or QgsProject.instance()
     files, layers, protected = {}, {}, []
+    from .map_services import reference_layers, references_loading, is_reference_group
+    references = {layer.id(): layer.name() for layer in reference_layers(project)}
+    reference_files = _reference_files(project)
     from .improved_storage import generated_files
     for path in generated_files():
         files[str(path.resolve())] = _stamp(path)
@@ -107,10 +122,14 @@ def deletion_plan(project=None, roots=None):
                     if _plain_file(file):
                         files[str(file.resolve())] = _stamp(file)
     for layer in project.mapLayers().values():
+        if layer.id() in references:
+            layers[layer.id()] = layer.name()
+            continue  # Reference data are never candidates for disk deletion.
         raw = layer.source().split('|', 1)[0]
         path = Path(raw) if raw else None
         disk = path is not None and _plain_file(path)
-        generated = disk and (str(path.resolve()) in files or _generated_raster(path))
+        generated = disk and str(path.resolve()) not in reference_files and (
+            str(path.resolve()) in files or _generated_raster(path))
         if _owned(layer) or generated:
             layers[layer.id()] = layer.name()
             if generated:
@@ -119,18 +138,31 @@ def deletion_plan(project=None, roots=None):
                         files[str(file.resolve())] = _stamp(file)
             elif disk:
                 protected.append(str(path))
-    return dict(files=files, layers=layers, protected=protected)
+    # Even an erroneous old export record or a shared source cannot make a
+    # reference raster (notably the supplied P0) a disposable generated file.
+    for name in reference_files:
+        files.pop(name, None)
+    protected = sorted(set(protected) | reference_files)
+    return dict(files=files, layers=layers, protected=protected,
+                include_references=True, references=references, reference_files=sorted(reference_files),
+                references_loading=references_loading(project),
+                reference_groups=[group.name() for group in project.layerTreeRoot().findGroups(recursive=True)
+                                  if is_reference_group(group) and not group.children()])
 
 
 def delete_generated(plan, project=None):
     """Execute exactly the reviewed file snapshot, reporting partial failures."""
     project = project or QgsProject.instance()
+    before = set(project.mapLayers())
+    protected_references = set(plan.get('reference_files', ())) | _reference_files(project)
     # Cancel all participating calculations and release QGIS raster handles
     # before unlinking files. Late task callbacks cannot reinsert cleared layers.
-    clear_delineations(project=project)
+    clear_delineations(project=project, include_references=plan.get('include_references', False))
     project.removeMapLayers([key for key in plan['layers'] if project.mapLayer(key)])
     removed, failed = [], []
     for name, stamp in plan['files'].items():
+        if name in protected_references:
+            continue
         path = Path(name)
         try:
             if not path.exists():
@@ -143,7 +175,7 @@ def delete_generated(plan, project=None):
         except OSError as error:
             failed.append(name + ': ' + str(error))
     records = _registry(project)
-    for name in removed:
+    for name in set(removed) | protected_references:
         records.pop(name, None)
     _save_registry(project, records)
-    return dict(removed=removed, failed=failed, layers=len(plan['layers']))
+    return dict(removed=removed, failed=failed, layers=len(before - set(project.mapLayers())))

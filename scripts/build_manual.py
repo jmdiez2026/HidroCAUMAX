@@ -64,7 +64,7 @@ def build():
     story.append(Spacer(1,24))
     p('HidroCAUMAX v.1.0','title')
     p('Manual de usuario','h1')
-    p('Edición para el paquete 1.0.12 · 26 de noviembre de 2026','small')
+    p('Edición para el paquete 1.0.13 · 26 de noviembre de 2026','small')
     p('Herramientas de cuencas, cartografía y caudales máximos para QGIS y CAUMAX 3.0. Este manual acompaña al complemento y se puede consultar sin conexión.')
     p('Primeros pasos','h2')
     for text in ['1. Instala y habilita CAUMAX y, después, HidroCAUMAX.',
@@ -73,13 +73,13 @@ def build():
                  '4. Usa Calcular del recuadro GEA para consultar la tabla y el gráfico de caudales.',
                  '5. Abre Generar capas resolución mejorada si necesitas MDT, direcciones y red con mayor detalle.']:
         p(text)
-    p('El nombre visible es HidroCAUMAX v.1.0. El número técnico 1.0.12 identifica esta entrega y permite ordenar las actualizaciones.','small')
+    p('El nombre visible es HidroCAUMAX v.1.0. El número técnico 1.0.13 identifica esta entrega y permite ordenar las actualizaciones.','small')
 
     heading(2)
     p('Requisitos e instalación','h2')
     p('Esta entrega declara compatibilidad con QGIS 3.34 a 3.99, con Qt 5, y requiere CAUMAX 3.0. La comprobación de escritorio se realiza en QGIS 3.44.15. TauDEM y sus dependencias están incluidos para Windows de 64 bits.')
     p('Descarga el ZIP de la publicación y utiliza <b>Complementos → Administrar e instalar complementos → Instalar a partir de ZIP</b>. También se distribuye un instalador para Windows. Habilita el complemento para que la barra y las herramientas se activen automáticamente.')
-    table([['Botón','Función'],['HidroCAUMAX v.1.0','Restaura las herramientas añadidas a CAUMAX.'],['Capas','Alterna cargar y retirar las referencias del mapa; conserva sus archivos.'],['Abrir cuenca','Abre un proyecto de cuenca guardado.'],['Limpiar capas','Retira los resultados generados del mapa; conserva los archivos.'],['Actualizar','Busca, descarga, verifica e instala una versión compatible.'],['Ayuda','Muestra este manual; Abrir PDF utiliza el lector del equipo.']])
+    table([['Botón','Función'],['HidroCAUMAX v.1.0','Restaura las herramientas añadidas a CAUMAX.'],['Capas','Alterna cargar y retirar las referencias del mapa; conserva sus archivos.'],['Abrir cuenca','Abre un proyecto de cuenca guardado.'],['Limpiar capas','Retira resultados y referencias del mapa; conserva los archivos.'],['Actualizar','Busca, descarga, verifica e instala una versión compatible.'],['Ayuda','Muestra este manual; Abrir PDF utiliza el lector del equipo.']])
     p('Carpeta de instalación','h2')
     p('En el perfil predeterminado de este equipo: <font size="8">C:\\Users\\JM_GIS\\AppData\\Roaming\\QGIS\\QGIS3\\profiles\\default\\python\\plugins\\caumax_consulta</font>. En otros equipos o perfiles cambia la parte correspondiente al usuario y al perfil.')
     p('Dentro del complemento, <b>ResolucionMejorada</b> contiene el P0 incluido y es el destino inicial de las exportaciones. El manual reside en <b>docs/manual</b>.')
@@ -97,8 +97,8 @@ def build():
 
     heading(4)
     p('Configurar capas de cálculo','h2')
-    p('Al abrir este diálogo nativo se propone la última pareja compatible de MDT y direcciones exportada y registrada en <b>ResolucionMejorada</b>. Deben compartir malla y sistema de referencia. Si no existe una pareja válida, se mantienen las fuentes originales y se informa.')
-    p('Se propone el P0 incluido, se conserva el <b>Factor de torrencialidad original de CAUMAX</b> y la cuenca mínima se establece inicialmente en <b>2 km²</b>. Los rásteres de precipitación no se sustituyen. <b>Aceptar</b> aplica la configuración; <b>Cancelar</b> conserva la anterior.')
+    p('Este diálogo conserva el funcionamiento original de CAUMAX. HidroCAUMAX no sustituye automáticamente MDT, direcciones de flujo, P0, precipitaciones, factor de torrencialidad ni cuenca mínima. Puedes mantener las rutas guardadas o seleccionarlas manualmente.')
+    p('<b>Valores por defecto</b> restaura las rutas originales y la cuenca mínima nativa de <b>10 km²</b>. <b>Aceptar</b> guarda la selección; <b>Cancelar</b> conserva la anterior. Si antes aceptaste una pareja mejorada, usa <b>Valores por defecto → Aceptar</b> para volver a las capas originales.')
     p('Cálculo en el Método racional','h2')
     p('Selecciona un río o un punto del mapa, indica el periodo de retorno y pulsa <b>Calcular variables intermedias</b>. Revisa los campos de CAUMAX. HidroCAUMAX muestra los decimales con coma y mantiene la representación numérica necesaria para el cálculo nativo.')
     picture('gea.png')
@@ -163,13 +163,13 @@ def build():
     p('Las comprobaciones automáticas al abrir el plugin solo avisan: la instalación empieza cuando pulsas Actualizar. Si hay una generación pendiente, termina o cancela ese trabajo antes de actualizar. Si empiezas otro cálculo mientras se descarga, debes volver a pulsar Actualizar cuando termine.')
     p('Si la instalación o la activación falla, se intenta restaurar la versión anterior y se informa del resultado. Una descarga no se anuncia como actualización completada. Las copias de recuperación se conservan en <b>HidroCAUMAX/updates</b> dentro del perfil QGIS.')
     p('Dos alcances de limpieza','h2')
-    table([['Dónde','Qué hace'],['Barra superior','Limpiar capas cancela trabajo pendiente y retira los resultados generados de QGIS. Sus archivos permanecen en disco.'],['Recuadro GEA o diálogo D8','El botón rojo Limpiar capas presenta una confirmación y el detalle de los archivos generados que se pueden borrar. Al aceptar, elimina esas capas y sus archivos identificados.']])
-    p('La limpieza con borrado utiliza registros de propiedad y exportación; no debe borrar las fuentes originales, el P0 incluido ni capas ajenas por tener un nombre parecido. Cancelar la confirmación no borra nada.')
+    table([['Dónde','Qué hace'],['Barra superior','Limpiar capas cancela las tareas y retira resultados y referencias de QGIS, incluido su grupo vacío. Todos los archivos permanecen en disco.'],['Recuadro GEA o diálogo D8','El botón rojo muestra una confirmación con capas y archivos. Retira resultados y referencias; solo borra los archivos generados de la lista aceptada.']])
+    p('Ambos accesos retiran también Google Satellite y cancelan las cargas pendientes. Los archivos de referencia, incluido P0, se conservan. Las capas ajenas y los grupos que las contienen permanecen. Cancelar la confirmación conserva las capas y las solicitudes. <b>Capas</b> permite volver a cargar las referencias; cambiar el punto de consulta no las retira.')
     p('Ayuda disponible sin conexión','h2')
     p('<b>Ayuda</b>, al extremo derecho de la barra, abre un diálogo con las páginas de este manual. El selector permite saltar a cada sección. <b>Abrir PDF</b> entrega el documento al lector PDF del equipo; si no hay lector asociado, el manual sigue disponible en el diálogo.')
 
     heading(10)
-    table([['Situación','Comprobación y acción'],['No aparecen los botones GEA','Comprueba que HidroCAUMAX está habilitado. Pulsa su logo y vuelve a abrir el Método racional.'],['MDT 5 m sin productos','Lee el error concreto: cobertura, descarga, ventana, cierre o TauDEM. Comprueba que se ha descargado el MDT y que el cierre corresponde a la cuenca. Cancela y reintenta; 25 m puede servir para contrastar la zona.'],['La generación tarda','Comprueba el progreso y la extensión. Una malla más fina requiere más celdas. Puedes cancelar y cambiar la resolución o el umbral.'],['No aparece una red','Revisa el umbral de inicio de corriente y la cobertura. Activa Automático o reduce el umbral con criterio cartográfico.'],['Configurar capas no elige el par esperado','Exporta MDT y direcciones de la misma generación en ResolucionMejorada. Comprueba que ambos existan y no se hayan sustituido por otros archivos.'],['Referencia vacía','Activa la capa, comprueba la conexión y el zoom. El servidor puede no tener cobertura o estar temporalmente indisponible.'],['Actualizar falla','Lee el mensaje. Revisa conexión y permisos sobre la carpeta del plugin, finaliza cálculos y reintenta. No se debe interpretar una descarga incompleta como instalación correcta.'],['No se abre el lector PDF','Lee las páginas en Ayuda o asocia un lector PDF en el sistema operativo.']])
+    table([['Situación','Comprobación y acción'],['No aparecen los botones GEA','Comprueba que HidroCAUMAX está habilitado. Pulsa su logo y vuelve a abrir el Método racional.'],['MDT 5 m sin productos','Lee el error concreto: cobertura, descarga, ventana, cierre o TauDEM. Comprueba que se ha descargado el MDT y que el cierre corresponde a la cuenca. Cancela y reintenta; 25 m puede servir para contrastar la zona.'],['La generación tarda','Comprueba el progreso y la extensión. Una malla más fina requiere más celdas. Puedes cancelar y cambiar la resolución o el umbral.'],['No aparece una red','Revisa el umbral de inicio de corriente y la cobertura. Activa Automático o reduce el umbral con criterio cartográfico.'],['Conflicto entre MDT y direcciones','Selecciona una pareja compatible de la misma resolución. Para restaurar las capas originales, pulsa Valores por defecto y Aceptar en Configurar capas de cálculo.'],['Referencia vacía','Activa la capa, comprueba la conexión y el zoom. El servidor puede no tener cobertura o estar temporalmente indisponible.'],['Actualizar falla','Lee el mensaje. Revisa conexión y permisos sobre la carpeta del plugin, finaliza cálculos y reintenta. No se debe interpretar una descarga incompleta como instalación correcta.'],['No se abre el lector PDF','Lee las páginas en Ayuda o asocia un lector PDF en el sistema operativo.']])
     p('Información útil para comunicar un fallo','h2')
     p('Indica versión técnica del plugin y QGIS, punto y CRS, resolución, paso ejecutado y mensaje completo. Para D8, añade la extensión, el umbral y si el error ocurrió en descarga, cálculo o exportación. El registro de mensajes de QGIS ayuda a conservar el error exacto.')
     p('Publicaciones y documentación','h2')
@@ -180,7 +180,7 @@ def build():
         canvas.setStrokeColor(blue); canvas.setLineWidth(1); canvas.line(42,806,553,806)
         canvas.setFont('Manual',8); canvas.setFillColor(navy)
         canvas.drawString(42,818,'HidroCAUMAX v.1.0 | Manual de usuario')
-        canvas.drawString(42,25,'Paquete 1.0.12 · Edición 26/11/2026')
+        canvas.drawString(42,25,'Paquete 1.0.13 · Edición 26/11/2026')
         canvas.drawRightString(553,25,f'{doc.page} / {len(TITLES)}')
         canvas.restoreState()
     pdf=OUT/'Manual_HidroCAUMAX_v1.0.pdf'

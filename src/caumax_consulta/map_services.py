@@ -6,6 +6,7 @@ are references, not inputs to calculations. Neither carries delineation ownershi
 """
 from dataclasses import dataclass
 from pathlib import Path
+from weakref import WeakSet
 
 from qgis.PyQt import sip
 from qgis.PyQt.QtCore import QObject, QTimer, Qt, pyqtSignal
@@ -19,6 +20,44 @@ ROOT_PROPERTY = 'HidroCAUMAX/reference_group'
 SERVICE_PROPERTY = 'HidroCAUMAX/service_id'
 LAYER_PROPERTY = 'HidroCAUMAX/layer_id'
 FLAT_SERVICE_IDS = frozenset(('aemet', 'google_satellite', 'pfafstetter', 'corine'))
+_reference_loaders = WeakSet()
+
+
+def reference_layers(project):
+    """Ownership survives layer renaming, moving and restoring a project."""
+    return [layer for layer in project.mapLayers().values()
+            if layer.customProperty(SERVICE_PROPERTY, '')
+            and layer.customProperty(LAYER_PROPERTY, '')]
+
+
+def _project_loaders(project):
+    return [loader for loader in tuple(_reference_loaders)
+            if not sip.isdeleted(loader) and not loader._disposed and loader.project is project]
+
+
+def references_loading(project):
+    return any(loader.busy for loader in _project_loaders(project))
+
+
+def is_reference_group(group):
+    return (group.customProperty(ROOT_PROPERTY, '') == 'v1'
+            or bool(group.customProperty(SERVICE_PROPERTY, '')))
+
+
+def clear_reference_layers(project):
+    """Cancel this project's reference loads and detach layers, keeping files."""
+    for loader in _project_loaders(project):
+        loader.cancel()
+    identifiers = [layer.id() for layer in reference_layers(project)]
+    project.removeMapLayers(identifiers)
+    def prune(parent):
+        for node in list(parent.children()):
+            if isinstance(node, QgsLayerTreeGroup):
+                prune(node)
+                if not node.children() and is_reference_group(node):
+                    parent.removeChildNode(node)
+    prune(project.layerTreeRoot())
+    return len(identifiers)
 
 
 @dataclass(frozen=True)
@@ -189,7 +228,7 @@ PO_SERVICE = LocalRasterServiceSpec('po_clc2000', PO_TITLE,
     (StationLayerSpec('runoff_threshold', PO_TITLE, visible=False),),
     description='Umbral de escorrentía Po · España · CLC2000 · AdrLBallesteros. '
                 'Ráster local de 100 × 100 m, ETRS89 / UTM huso 30N (EPSG:25830), '
-                'incluido en ResolucionMejorada. Se propone como P0 al configurar las capas de cálculo; '
+                'incluido en ResolucionMejorada y disponible para selección manual como P0; '
                 'cargar su referencia en el mapa no cambia la configuración.')
 REFERENCE_SERVICES = ((AEMET_SERVICE, FLOOD_EXTENT_SERVICE, WMS_SERVICES[0], GOOGLE_SERVICE)
                       + WMS_SERVICES[1:] + (PO_SERVICE,))
@@ -587,6 +626,7 @@ class ReferenceLayerLoader(QObject):
         self._added = self._present = 0
         self._failures = []
         self._disposed = False
+        _reference_loaders.add(self)
         self.project.cleared.connect(self.cancel)
         self.project.layersAdded.connect(self._state_changed)
         self.project.layersRemoved.connect(self._state_changed)
@@ -596,9 +636,7 @@ class ReferenceLayerLoader(QObject):
     def _reference_ids(self):
         # Ownership survives renaming, moving and restoring a saved project.
         # Do not infer ownership from a layer/group title or its data source.
-        return [layer.id() for layer in self.project.mapLayers().values()
-                if layer.customProperty(SERVICE_PROPERTY, '')
-                and layer.customProperty(LAYER_PROPERTY, '')]
+        return [layer.id() for layer in reference_layers(self.project)]
 
     @property
     def has_references(self):
@@ -620,26 +658,14 @@ class ReferenceLayerLoader(QObject):
         """Detach references only; never delete their files or foreign layers."""
         if self._disposed:
             return 0
-        self.cancel()  # Discard late provider results before removing the layers.
-        identifiers = self._reference_ids()
-        self.project.removeMapLayers(identifiers)
-        root = self.project.layerTreeRoot()
-        def prune(parent):
-            for node in list(parent.children()):
-                if not isinstance(node, QgsLayerTreeGroup):
-                    continue
-                prune(node)
-                if not node.children() and (node.customProperty(ROOT_PROPERTY, '') == 'v1'
-                                            or node.customProperty(SERVICE_PROPERTY, '')):
-                    parent.removeChildNode(node)
-        prune(root)
+        count = clear_reference_layers(self.project)
         self._state_changed()
         bar = self._bar()
         if bar is not None:
             bar.pushMessage('HidroCAUMAX',
-                f'Capas de referencia retiradas: {len(identifiers)}. Pulsa Capas para cargarlas de nuevo.',
+                f'Capas de referencia retiradas: {count}. Pulsa Capas para cargarlas de nuevo.',
                 level=Qgis.Info, duration=5)
-        return len(identifiers)
+        return count
 
     @property
     def busy(self):
@@ -792,6 +818,7 @@ class ReferenceLayerLoader(QObject):
                 except (TypeError, RuntimeError):
                     pass
         self._disposed = True
+        _reference_loaders.discard(self)
         for signal in (self.project.layersAdded, self.project.layersRemoved, self.project.readProject,
                        self.busy_changed):
             try:
