@@ -1,7 +1,7 @@
 """Linked table/plot and reversible result-window integration for CAUMAX."""
 import math
 
-from qgis.PyQt.QtCore import QObject, QPointF, QRectF, Qt, pyqtSignal
+from qgis.PyQt.QtCore import QObject, QPointF, QRectF, Qt, QTimer, pyqtSignal
 from qgis.PyQt.QtGui import QColor, QPainter, QPainterPath, QPen
 from qgis.PyQt.QtWidgets import (
     QApplication, QAbstractItemView, QCheckBox, QColorDialog, QComboBox,
@@ -21,10 +21,8 @@ def display(value, decimals=3):
 
 
 def integer_ticks(low, high, count=9):
-    raw = max(1, (high - low) / max(1, count - 1))
-    magnitude = 10 ** math.floor(math.log10(raw))
-    step = max(v * magnitude for v in (1, 2, 5, 10) if v * magnitude <= raw)
-    step = max(1, int(step))
+    step = max(1, math.ceil((high - low) / max(5, count - 1)))
+    step = min(step, max(1, math.floor((high - low) / 6)))
     return list(range(math.ceil(low / step) * step, math.floor(high / step) * step + 1, step))
 
 
@@ -85,7 +83,8 @@ class FrequencyPlot(QWidget):
             xticks = integer_log_ticks(low, high, max(6, min(12, self.width() // 65)))
         else:
             xticks = integer_ticks(x0, x1, max(6, self.width() // 65))
-        return xticks, integer_ticks(y0, y1)
+        count_y = max(6, min(10, int(self.plot_rect().height() / (self.fontMetrics().height() + 8))))
+        return xticks, integer_ticks(y0, y1, count_y)
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -153,7 +152,7 @@ class FrequencyPlot(QWidget):
                 if point.flow is None:
                     continue
                 pos = self.coordinate(point.period, point.flow)
-                if not rect.contains(pos):
+                if not rect.adjusted(-.5, -.5, .5, .5).contains(pos):
                     continue
                 text = f'{display(point.period)}; {display(point.flow, 2)}'
                 width = metrics.horizontalAdvance(text) + 8
@@ -172,7 +171,7 @@ class FrequencyPlot(QWidget):
         candidates = [(math.hypot(self.coordinate(p.period, p.flow).x() - position.x(),
                                  self.coordinate(p.period, p.flow).y() - position.y()), p)
                       for p in self.points if p.flow is not None and
-                      self.plot_rect().contains(self.coordinate(p.period, p.flow))]
+                      self.plot_rect().adjusted(-.5, -.5, .5, .5).contains(self.coordinate(p.period, p.flow))]
         distance, point = min(candidates, key=lambda item: item[0]) if candidates else (100, None)
         return point if distance <= 10 else None
 
@@ -253,7 +252,7 @@ class RationalFrequencyDialog(QDialog):
         layout.addWidget(description)
         splitter = QSplitter(Qt.Horizontal, self)
         self.table = QTableWidget(0, 2, self)
-        self.table.setHorizontalHeaderLabels(['Periodo de retorno\nT (años)', 'Caudal punta\n(m³/s)'])
+        self.table.setHorizontalHeaderLabels(['Periodo de\nretorno T (años)', 'Caudal punta\n(m³/s)'])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.verticalHeader().hide()
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -262,13 +261,15 @@ class RationalFrequencyDialog(QDialog):
         self.table.setMinimumWidth(230)
         self.table.setMinimumHeight(220)
         self.plot = FrequencyPlot(model, self)
+        self.plot.setFixedSize(422, 268)
+        splitter.setFixedHeight(268)
         splitter.addWidget(self.table)
         splitter.addWidget(self.plot)
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
-        splitter.setSizes([250, 735])
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 0)
+        splitter.setSizes([250, 422])
         layout.addWidget(splitter, 1)
-        controls = QHBoxLayout()
+        controls = QGridLayout()
         self.labels_check = QCheckBox('Mostrar etiquetas', self)
         self.grid_check = QCheckBox('Cuadrícula', self)
         self.grid_check.setChecked(True)
@@ -282,28 +283,31 @@ class RationalFrequencyDialog(QDialog):
         self.width_spin.setRange(1, 5)
         self.width_spin.setValue(2)
         reset = QPushButton('Restablecer vista', self)
-        for widget in (self.labels_check, self.grid_check, self.log_check, self.color_button,
-                       self.style_combo, QLabel('Grosor:', self), self.width_spin, reset):
-            controls.addWidget(widget)
-        controls.addStretch(1)
+        controls.addWidget(self.labels_check, 0, 0)
+        controls.addWidget(self.grid_check, 0, 1)
+        controls.addWidget(self.log_check, 0, 2, 1, 3)
+        controls.addWidget(self.color_button, 1, 0)
+        controls.addWidget(self.style_combo, 1, 1)
+        controls.addWidget(QLabel('Grosor:', self), 1, 2)
+        controls.addWidget(self.width_spin, 1, 3)
+        controls.addWidget(reset, 1, 4)
+        controls.setColumnStretch(1, 1)
         layout.addLayout(controls)
         help_label = QLabel('Rueda: ampliar o reducir · Arrastrar: desplazar · Doble clic: restablecer. '
                             'Los ejes muestran marcas enteras; los puntos conservan sus decimales.', self)
         help_label.setWordWrap(True)
         layout.addWidget(help_label)
-        queries = QHBoxLayout()
+        queries = QVBoxLayout()
         self.period_spin = self._spin(2, 500, model.accepted_period)
         self.flow_spin = self._spin(0, max(1e6, model.accepted_flow * 100), model.accepted_flow)
         self.flow_spin.setDecimals(2)
         self.forward_result, self.inverse_result = QLabel(self), QLabel(self)
         self.forward_result.setWordWrap(True)
         self.inverse_result.setWordWrap(True)
-        self.forward_button = QPushButton('Estimar caudal', self)
-        self.inverse_button = QPushButton('Estimar periodo', self)
         queries.addWidget(self._query_box('Periodo → caudal', 'Periodo de retorno (T) · años',
-                                         self.period_spin, self.forward_button, self.forward_result))
+                                         self.period_spin, self.forward_result))
         queries.addWidget(self._query_box('Caudal → periodo', 'Caudal punta (m³/s)',
-                                         self.flow_spin, self.inverse_button, self.inverse_result))
+                                         self.flow_spin, self.inverse_result))
         layout.addLayout(queries)
         self.method_label = QLabel('Estimaciones: interpolación lineal del caudal respecto a log(T), '
             'entre los valores disponibles, incluido el resultado aceptado por CAUMAX. '
@@ -329,30 +333,54 @@ class RationalFrequencyDialog(QDialog):
         self.style_combo.currentIndexChanged.connect(lambda _: self._plot_setting('line_style', self.style_combo.currentData()))
         self.color_button.clicked.connect(self._choose_color)
         reset.clicked.connect(self.plot.reset_view)
-        self.forward_button.clicked.connect(self.estimate_forward)
-        self.inverse_button.clicked.connect(self.estimate_inverse)
+        self._forward_timer = QTimer(self)
+        self._inverse_timer = QTimer(self)
+        for timer in (self._forward_timer, self._inverse_timer):
+            timer.setSingleShot(True)
+        self._forward_timer.timeout.connect(self.estimate_forward)
+        self._inverse_timer.timeout.connect(self.estimate_inverse)
+        self.period_spin.valueChanged.connect(self._queue_forward)
+        self.flow_spin.valueChanged.connect(self._queue_inverse)
+        self.period_spin.editingFinished.connect(self.estimate_forward)
+        self.flow_spin.editingFinished.connect(self.estimate_inverse)
         self._refresh(model.accepted_period)
+        self.estimate_forward(add=False)
+        self.estimate_inverse(add=False)
         available = (self.screen() or QApplication.primaryScreen()).availableGeometry()
-        self.resize(min(1120, available.width() - 40), min(700, available.height() - 60))
+        # Requested default: 50% of the observed 844 px plot width and 60%
+        # of its 447 px height, with aligned table and compact controls.
+        self.resize(min(698, available.width() - 40), min(600, available.height() - 60))
+        layout.activate()
+        self.resize(self.width(), min(self.height() + 268 - self.plot.height(), available.height() - 60))
+        splitter.setSizes([250, 422])
 
     def _spin(self, low, high, value):
         spin = QDoubleSpinBox(self)
         spin.setLocale(self.locale())
-        spin.setDecimals(3)
+        spin.setDecimals(2)
         spin.setRange(low, high)
         spin.setValue(value)
-        spin.setKeyboardTracking(False)
+        spin.setKeyboardTracking(True)
+        spin.setFixedWidth(spin.fontMetrics().horizontalAdvance('99999,99') + 28)
         return spin
 
-    def _query_box(self, title, caption, spin, button, result):
+    def _query_box(self, title, caption, spin, result):
         box = QGroupBox(title, self)
-        grid = QGridLayout(box)
-        grid.addWidget(QLabel(caption, box), 0, 0)
-        grid.addWidget(spin, 0, 1)
-        grid.addWidget(button, 1, 1)
-        grid.addWidget(result, 1, 0)
-        grid.setColumnStretch(0, 1)
+        row = QHBoxLayout(box)
+        row.setSpacing(6)
+        label = QLabel(caption, box)
+        row.addWidget(label)
+        row.addWidget(spin)
+        row.addSpacing(18)
+        row.addWidget(result, 1)
         return box
+
+    def _queue_forward(self, value):
+        # Coalesce typing so transient prefixes do not become extra queries.
+        self._forward_timer.start(250)
+
+    def _queue_inverse(self, value):
+        self._inverse_timer.start(250)
 
     def _plot_setting(self, key, value):
         setattr(self.plot, key, value)
@@ -408,17 +436,20 @@ class RationalFrequencyDialog(QDialog):
         self.rows[period] = FrequencyPoint(period, flow, origin)
         return period
 
-    def estimate_forward(self):
+    def estimate_forward(self, add=True):
+        self._forward_timer.stop()
         try:
             period = self.period_spin.value()
             flow = self.model.flow_at(period)
             self.forward_result.setText(f'Caudal punta (m³/s): {display(flow, 2)}')
-            period = self._add(period, flow, 'Consulta T → Q')
-            self._refresh(period)
+            if add:
+                period = self._add(period, flow, 'Consulta T → Q')
+                self._refresh(period)
         except ValueError as error:
             self.forward_result.setText(str(error))
 
-    def estimate_inverse(self):
+    def estimate_inverse(self, add=True):
+        self._inverse_timer.stop()
         try:
             flow = self.flow_spin.value()
             periods, intervals = self.model.periods_at(flow)
@@ -426,10 +457,11 @@ class RationalFrequencyDialog(QDialog):
             texts += [f'{display(a)}–{display(b)}' for a, b in intervals]
             self.inverse_result.setText('Periodo de retorno (T): ' + '; '.join(texts) + ' años'
                 + (' (intervalo de soluciones)' if intervals else ' (varias soluciones)' if len(periods) > 1 else ''))
-            selected = None
-            for period in periods + tuple(p for pair in intervals for p in pair):
-                selected = self._add(period, flow, 'Consulta Q → T')
-            self._refresh(selected)
+            if add:
+                selected = None
+                for period in periods + tuple(p for pair in intervals for p in pair):
+                    selected = self._add(period, flow, 'Consulta Q → T')
+                self._refresh(selected)
         except ValueError as error:
             self.inverse_result.setText(str(error))
 

@@ -35,7 +35,7 @@ Al pulsar Calcular en la ventana real de CAUMAX, se abrió automáticamente el n
 | 100 | 9,63 |
 | 500 | 12,11 |
 
-La tabla final tiene solo T y Q. Tabla y gráfico comparten altura y posición superior. Las pruebas Qt hacen clic en filas y puntos, añaden consultas en ambos sentidos, verifican el zoom y los estilos, y comprueban que no se modifican los datos ni el resultado nativo. También cubren redondeo solo visual, periodos fraccionarios, resultados cancelados, datos ausentes, restricciones regionales, múltiples soluciones y tramos constantes. Las consultas se identifican como interpolaciones de Q respecto a log(T), sin extrapolación; no se confunden con un nuevo ajuste GEV nativo.
+La tabla final tiene solo T y Q. Tabla y gráfico comparten altura y posición superior. El gráfico mide 422×268 píxeles, frente a los 844×447 medidos en la primera vista. Las pruebas Qt hacen clic en filas y puntos, incluidos los extremos, añaden consultas automáticas en ambos sentidos sin botones de estimación, verifican el zoom y los estilos, y comprueban que no se modifican los datos ni el resultado nativo. La entrada y el resultado aparecen en una línea por recuadro y los selectores contiguos a sus etiquetas admiten dos decimales. También se cubren redondeo solo visual, periodos fraccionarios, resultados cancelados, datos ausentes, restricciones regionales, múltiples soluciones y tramos constantes. Las consultas se identifican como interpolaciones de Q respecto a log(T), sin extrapolación; no se confunden con un nuevo ajuste GEV nativo. Se ha renderizado la vista final desde el mismo diálogo Qt con los valores observados en QGIS.
 
 ## Referencias, instalación y limpieza
 

@@ -2,6 +2,7 @@
 
 - Al aceptar Calcular en el Método racional, abre una tabla de dos columnas alineada con un gráfico interactivo: T=2, 5, 10, 25, 100 y 500 años, más el periodo elegido. Cuantiles con un máximo de dos decimales y coma; precisión interna conservada.
 - Consultas T→Q y Q→T incorporadas a la tabla y al gráfico, selección vinculada, zoom, desplazamiento, color, tipo/grosor de línea, cuadrícula, escala lineal/logarítmica y etiquetas opcionales. Marcas enteras en ambos ejes.
+- Consultas automáticas sin botones de estimación; entrada y resultado en una línea por recuadro, selectores junto a la etiqueta y con máximo dos decimales. Gráfico reducido a 422×268 píxeles (50 % de anchura y 60 % de altura), con tabla alineada.
 - Mantiene el resultado nativo y obtiene los otros cuantiles con las mismas funciones y datos de CAUMAX. Las consultas adicionales interpolan Q respecto a log(T), sin extrapolar; se indican datos ausentes, restricciones regionales e inversas múltiples.
 
 - Corrige el traslado del criterio de cierre validado al motor TauDEM y a la comprobación fina; mantiene la codificación ESRI/CAUMAX y las validaciones de correspondencia entre cuencas.
