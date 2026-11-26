@@ -17,6 +17,12 @@ KIND_PROPERTY = 'HidroCAUMAX/boundary_kind'
 _NAMES = {'original': 'Divisoria original', 'suavizada': 'Divisoria suavizada'}
 
 
+def boundary_display_name(analysis):
+    """Short, spatial-resolution-only name for our QGIS watershed layers."""
+    return (f'HidroCAUMAX · Divisoria '
+            f'{float(analysis.cell_width):g}x{float(analysis.cell_height):g} m')
+
+
 def storage_directory():
     """Use durable QGIS profile data, not the operating system temporary folder."""
     return Path(QgsApplication.qgisSettingsDirPath()) / 'HidroCAUMAX' / 'boundaries'
@@ -166,6 +172,10 @@ class BoundaryLayers:
         layers = self._existing(key)
         root = project.layerTreeRoot()
         group = next((node for node in root.children() if node.customProperty(OWNER_PROPERTY) == key), None)
+        title = boundary_display_name(analysis)
+        if group is not None:
+            # Reuse persistent layers while migrating older coordinate-heavy labels.
+            group.setName(title)
         for kind, geometry in geometries.items():
             attributes = [kind, int(degree) if kind == 'suavizada' else 0,
                           analysis.cell_width, analysis.cell_height, analysis.outlet_x, analysis.outlet_y]
@@ -173,12 +183,11 @@ class BoundaryLayers:
             if layer is None:
                 layer = self._open_or_create(key, kind, crs, geometry, attributes)
             self._populate(layer, geometry, attributes)
-            layer.setName(_NAMES[kind] + (f' · grado {int(degree)}' if kind == 'suavizada' else ''))
+            layer.setName(title + (f' · suavizada (grado {int(degree)})'
+                                   if kind == 'suavizada' else ''))
             layers[kind] = layer
             if group is None:
-                group = create_result_group(project,
-                    f'HidroCAUMAX · Divisoria [X={analysis.outlet_x:g}; Y={analysis.outlet_y:g}; '
-                    f'{analysis.cell_width:g}×{analysis.cell_height:g} m]', 20)
+                group = create_result_group(project, title, 20)
                 group.setCustomProperty(OWNER_PROPERTY, key)
             if project.mapLayer(layer.id()) is None:
                 project.addMapLayer(layer, False)
