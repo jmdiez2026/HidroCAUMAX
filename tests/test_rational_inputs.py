@@ -146,11 +146,29 @@ class BridgeTests(unittest.TestCase):
                 self.txtResultReturnPeriod=QLineEdit('100',self)
                 self.flow_behavior='accept'
 
+            def getFlow(self, runoff, intensity):
+                return 10.346
+
+            def _getInterpolatedFlow(self, period):
+                return 12.346
+
             def calculate(self):
                 if self.flow_behavior=='abort':
                     return
                 if self.flow_behavior=='raise':
                     raise ValueError('native failure')
+                if self.flow_behavior=='direct':
+                    flow = self.getFlow(.5, 10.)
+                    self.txtResultReturnPeriod.setText('100')
+                    self.txtResultFlow.setText(str(round(flow)))
+                    return 'native accepted'
+                if self.flow_behavior=='interpolated':
+                    for ignored in range(6):
+                        self.getFlow(.5, 10.)
+                    flow = self._getInterpolatedFlow(60)
+                    self.txtResultReturnPeriod.setText('60')
+                    self.txtResultFlow.setText(str(round(flow)))
+                    return 'native accepted'
                 self.txtResultReturnPeriod.setText('100')
                 self.txtResultFlow.setText('27')
                 return 'native accepted'
@@ -222,10 +240,11 @@ class BridgeTests(unittest.TestCase):
         self.dialog.calculateParameters()
         self.assertEqual(events[-1][2]['ready_writes'],[False,True])
         self.assertEqual(self.dialog.calculate(),'native accepted')
-        self.assertEqual(text_changes,[])
+        self.assertEqual(text_changes,['27.00'])
         self.assertEqual(events[-1][1],'flow')
         self.assertTrue(events[-1][2]['completed'])
-        self.assertEqual(events[-1][2]['flow_writes'],['27'])
+        self.assertEqual(events[-1][2]['flow_writes'],['27','27.00'])
+        self.assertEqual(self.dialog.txtResultFlow.text(),'27.00')
         self.assertEqual(events[-1][2]['period_writes'],['100'])
         self.assertEqual([stage for _,stage in starts],['parameters','flow'])
         self.assertNotIn('setText',vars(self.dialog.txtResultFlow))
@@ -233,6 +252,32 @@ class BridgeTests(unittest.TestCase):
         self.bridge.stop()
         self.assertIs(self.dialog.calculate.__func__,original_flow)
         self.assertNotIn('calculate',vars(self.dialog))
+
+    def test_two_decimals_preserve_true_native_precision_for_standard_return(self):
+        events=[]
+        self.bridge.calculation_finished.connect(
+            lambda dialog,stage,event: events.append((stage,event)))
+        self.bridge.start()
+        self.dialog.flow_behavior='direct'
+        self.assertEqual(self.dialog.calculate(),'native accepted')
+        self.assertEqual(self.dialog.txtResultFlow.text(),'10.35')
+        self.assertEqual(events[-1][1]['flow_writes'],['10','10.35'])
+        self.assertEqual(events[-1][1]['period_writes'],['100'])
+        self.assertNotIn('getFlow',vars(self.dialog))
+        self.assertNotIn('_getInterpolatedFlow',vars(self.dialog))
+        self.assertNotIn('setText',vars(self.dialog.txtResultFlow))
+
+    def test_two_decimals_use_fitted_flow_at_manual_return_period(self):
+        events=[]
+        self.bridge.calculation_finished.connect(
+            lambda dialog,stage,event: events.append((stage,event)))
+        self.bridge.start()
+        self.dialog.flow_behavior='interpolated'
+        self.assertEqual(self.dialog.calculate(),'native accepted')
+        self.assertEqual(self.dialog.txtResultReturnPeriod.text(),'60')
+        # Six native getFlow calls are input quantiles, not Q(T=60).
+        self.assertEqual(self.dialog.txtResultFlow.text(),'12.35')
+        self.assertEqual(events[-1][1]['flow_writes'],['12','12.35'])
 
     def test_observer_rejects_cancelled_or_failed_calculation_with_old_results_visible(self):
         events=[]
