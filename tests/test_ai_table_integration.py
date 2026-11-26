@@ -82,7 +82,7 @@ class AITableIntegrationTests(unittest.TestCase):
     def test_real_request_updates_only_table_and_cleans_up_without_opening_a_window(self):
         from qgis.PyQt.QtWidgets import QApplication, QDialog
         from caumax_consulta import ai_analysis as ai
-        from test_ai_analysis import FakeReply, FakeManager, response, structured
+        from test_ai_analysis import FakeReply, FakeManager, response, compact
         dialog = self.dialog
         ai._CACHE.clear()
         ai._NEXT_REQUEST_AT = 0.
@@ -104,7 +104,7 @@ class AITableIntegrationTests(unittest.TestCase):
             self.assertEqual({id(widget) for widget in QApplication.topLevelWidgets()},windows)
             request.start()
             self.assertEqual(len(manager.requests),1)
-            reply.buffer.extend(response(structured()))
+            reply.buffer.extend(response(compact()))
             reply.finished.emit()
             self.assertIsNone(dialog._ai_request)
             self.assertTrue(dialog.analysis_header_button.isEnabled())
