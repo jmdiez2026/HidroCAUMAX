@@ -225,26 +225,48 @@ class RationalLayersBridgeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'referencia'):
             binding.panel.context_getter()
 
-    def test_collapse_restores_exact_layout_items_and_native_actions(self):
-        original = [self.dialog.layout().itemAt(i) for i in range(self.dialog.layout().count())]
+    def test_independent_d8_dialog_preserves_native_layout_and_reopens(self):
+        original = [self.dialog.layout().itemAt(i)
+                    for i in range(self.dialog.layout().count())]
         listener = Mock()
         self.dialog.btnClose.clicked.connect(listener)
-        binding = self.attach(expand=True)
-        self.assertIsNotNone(binding.body_scroll)
-        self.assertIs(self.dialog.btnClose.parentWidget(), self.dialog)
-        self.assertLess(self.dialog.btnClose.mapTo(self.dialog, self.dialog.btnClose.rect().center()).y(), binding.container.y())
+        binding = self.attach()
+        native_geometry = QRect(self.dialog.geometry())
+        native_body = self.dialog.body
+        binding.button.click()
+        self.app.processEvents()
+        window = binding.layers_dialog
+        panel = binding.panel
+        self.assertIsInstance(window, QDialog)
+        self.assertTrue(window.isVisible())
+        self.assertFalse(window.isModal())
+        self.assertEqual(window.objectName(), 'HidroCAUMAXRationalLayersDialog')
+        self.assertIs(binding.scroll.parentWidget(), window)
+        self.assertIs(native_body.parentWidget(), self.dialog)
+        self.assertIsNone(binding.body_scroll)
+        self.assertEqual(self.dialog.geometry(), native_geometry)
+        for index, item in enumerate(original):
+            self.assertIs(self.dialog.layout().itemAt(index), item)
+
+        # Clicking twice focuses the same dialog, it does not duplicate it.
+        binding.button.click()
+        self.app.processEvents()
+        self.assertIs(binding.layers_dialog, window)
+        window.close()
+        self.app.processEvents()
+        panel.dispose.assert_called_once()
+        self.assertIsNone(binding.layers_dialog)
+        self.assertIsNone(binding.panel)
+
+        binding.button.click()
+        self.app.processEvents()
+        self.assertIsNotNone(binding.panel)
+        self.assertIsNot(binding.layers_dialog, window)
+        next_panel = binding.panel
         self.dialog.btnClose.click()
         listener.assert_called_once()
-        for unused in range(2):
-            binding.button.click()
-            self.app.processEvents()
-            for index, item in enumerate(original):
-                self.assertIs(self.dialog.layout().itemAt(index), item)
-            self.assertIs(self.dialog.body.parentWidget(), self.dialog)
-            binding.button.click()
-            self.app.processEvents()
         self.dialog.close()
-        binding.panel.dispose.assert_called_once()
+        next_panel.dispose.assert_called_once()
         self.assertFalse(self.bridge._bindings)
 
     def test_foreign_named_control_is_not_adopted(self):
@@ -269,7 +291,7 @@ class RationalLayersBridgeTests(unittest.TestCase):
         dispose.assert_called_once()
         self.assertNotIn(victim_id, self.bridge._bindings)
 
-    def test_original_native_ui_fits_small_and_large_screens_and_restores_items(self):
+    def test_independent_d8_window_fits_screens_without_resizing_native_ui(self):
         root = Path(__file__).resolve().parents[1]
         source = Path(os.environ.get('HIDROCAUMAX_CAUMAX_SOURCE', str(root.parent/'inputs/caumax/caumax')))
         ui = source/'rationalmethoddialog.ui'
@@ -283,28 +305,29 @@ class RationalLayersBridgeTests(unittest.TestCase):
         self.dialog.setAttribute(Qt.WA_DontShowOnScreen)
         self.dialog.show()
         self.app.processEvents()
-        original = [self.dialog.layout().itemAt(i) for i in range(self.dialog.layout().count())]
+        original = [self.dialog.layout().itemAt(i)
+                    for i in range(self.dialog.layout().count())]
         binding = self.attach()
+        native_geometry = QRect(self.dialog.geometry())
         for width, height in ((800, 600), (1200, 900)):
             with self.subTest(screen=(width, height)):
                 screen = SimpleNamespace(availableGeometry=lambda: QRect(0, 0, width, height))
                 with patch.object(self.dialog, 'screen', return_value=screen):
                     binding.button.click()
                     self.app.processEvents()
-                    self.bridge._fit_panel(binding)
-                    self.app.processEvents()
-                    self.assertFalse(binding.scroll.isHidden())
+                    window = binding.layers_dialog
+                    self.assertIsNotNone(window)
+                    self.assertTrue(window.isVisible())
+                    self.assertLessEqual(window.width(), width)
+                    self.assertLessEqual(window.height(), height)
                     self.assertGreater(binding.scroll.height(), 80)
-                    self.assertLessEqual(self.dialog.height(), height)
-                    self.assertGreaterEqual(binding.scroll.width(), binding.container.width()-2)
-                    for button in (self.dialog.btnReport, self.dialog.btnCalculate, self.dialog.btnClose):
-                        bottom = button.mapTo(self.dialog, button.rect().bottomRight()).y()
-                        self.assertLess(bottom, self.dialog.height())
-                        self.assertGreater(button.mapTo(self.dialog, button.rect().topLeft()).y(), 0)
-                    binding.button.click()
-                    self.app.processEvents()
+                    self.assertGreater(binding.scroll.width(), 300)
+                    self.assertEqual(self.dialog.geometry(), native_geometry)
                     for index, item in enumerate(original):
                         self.assertIs(self.dialog.layout().itemAt(index), item)
+                    window.close()
+                    self.app.processEvents()
+                    self.assertIsNone(binding.layers_dialog)
 
     def test_basin_button_precedes_generation_and_opens_native_basin_before_flow_exists(self):
         requested=Mock();self.bridge.on_basin_requested=requested
