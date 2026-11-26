@@ -339,6 +339,10 @@ class RationalLayersBridge(QObject):
             else:
                 self._invalidate_flow(binding)
         self._sync_basin(binding)
+        # CAUMAX intentionally blocks textChanged on I1/Id and intensity.
+        # Their numeric values still change, so refresh the comma overlay.
+        if binding.decimal_presentation is not None:
+            binding.decimal_presentation.sync()
 
     def _request_basin(self, binding):
         if not self._running or self._bindings.get(id(binding.dialog)) is not binding:
@@ -367,6 +371,8 @@ class RationalLayersBridge(QObject):
         for key, binding in tuple(self._bindings.items()):
             try:
                 self._sync_basin(binding)
+                if binding.decimal_presentation is not None:
+                    binding.decimal_presentation.sync()
                 if binding.save_action is not None:
                     original = binding.native_save_button
                     binding.save_action.setEnabled(original is not None and original.isEnabled())
