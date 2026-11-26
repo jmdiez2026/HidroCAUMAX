@@ -9,7 +9,7 @@ import math
 from pathlib import Path
 import sys
 
-from qgis.PyQt.QtCore import QEvent, QObject, QRect, QTimer, Qt
+from qgis.PyQt.QtCore import QObject, QTimer, Qt
 from qgis.PyQt.QtWidgets import (
     QApplication, QDialog, QFrame, QHBoxLayout, QLabel, QPushButton,
     QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
@@ -92,6 +92,7 @@ class _Binding:
     input_crs: object
     connections: list = field(default_factory=list)
     panel: object = None
+    layers_dialog: object = None
     exact_point: object = None
     exact_fields: object = None
     body_scroll: object = None
@@ -123,7 +124,7 @@ class _Binding:
 
 
 class RationalLayersBridge(QObject):
-    """Own only this bridge's controls and temporary body-scroll wrapper."""
+    """Own the native buttons and an independent, modeless D8-generation window."""
     def __init__(self, iface, on_basin_requested=None, on_query_started=None,
                  on_basin_refined=None):
         super().__init__(iface.mainWindow())
@@ -369,9 +370,8 @@ class RationalLayersBridge(QObject):
                 if binding.save_action is not None:
                     original = binding.native_save_button
                     binding.save_action.setEnabled(original is not None and original.isEnabled())
-                if binding.button.isChecked():
+                if binding.layers_dialog is not None and binding.layers_dialog.isVisible():
                     self._refresh(binding)
-                    self._fit_panel(binding)
             except RuntimeError:
                 self._detach(key)
         for dialog in QApplication.topLevelWidgets():
@@ -420,8 +420,7 @@ class RationalLayersBridge(QObject):
         button = _LogoBasinButton('Generar capas resolución mejorada', container)
         button.setObjectName(BUTTON_NAME)
         button.setStyleSheet(BASIN_BUTTON_STYLE)
-        button.setCheckable(True)
-        button.setToolTip('Desplegar las opciones de generación para el punto de cálculo actual.')
+        button.setToolTip('Abrir en una ventana independiente las opciones de generación para el punto actual.')
         row.addWidget(button, 0, Qt.AlignLeft)
         row.addStretch()
         layout.addLayout(row)
@@ -430,21 +429,17 @@ class RationalLayersBridge(QObject):
         error.setWordWrap(True)
         error.hide()
         layout.addWidget(error)
-        scroll = QScrollArea(container)
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setWidgetResizable(True)
-        scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        scroll.hide()
-        layout.addWidget(scroll)
+        # Do not enlarge or rearrange the native CAUMAX window: the full D8
+        # section belongs to its own independently resizable dialog.
         dialog.layout().addWidget(container)
-        binding = _Binding(dialog, container, button, scroll, error, self._canvas_crs())
+        binding = _Binding(dialog, container, button, None, error, self._canvas_crs())
         from .native_decimal import RationalDecimalPresentation
         binding.decimal_presentation = RationalDecimalPresentation(dialog)
         binding.basin_button, binding.action_row = basin_button, row
         binding.save_action, binding.native_save_button = save_action, native_save
         key = id(dialog)
         self._bindings[key] = binding
-        self._connect(binding, button.toggled, lambda checked: self._toggle(binding, checked))
+        self._connect(binding, button.clicked, lambda checked=False: self._open_layers_dialog(binding))
         self._connect(binding, basin_button.clicked, lambda checked=False: self._request_basin(binding))
         if native_save is not None:
             self._connect(binding, save_action.clicked,
@@ -468,7 +463,6 @@ class RationalLayersBridge(QObject):
         closed = lambda *unused: self._detach(key)
         self._connect(binding, dialog.finished, closed)
         self._connect(binding, dialog.destroyed, closed)
-        dialog.installEventFilter(self)
         try:
             self._accept_parameters(binding, observed=False)
         except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
@@ -485,22 +479,6 @@ class RationalLayersBridge(QObject):
     def _connect(binding, signal, slot):
         signal.connect(slot)
         binding.connections.append((signal, slot))
-
-    @staticmethod
-    def _move_item(item, layout, parent, index=None, stretch=0):
-        widget, child_layout = item.widget(), item.layout()
-        if widget is not None:
-            hidden = widget.isHidden()
-            widget.setParent(parent)
-            widget.setVisible(not hidden)
-        elif child_layout is not None:
-            child_layout.setParent(layout)
-        if index is None:
-            layout.addItem(item)
-            layout.setStretch(layout.count()-1, stretch)
-        else:
-            layout.insertItem(index, item)
-            layout.setStretch(index, stretch)
 
     def _compact_native_layout(self, binding):
         """Reduce vertical whitespace of native CAUMAX layouts, reversibly.
@@ -583,118 +561,82 @@ class RationalLayersBridge(QObject):
             except RuntimeError:
                 pass
 
-    def _wrap_native_body(self, binding):
-        root = binding.dialog.layout()
-        footer = binding.dialog.horizontalLayout_2
-        index = next((i for i in range(root.count()) if root.itemAt(i).layout() is footer), None)
-        if index is None or index == 0:
+    def _open_layers_dialog(self, binding):
+        """Open the complete D8 tools in a separate, non-modal QGIS window."""
+        if not self._running or self._bindings.get(id(binding.dialog)) is not binding:
             return
-        host = QWidget(binding.dialog)
-        body = QVBoxLayout(host)
-        body.setContentsMargins(0, 0, 0, 0)
-        body.setSpacing(root.spacing())
-        for unused in range(index):
-            stretch = root.stretch(0)
-            item = root.takeAt(0)
-            binding.body_items.append((item, stretch))
-            self._move_item(item, body, host, stretch=stretch)
-        scroll = QScrollArea(binding.dialog)
-        scroll.setObjectName('HidroCAUMAXRationalNativeBodyScroll')
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setWidgetResizable(True)
-        scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
-        scroll.setMinimumHeight(0)
-        scroll.setWidget(host)
-        root.insertWidget(0, scroll, 1)
-        binding.body_scroll, binding.body_host = scroll, host
-
-    def _restore_native_body(self, binding):
-        if binding.body_scroll is None:
-            return
-        root, body = binding.dialog.layout(), binding.body_host.layout()
-        root.removeWidget(binding.body_scroll)
-        for index, (original_item, stretch) in enumerate(binding.body_items):
-            item = body.takeAt(0)
-            self._move_item(item, root, binding.dialog, index=index, stretch=stretch)
-        binding.body_items.clear()
-        binding.body_scroll.takeWidget()
-        binding.body_host.deleteLater()
-        binding.body_scroll.deleteLater()
-        binding.body_host = binding.body_scroll = None
-
-    def _toggle(self, binding, checked):
-        if not checked:
-            self._collapse(binding)
-            return
+        existing = binding.layers_dialog
+        if existing is not None:
+            try:
+                existing.show()
+                existing.raise_()
+                existing.activateWindow()
+                return
+            except RuntimeError:
+                binding.layers_dialog = binding.panel = binding.scroll = None
+        window = None
         try:
-            if binding.panel is None:
-                from .rational_layers_panel import RationalLayersPanel
-                binding.panel = RationalLayersPanel(self.iface, lambda: self._context(binding),
-                    binding.scroll, on_basin_refined=lambda key, analysis, query:
+            # Qt.Window gives a real floating dialog even with a QDialog parent.
+            # Non-modal is intentional: users must be able to inspect the QGIS
+            # map and use the manual outlet-selection tools while it is open.
+            window = QDialog(binding.dialog, Qt.Window)
+            window.setObjectName('HidroCAUMAXRationalLayersDialog')
+            window.setWindowTitle('HidroCAUMAX · Generación capas resolución mejorada')
+            window.setModal(False)
+            window.setAttribute(Qt.WA_DeleteOnClose, True)
+            layout = QVBoxLayout(window)
+            layout.setContentsMargins(9, 9, 9, 9)
+            scroll = QScrollArea(window)
+            scroll.setObjectName('HidroCAUMAXRationalLayersScroll')
+            scroll.setFrameShape(QFrame.NoFrame)
+            scroll.setWidgetResizable(True)
+            scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+            from .rational_layers_panel import RationalLayersPanel
+            panel = RationalLayersPanel(
+                self.iface, lambda: self._context(binding), scroll,
+                on_basin_refined=lambda key, analysis, query:
                     self._notify_basin_refined(binding, key, analysis, query))
-                binding.scroll.setWidget(binding.panel)
+            scroll.setWidget(panel)
+            layout.addWidget(scroll, 1)
+            footer = QHBoxLayout()
+            footer.addStretch(1)
+            close_button = QPushButton('Cerrar', window)
+            close_button.setObjectName('HidroCAUMAXRationalLayersClose')
+            close_button.clicked.connect(window.close)
+            footer.addWidget(close_button)
+            layout.addLayout(footer)
+            binding.layers_dialog, binding.scroll, binding.panel = window, scroll, panel
+            window.finished.connect(lambda *unused: self._layers_closed(binding, window))
+            screen = binding.dialog.screen() or QApplication.primaryScreen()
+            available = screen.availableGeometry()
+            window.resize(min(800, max(350, available.width() - 40)),
+                          min(560, max(280, available.height() - 40)))
             binding.error.hide()
-            binding.collapsed_geometry = QRect(binding.dialog.geometry())
-            self._wrap_native_body(binding)
-            binding.scroll.show()
+            window.show()
             self._refresh(binding)
-            self._fit_panel(binding, expand=True)
         except Exception as error:
-            binding.button.setChecked(False)
+            if window is not None:
+                try:
+                    window.close()
+                except RuntimeError:
+                    pass
+            if binding.panel is not None:
+                self._layers_closed(binding, binding.layers_dialog)
             binding.error.setText('No se pudo abrir la generación de capas: ' + str(error))
             binding.error.show()
 
-    def _fit_panel(self, binding, expand=False):
-        if binding.fitting or binding.panel is None or not binding.button.isChecked():
+    @staticmethod
+    def _layers_closed(binding, window):
+        """Cancel workers and release the panel whenever its window closes."""
+        if binding.layers_dialog is not window:
             return
-        binding.fitting = True
-        try:
-            dialog, scroll = binding.dialog, binding.scroll
-            screen = dialog.screen() or QApplication.primaryScreen()
-            available = screen.availableGeometry()
-            if expand:
-                # Recompute the old native minimum before shrinking: its
-                # formerly unscrollable body may exceed the entire screen.
-                dialog.layout().invalidate()
-                dialog.layout().activate()
-                height = min(available.height()-24, dialog.height()+max(160, binding.panel.sizeHint().height()))
-                width = min(available.width()-24, dialog.width())
-                dialog.resize(max(1, width), max(1, height))
-                dialog.move(max(available.left()+8, min(dialog.x(), available.right()-dialog.width()-8)),
-                            max(available.top()+8, min(dialog.y(), available.bottom()-dialog.height()-8)))
-            root = dialog.layout()
-            fixed = root.contentsMargins().top()+root.contentsMargins().bottom()
-            fixed += root.spacing()*max(0, root.count()-1)
-            for index in range(root.count()):
-                item = root.itemAt(index)
-                if item.widget() not in (binding.container, binding.body_scroll):
-                    fixed += item.minimumSize().height()
-            fixed += binding.action_row.sizeHint().height()+binding.container.layout().spacing()
-            room = max(0, dialog.height()-fixed)
-            preferred = max(120, binding.panel.sizeHint().height())
-            panel_height = min(preferred, max(0, round(room*.45)))
-            scroll.setFixedHeight(panel_height)
-            root.activate()
-            if expand:
-                binding.auto_geometry = QRect(dialog.geometry())
-        finally:
-            binding.fitting = False
-
-    def _collapse(self, binding):
-        binding.scroll.hide()
-        restore = (binding.collapsed_geometry is not None and binding.auto_geometry is not None
-                   and binding.dialog.geometry() == binding.auto_geometry)
-        self._restore_native_body(binding)
-        binding.dialog.layout().activate()
-        if restore:
-            binding.dialog.setGeometry(binding.collapsed_geometry)
-        binding.collapsed_geometry = binding.auto_geometry = None
-
-    def eventFilter(self, watched, event):
-        binding = self._bindings.get(id(watched))
-        if binding is not None and event.type() == QEvent.Resize:
-            self._fit_panel(binding)
-        return super().eventFilter(watched, event)
+        panel = binding.panel
+        binding.layers_dialog = binding.scroll = binding.panel = None
+        if panel is not None:
+            try:
+                panel.dispose()
+            except RuntimeError:
+                pass
 
     def _detach(self, key):
         binding = self._bindings.pop(key, None)
@@ -707,14 +649,14 @@ class RationalLayersBridge(QObject):
                 signal.disconnect(slot)
             except (RuntimeError, TypeError):
                 pass
-        if binding.panel is not None:
+        if binding.layers_dialog is not None:
             try:
-                binding.panel.dispose()
+                binding.layers_dialog.close()
             except RuntimeError:
                 pass
+        if binding.panel is not None:
+            self._layers_closed(binding, binding.layers_dialog)
         try:
-            binding.dialog.removeEventFilter(self)
-            self._collapse(binding)
             self._restore_native_layout(binding)
             self._restore_native_outline(binding)
             if binding.native_save_button is not None:
