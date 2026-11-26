@@ -47,7 +47,14 @@ def _reference_area_m2(analysis, query=None):
     diagnostic=analysis.diagnostics or {}
     snap=diagnostic.get('outlet_snap') or {}
     if getattr(query, 'source_kind', 'caumax_raster') == 'rational':
-        area=float((getattr(query, 'rational_context', None) or {})['area_m2'])
+        # The embedded "Generar capas resolución mejorada" panel receives a
+        # RationalTerrainQuery (paths and point only), not the portable
+        # RationalBasinQuery with a frozen rational_context. Requiring that
+        # snapshot here raised KeyError('area_m2'), stopping DEM discovery and
+        # leaving every export button disabled. For live queries the analysed
+        # native D8 watershed is the only verified area reference.
+        context = getattr(query, 'rational_context', None) or {}
+        area = float(context['area_m2'] if 'area_m2' in context else analysis.area_m2)
     elif (min(analysis.cell_width,analysis.cell_height)==500.0
             and snap.get('method')=='manual_cell_d8'
             and snap.get('selection_mode')=='user_selected_cell'
