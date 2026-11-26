@@ -36,6 +36,8 @@ class FutureQgisUpdates(unittest.TestCase):
         self.assertIn('refs/heads/main',workflow)
         self.assertIn('Verificar o crear etiqueta',workflow)
         self.assertIn('git/ref/tags/',workflow)
+        self.assertIn('compare/{sha}...{branch["sha"]}',workflow)
+        self.assertIn("comparison.get('status') != 'ahead'",workflow)
         self.assertIn('actions/deploy-pages@v4',workflow)
         self.assertNotIn('retire-older-releases',workflow)
 
