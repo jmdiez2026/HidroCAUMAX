@@ -63,6 +63,24 @@ class BoundaryLayersTests(unittest.TestCase):
         self.assertTrue(next(layers['original'].getFeatures()).geometry().isGeosEqual(self.original))
         self.assertAlmostEqual(next(layers['original'].getFeatures()).geometry().area(), 9900.)
 
+    def test_boundary_legend_names_show_only_mdt_resolution(self):
+        layers = self.update(degree=3)
+        root = self.project.layerTreeRoot()
+        group = root.findLayer(layers['original'].id()).parent()
+        self.assertEqual(group.name(), 'HidroCAUMAX · Divisoria 25x25 m')
+        self.assertEqual(layers['original'].name(), 'HidroCAUMAX · Divisoria 25x25 m')
+        self.assertEqual(layers['suavizada'].name(),
+                         'HidroCAUMAX · Divisoria 25x25 m · suavizada (grado 3)')
+        self.assertNotIn('X=', group.name())
+        self.assertNotIn('Y=', group.name())
+        self.analysis.cell_width = self.analysis.cell_height = 5.
+        self.query.dem_path = str(self.folder / 'mdt5.tif')
+        fine = self.update(degree=5)
+        fine_group = root.findLayer(fine['original'].id()).parent()
+        self.assertEqual(fine_group.name(), 'HidroCAUMAX · Divisoria 5x5 m')
+        self.assertEqual(fine['original'].name(), 'HidroCAUMAX · Divisoria 5x5 m')
+        self.assertNotEqual(fine_group, group)
+
     def test_degree_updates_geometry_and_attributes_without_replacing_layer_ids(self):
         before = self.update()
         ids = {kind: layer.id() for kind, layer in before.items()}
