@@ -156,7 +156,7 @@ class ContextTests(unittest.TestCase):
     def test_abridged_ai_payload_only_requests_table_comments(self):
         context = ai.build_context(*sample_state())
         payload = ai.build_payload(context)
-        user = json.loads(payload['messages'][1]['content'].split('\\n', 1)[1])
+        user = json.loads(payload['messages'][1]['content'].split('\n', 1)[1])
         self.assertEqual(len(user['parameters']), 19)
         self.assertEqual([row['key'] for row in user['parameters']],
                          [metric.key for metric in METRICS])
