@@ -24,21 +24,21 @@ ROLE_PROPERTY = "hidrocaumax/dem_display_role"
 SOURCE_PROPERTY = "hidrocaumax/dem_source"
 RESOLUTION_PROPERTY = "hidrocaumax/dem_resolution"
 STYLE_PROPERTY = 'hidrocaumax/dem_style_revision'
-STYLE_REVISION = 'natural-relief-1'
+STYLE_REVISION = 'terrain-contrast-2'
 HILLSHADE_OPACITY = 0.80
 # Display-only illumination. The source elevations and hydrological D8 inputs
 # remain untouched; zFactor is an explicit cartographic vertical exaggeration.
 HILLSHADE_Z_FACTOR = 3.0
 HILLSHADE_ALTITUDE = 35.0
 NATURAL_RAMP = (
-    (0.00, '#91AD8D'), (0.18, '#ABC09A'), (0.36, '#C3CBA6'),
-    (0.54, '#D6C9AA'), (0.72, '#CDBCA8'), (0.86, '#CEC6BA'),
-    (1.00, '#E5E1D9'),
+    (0.00, '#356747'), (0.18, '#6F9656'), (0.36, '#B4BD78'),
+    (0.54, '#E2CB91'), (0.72, '#BC9166'), (0.86, '#99775F'),
+    (1.00, '#F2EDE3'),
 )
 
 
 def _natural_ramp():
-    """Muted vegetation, warm earth and rock with continuous transitions."""
+    """Contrasting valley greens, ochre slopes and light summits."""
     return QgsGradientColorRamp(
         QColor(NATURAL_RAMP[0][1]), QColor(NATURAL_RAMP[-1][1]), False,
         [QgsGradientStop(value, QColor(colour)) for value, colour in NATURAL_RAMP[1:-1]])

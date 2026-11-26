@@ -31,7 +31,9 @@ class AemetStationTests(unittest.TestCase):
         cls.app.initQgis()
 
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
+        # QGIS/OGR can retain pooled read handles after deleting the layer on
+        # Windows; do not turn successful data assertions into cleanup errors.
+        self.temp = tempfile.TemporaryDirectory(ignore_cleanup_errors=os.name == 'nt')
         self.addCleanup(self.temp.cleanup)
         self.folder = Path(self.temp.name)
         self.arguments = {}

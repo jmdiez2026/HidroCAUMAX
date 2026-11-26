@@ -1,10 +1,10 @@
 """Improved-resolution products embedded in the native rational-method dialog."""
 from pathlib import Path
 
-from qgis.PyQt.QtCore import QTimer, Qt
+from qgis.PyQt.QtCore import QTimer, Qt, pyqtSignal
 from qgis.PyQt.QtWidgets import (
-    QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QPushButton,
-    QSpinBox, QWidget,
+    QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QPushButton, QMessageBox,
+    QSpinBox, QWidget, QBoxLayout,
 )
 from qgis.core import QgsGeometry, QgsPointXY
 
@@ -17,6 +17,7 @@ from .rational_layers_controller import RationalLayersController
 
 class RationalLayersPanel(DrainageControls):
     """Own this point's calculations without consulting a native basinCalc."""
+    content_changed = pyqtSignal()
 
     def __init__(self, iface, context_getter, parent=None, on_basin_refined=None):
         super().__init__(parent)
@@ -25,6 +26,24 @@ class RationalLayersPanel(DrainageControls):
         self._context_getter = context_getter
         self._disposed = self._loading = self._cleared = False
         self._queued_prepare = False
+        self._generation_running = False
+        self.help_label.setText('Genera las tres capas necesarias para ejecutar CAUMAX con resolución mayor de la original 500x500m (esquema D8-TauDEM/Esri): (1) ráster MDT, (2) ráster Direcciones de flujo, y (3) shape Red de Drenaje.')
+        self.layout().setSpacing(10)
+        self._drainage_controls_layout.setSpacing(8)
+        self._drainage_exports_widget.layout().setHorizontalSpacing(8)
+        self.cancel_button = QPushButton('Cancelar', self)
+        self.cancel_button.setObjectName('hidrocaumax_cancel_d8')
+        self.cancel_button.hide()
+        self.layout().removeWidget(self.drainage_progress)
+        progress_row = QHBoxLayout()
+        progress_row.addWidget(self.drainage_progress, 1)
+        progress_row.addWidget(self.cancel_button)
+        self.layout().addLayout(progress_row)
+        self.cancel_button.clicked.connect(self._cancel_generation)
+        self.delete_layers_button = QPushButton('Eliminar capas', self)
+        self.delete_layers_button.setObjectName('hidrocaumax_delete_generated_layers')
+        self.delete_layers_button.clicked.connect(self._delete_generated_layers)
+        progress_row.addWidget(self.delete_layers_button, 0, Qt.AlignRight)
         self._products = self._state = self._selector = None
         self._basin = None
         self._outlines = {}
@@ -42,11 +61,13 @@ class RationalLayersPanel(DrainageControls):
         resolution_row = QWidget(self)
         row = QHBoxLayout(resolution_row)
         row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(5)
+        row.setSpacing(8)
         row.addWidget(QLabel('Resolución MDT', self))
         self.resolution_combo = QComboBox(self)
         self.resolution_combo.setObjectName('hidrocaumax_improved_mdt_resolution')
-        self.resolution_combo.setMinimumContentsLength(14)
+        self.resolution_combo.setMinimumContentsLength(8)
+        self.resolution_combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.resolution_combo.setFixedWidth(self.fontMetrics().horizontalAdvance('500×500 m') + 38)
         row.addWidget(self.resolution_combo)
         self.outlet_button = QPushButton('Ajustar punto de cierre', self)
         self.outlet_button.setToolTip('Corrección manual opcional del cierre del MDT seleccionado.')
@@ -59,7 +80,7 @@ class RationalLayersPanel(DrainageControls):
         outline_row = QWidget(self)
         outline_layout = QHBoxLayout(outline_row)
         outline_layout.setContentsMargins(0, 0, 0, 0)
-        outline_layout.setSpacing(6)
+        outline_layout.setSpacing(10)
         self.original_check = QCheckBox('Original · contorno de celdas', self)
         self.original_check.setChecked(True)
         self.smooth_check = QCheckBox('Suavizada', self)
@@ -212,6 +233,8 @@ class RationalLayersPanel(DrainageControls):
     def _start_delineation(self, key=None):
         if self._disposed or self._cleared:
             return
+        if key is not None and key != self._queued_resolution:
+            return  # An explicit cancellation invalidated this queued callback.
         key = key or self._selected_key()
         if key != self._selected_key() or not self._selected_available():
             return
@@ -223,6 +246,7 @@ class RationalLayersPanel(DrainageControls):
         self._update_controls()
 
     def _resolution_changed(self, *args):
+        self._generation_running = False
         if self._loading or self._disposed:
             return
         self._resolution_explicit = True
@@ -274,6 +298,79 @@ class RationalLayersPanel(DrainageControls):
         for button in self.product_buttons:
             button.setEnabled(exportable)
         self.drainage_progress.setVisible(busy)
+        self.cancel_button.setVisible(self._generation_running and busy)
+        self.delete_layers_button.setEnabled(not busy)
+        self.content_changed.emit()
+
+    def fit_to_width(self, width=None):
+        super().fit_to_width(width)
+        # Export captions differ greatly in length. Equal columns clip the
+        # direction button even when the complete row fits the window.
+        exports = self._drainage_exports_widget.layout()
+        margins = self.layout().contentsMargins()
+        available = (self.width() if width is None else width) - margins.left() - margins.right()
+        if not hasattr(self, '_export_headings'):
+            self._export_headings = [exports.itemAtPosition(0, col).widget() for col in range(3)]
+        stacked = sum(button.width() for button in self.product_buttons) + 16 > available
+        if getattr(self, '_export_stacked', None) != stacked:
+            for widget in (*self._export_headings, *self.product_buttons):
+                exports.removeWidget(widget)
+            for col in range(3):
+                exports.setColumnStretch(col, 0)
+            for index, (label, button) in enumerate(zip(self._export_headings, self.product_buttons)):
+                exports.addWidget(label, 2 * index if stacked else 0, 0 if stacked else index)
+                exports.addWidget(button, 2 * index + 1 if stacked else 1,
+                                  0 if stacked else index, Qt.AlignHCenter)
+            self._export_stacked = stacked
+        if not stacked:
+            for column, button in enumerate(self.product_buttons):
+                exports.setColumnStretch(column, max(1, button.width()))
+        required = sum(widget.sizeHint().width() for widget in self._drainage_controls) + 32
+        self._drainage_controls_layout.setDirection(
+            QBoxLayout.TopToBottom if required > available else QBoxLayout.LeftToRight)
+        self.layout().invalidate()
+        height = self.layout().heightForWidth(self.width() if width is None else width)
+        if height > 0:
+            self.setMinimumHeight(height)
+
+    def _cancel_generation(self):
+        self._generation_running = False
+        self._queued_prepare = False
+        self._queued_resolution = None
+        self._threshold_timer.stop()
+        self._close_selector()
+        self._controller.cancel()
+        self._products = self._state = None
+        self._status('Generación de capas D8 cancelada. Puedes volver a generar las capas.', 0)
+
+    def _delete_generated_layers(self):
+        from .generated_cleanup import deletion_plan, delete_generated
+        plan = deletion_plan()
+        if not plan['layers'] and not plan['files']:
+            self._status('No hay capas ni archivos generados por HidroCAUMAX para eliminar.', 0)
+            return
+        prompt = QMessageBox(self)
+        prompt.setWindowTitle('Eliminar capas de HidroCAUMAX')
+        prompt.setIcon(QMessageBox.Warning)
+        prompt.setText(f"Se retirarán {len(plan['layers'])} capas de QGIS y se eliminarán "
+                       f"{len(plan['files'])} archivos del disco duro.")
+        prompt.setInformativeText('Se incluyen las exportaciones registradas en este proyecto y las capas '
+            'temporales de sesiones anteriores. Los datos originales se conservan. Esta acción no se puede deshacer.')
+        prompt.setDetailedText('Capas:\n' + '\n'.join(plan['layers'].values()) +
+                               '\n\nArchivos:\n' + '\n'.join(sorted(plan['files'])) +
+                               '\n\nOrígenes conservados:\n' + '\n'.join(plan['protected']))
+        remove = prompt.addButton('Eliminar capas', QMessageBox.DestructiveRole)
+        cancel = prompt.addButton('Cancelar', QMessageBox.RejectRole)
+        prompt.setDefaultButton(cancel)
+        prompt.exec()
+        if prompt.clickedButton() is not remove:
+            return
+        result = delete_generated(plan)
+        message = f"Se han retirado {result['layers']} capas y eliminado {len(result['removed'])} archivos."
+        if result['failed']:
+            message += f" No se han podido eliminar {len(result['failed'])} archivos."
+            QMessageBox.warning(self, 'Archivos conservados', '\n'.join(result['failed']))
+        self._status(message, 0)
 
     def _status(self, text, progress=0):
         if self._disposed:
@@ -291,14 +388,21 @@ class RationalLayersPanel(DrainageControls):
             if (resolution is not None and not self._controller.busy and
                     not any(option.get('available') and str(option.get('key')) != '500'
                             for option in self._controller.options)):
+                self._generation_running = True
+                self._cleared = False
+                self._queued_prepare = True
                 self._status('Consultando de nuevo la cobertura de MDT mejorados…', 0)
                 resolution.discover()
+                self._update_controls()
             else:
                 self._status('500×500 m: cuenca original CAUMAX. Para generar D8 elige 25 o 5 m.', 100)
             return
         self.refresh_context()
         if self._controller.query is None:
             return
+        if self._controller.busy:
+            return
+        self._generation_running = True
         if self._controller.resolution is None and not self._controller.busy:
             # Clear may have cancelled the first reference task. A new explicit
             # Generate request can restart it; periodic bridge scans cannot.
@@ -306,8 +410,6 @@ class RationalLayersPanel(DrainageControls):
             self._controller.set_context(None)
             self._queued_prepare = True
             self._controller.set_context(query)
-            return
-        if self._controller.busy:
             return
         if not self._selected_available():
             self._queued_prepare = True
@@ -406,7 +508,8 @@ class RationalLayersPanel(DrainageControls):
                 self.smooth_check.isChecked(), self.smoothing_degree.value())
             prefix = ('Divisoria original CAUMAX · 500 m' if key == '500'
                       else f'Divisoria MDT mejorado · {key} m')
-            self._status(f'{prefix}: {analysis.area_m2 / 1e6:.3f} km². '
+            area = format(analysis.area_m2 / 1e6, '.3f').replace('.', ',')
+            self._status(f'{prefix.replace("0.5", "0,5")}: {area} km². '
                          'Contorno original y suavizado disponibles en QGIS.', 100)
         except (RuntimeError, ValueError, TypeError) as error:
             self._status('No se puede mostrar/suavizar la divisoria: ' + str(error), 0)
@@ -444,6 +547,7 @@ class RationalLayersPanel(DrainageControls):
         # Native fields or source files may change while the worker completes.
         if self.refresh_context() or self._controller.query is None:
             return
+        self._generation_running = False
         self._products, self._state = products, state
         self._loading = True
         try:
@@ -472,6 +576,8 @@ class RationalLayersPanel(DrainageControls):
     def _failed(self, text):
         if self._disposed:
             return
+        self._generation_running = False
+        self._queued_prepare = False
         self._status(text, 0)
         # A failed automatic match never silently changes to a manually chosen
         # basin. The optional button remains available for explicit review.
@@ -593,6 +699,7 @@ class RationalLayersPanel(DrainageControls):
         if self._disposed:
             return
         self._cleared = True
+        self._generation_running = False
         self._queued_prepare = False
         self._controller.cancel()
         self._discard_result(clear_boundary=True)

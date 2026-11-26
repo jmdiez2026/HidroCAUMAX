@@ -150,6 +150,8 @@ def write_layer(layer, destination):
         raise ValueError("El archivo se ha escrito, pero no se puede abrir como capa válida.")
     if saved.featureCount() != layer.featureCount():
         raise ValueError("La capa guardada no contiene todas las geometrías de la cuenca.")
+    from .generated_cleanup import register_dataset
+    register_dataset(actual_path)
     return saved
 
 

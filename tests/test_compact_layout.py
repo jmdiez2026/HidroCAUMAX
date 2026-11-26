@@ -84,7 +84,7 @@ class CompactLayoutTests(unittest.TestCase):
                 self.resize(width)
                 left,right = dialog.context_mdt,dialog.context_point
                 self.assertEqual(left.text(),'MDT activo: 25mx25m')
-                self.assertEqual(right.text(),'Punto original de consulta: X=500062.5; Y=4699937.5 · EPSG:25830')
+                self.assertEqual(right.text(),'Punto original de consulta: X=500062,5; Y=4699937,5 · EPSG:25830')
                 self.assertEqual(left.y(),right.y())
                 self.assertLess(left.geometry().right(),right.geometry().left())
                 self.assertFalse(right.wordWrap())
@@ -178,7 +178,7 @@ class CompactLayoutTests(unittest.TestCase):
         dialog.analysis = replace(dialog.analysis,diagnostics=diagnostics)
         dialog._update_context()
         self.assertIn('Cierre aproximado a centro de celda; no es una sección topográfica exacta.',dialog.context.text())
-        self.assertIn('12.50 m',dialog.context.text())
+        self.assertIn('12,50 m',dialog.context.text())
         self.assertIn('La referencia sigue siendo el punto original.',dialog.context.text())
 
 

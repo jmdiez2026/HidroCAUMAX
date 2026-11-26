@@ -5,6 +5,7 @@ from pathlib import Path
 
 from qgis.PyQt.QtCore import QObject, pyqtSignal
 from qgis.core import QgsApplication, QgsTask
+from .refinement_snap import LEGACY_SELECTION_POLICY
 
 
 def _refinement_reference(analysis, reference):
@@ -14,10 +15,12 @@ def _refinement_reference(analysis, reference):
         return dict(geometry_wkb=bytes.fromhex(snap['reference_geometry_wkb_hex']),
             main_course_wkb=bytes.fromhex(snap.get('reference_course_wkb_hex') or ''),
             crs_wkt=snap['reference_crs_wkt'], cell_width=float(reference.cell_width),
-            cell_height=float(reference.cell_height))
+            cell_height=float(reference.cell_height),
+            selection_policy=snap.get('selection_policy', LEGACY_SELECTION_POLICY))
     return dict(geometry_wkb=bytes(reference.geometry_wkb),
         main_course_wkb=bytes(reference.main_course_wkb or b''), crs_wkt=str(reference.crs_wkt),
-        cell_width=float(reference.cell_width), cell_height=float(reference.cell_height))
+        cell_width=float(reference.cell_width), cell_height=float(reference.cell_height),
+        selection_policy=LEGACY_SELECTION_POLICY)
 
 
 def _signature(source, analysis, reference, footprint, bin_dir):
@@ -31,6 +34,7 @@ def _signature(source, analysis, reference, footprint, bin_dir):
         digest.update(len(raw).to_bytes(8, 'big'))
         digest.update(raw)
     digest.update(str(footprint['crs_wkt']).encode('utf-8'))
+    digest.update(str(footprint.get('selection_policy', LEGACY_SELECTION_POLICY)).encode('utf-8'))
     return (str(source.resolve()), stat.st_size, stat.st_mtime_ns,
         float(analysis.selected_x), float(analysis.selected_y),
         float(analysis.outlet_x), float(analysis.outlet_y), str(analysis.crs_wkt),

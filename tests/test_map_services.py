@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 
 from osgeo import gdal, osr
 from qgis.PyQt import sip
-from qgis.PyQt.QtCore import QEventLoop, QThread, QTimer
+from qgis.PyQt.QtCore import QCoreApplication, QEvent, QEventLoop, QThread, QTimer
 from qgis.PyQt.QtWidgets import QMainWindow
 from qgis.core import (Qgis, QgsApplication, QgsCoordinateReferenceSystem, QgsDataSourceUri,
                        QgsProject, QgsRasterLayer, QgsRectangle, QgsVectorLayer)
@@ -47,6 +47,59 @@ class ReferenceLayerTests(unittest.TestCase):
     def layer_factory(self, uri, title, provider):
         self.requests.append((uri, title, provider, QThread.currentThread()))
         return QgsRasterLayer(self.path, title, 'gdal')
+
+    def tearDown(self):
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+
+    def test_bundled_po_is_last_local_offline_layer_and_kept_on_repeat(self):
+        self.assertTrue(maps.PO_SERVICE.path.is_file())
+        self.assertEqual(maps.REFERENCE_SERVICES[-1], maps.PO_SERVICE)
+        self.load()
+        report = maps.load_reference_layers(self.project, services=(maps.PO_SERVICE,))
+        self.assertEqual((report.added, report.failed), (1, 0))
+        root, _ = self.groups()
+        node = root.children()[-1]
+        layer = node.layer()
+        self.assertEqual(layer.name(), 'Po España (CLC2000) 100mx100m · AdrLBallesteros')
+        self.assertEqual(layer.providerType(), 'gdal')
+        self.assertEqual(layer.crs().authid(), 'EPSG:25830')
+        self.assertEqual((layer.rasterUnitsPerPixelX(), layer.rasterUnitsPerPixelY()), (100, 100))
+        self.assertFalse(node.isVisible())
+        self.assertEqual(Path(layer.source()), maps.PO_SERVICE.path)
+        node.setItemVisibilityChecked(True)
+        report = maps.load_reference_layers(self.project, services=(maps.PO_SERVICE,))
+        self.assertEqual((report.added, report.existing), (0, 1))
+        self.assertTrue(node.isVisible())
+        self.assertEqual(clear_delineation_layers(self.project), 0)
+
+    def test_flood_extents_follow_aemet_exact_titles_off_and_distinct_endpoints(self):
+        service = maps.FLOOD_EXTENT_SERVICE
+        services = (maps.AEMET_SERVICE, service, maps.WMS_SERVICES[0])
+        # Simulate a different completion order, then insert AEMET above.
+        maps.load_reference_layers(self.project, services=services[1:], layer_factory=self.layer_factory)
+        maps.load_reference_layers(self.project, services=services, layer_factory=self.layer_factory,
+            station_factory=lambda title, cancelled: QgsVectorLayer('Point?crs=EPSG:4326', title, 'memory'))
+        root, groups = self.groups()
+        self.assertEqual(list(groups), ['aemet', 'snczi_extent', 'snczi'])
+        self.assertEqual(groups['snczi_extent'].name(), 'Extensión zonas inundables')
+        self.assertEqual([node.name() for node in groups['snczi_extent'].children()], [
+            'Z.I con alta probabilidad (T=10)', 'Z.I. de inundación frecuente (T=50)',
+            'Z.I. probabilidad media u ocasional (T=100)',
+            'Z.I. con probabilidad baja o excepcional (T=500)'])
+        self.assertFalse(any(node.isVisible() for node in root.findLayers()))
+        for period, spec in zip((10, 50, 100, 500), service.layers):
+            uri = QgsDataSourceUri(); uri.setEncodedUri(maps.build_wms_uri(service, spec))
+            self.assertEqual(uri.param('layers'), f'Zi_laminas_q{period}')
+            self.assertEqual(uri.param('styles'), f'Zi_laminas_q{period}_estilo')
+            self.assertTrue(uri.param('url').endswith(f'/Zi_laminas_q{period}/wms'))
+
+    def test_unavailable_extent_does_not_skip_other_return_period_endpoints(self):
+        def factory(uri, title, provider):
+            decoded = QgsDataSourceUri(); decoded.setEncodedUri(uri)
+            return (QgsRasterLayer('/absent.tif', title, 'gdal')
+                if decoded.param('layers') == 'Zi_laminas_q10' else self.layer_factory(uri, title, provider))
+        report = maps.load_reference_layers(self.project, services=(maps.FLOOD_EXTENT_SERVICE,), layer_factory=factory)
+        self.assertEqual((report.added, report.failed), (3, 1))
 
     def load(self, **kwargs):
         return maps.load_reference_layers(self.project, services=maps.WMS_SERVICES, layer_factory=self.layer_factory, **kwargs)
@@ -96,12 +149,13 @@ class ReferenceLayerTests(unittest.TestCase):
         self.assertTrue(all(not group.isExpanded() for group in groups.values()))
         flood = groups['snczi']
         self.assertTrue(flood.isMutuallyExclusive())
-        self.assertEqual([node.itemVisibilityChecked() for node in flood.children()], [False, True, False])
+        self.assertFalse(any(node.isVisible() for node in root.findLayers()))
+        self.assertEqual([node.itemVisibilityChecked() for node in flood.children()], [False, False, False])
         flood.children()[0].setItemVisibilityChecked(True)
         self.assertEqual([node.itemVisibilityChecked() for node in flood.children()], [True, False, False])
         agro = groups['agroclima']
         self.assertFalse(agro.itemVisibilityChecked())
-        self.assertEqual(sum(node.itemVisibilityChecked() for node in agro.children()), 1)
+        self.assertEqual(sum(node.itemVisibilityChecked() for node in agro.children()), 0)
         self.assertEqual(len(agro.children()), 17)
         self.assertFalse(any(node.isVisible() for node in agro.children()))
         root.setName('Mis referencias')
@@ -264,6 +318,8 @@ class ReferenceLayerTests(unittest.TestCase):
         loader.busy_changed.connect(lambda busy: None if busy else loop.quit())
         timer = QTimer(); timer.setSingleShot(True); timer.timeout.connect(loop.quit); timer.start(5000)
         self.assertTrue(loader.load())
+        progress_item = loader._message
+        self.assertIsNotNone(progress_item)
         self.assertFalse(loader.load())
         loop.exec_(); timer.stop()
         self.assertFalse(loader.busy, 'Background task did not finish')
@@ -275,6 +331,34 @@ class ReferenceLayerTests(unittest.TestCase):
         self.assertEqual(self.project.crs(), project_crs)
         self.assertTrue(self.canvas_bridge.autoSetupOnFirstLayer())
         self.assertIn('añadidas: 1', self.bar.currentItem().text())
+        self.assertNotIn(progress_item, self.bar.items())
+        self.assertEqual(len(self.bar.items()), 1)
+
+    def test_services_publish_independently_and_timeout_removes_only_our_message(self):
+        loader = self.make_loader()
+        loader.services = (maps.WMS_SERVICES[0], maps.WMS_SERVICES[-1])
+        with patch.object(maps.QgsApplication, 'taskManager', return_value=SimpleNamespace(addTask=Mock())):
+            self.assertTrue(loader.load())
+        tasks = sorted(loader._tasks, key=lambda task: task.pending[0][0].service_id)
+        fast, slow = tasks
+        progress_item = loader._message
+        self.assertTrue(fast.run())
+        fast.finished(True)
+        self.assertTrue(loader.busy)
+        self.assertGreater(len(self.project.mapLayers()), 0)
+        ids = set(self.project.mapLayers())
+        other = self.bar.pushWidget(self.bar.createMessage('Otro complemento', 'Mensaje ajeno'))
+        loader._timed_out()
+        self.assertFalse(loader.busy)
+        self.assertTrue(slow.isCanceled())
+        self.assertNotIn(progress_item, self.bar.items())
+        self.assertIn(other, self.bar.items())
+        self.assertIn('Sin cargar:', self.bar.currentItem().text())
+        self.assertEqual(set(self.project.mapLayers()), ids)
+        self.assertFalse(slow.run())
+        slow.finished(False)
+        self.assertEqual(set(self.project.mapLayers()), ids)
+        self.assertFalse(loader._retiring)
 
     def test_unload_or_project_clear_discards_late_task_results(self):
         for stop in ('dispose', 'clear'):
@@ -282,7 +366,7 @@ class ReferenceLayerTests(unittest.TestCase):
             manager = SimpleNamespace(addTask=Mock())
             with patch.object(maps.QgsApplication, 'taskManager', return_value=manager):
                 self.assertTrue(loader.load())
-            task = loader._task
+            task = next(iter(loader._tasks))
             self.assertTrue(task.run())
             if stop == 'dispose':
                 loader.dispose()

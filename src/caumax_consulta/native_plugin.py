@@ -7,6 +7,7 @@ from .caumax_bridge import CaumaxBridge
 from .basin_dialog import BasinDialog
 from .rational_export import RationalExportBridge
 from .rational_inputs import RationalInputsBridge
+from .rational_frequency_dialog import RationalFrequencyBridge
 from .rational_layers_bridge import RationalLayersBridge
 from .visible_dem import VisibleDemController
 from .update_ui import UpdateNotifier
@@ -26,10 +27,13 @@ class NativeCaumaxPlugin(QObject):
         self._bridge = CaumaxBridge(iface, self._open_basin, self._new_query_started)
         self._rational = RationalExportBridge(iface)
         self._rational_inputs = RationalInputsBridge(iface)
+        self._rational_frequency = RationalFrequencyBridge(iface, self)
         self._rational_layers = RationalLayersBridge(iface, self._open_basin,
             self._new_query_started, self._rational_basin_refined)
         self._rational_inputs.calculation_started.connect(self._rational_layers.calculation_started)
         self._rational_inputs.calculation_finished.connect(self._rational_layers.calculation_finished)
+        self._rational_inputs.calculation_started.connect(self._rational_frequency.calculation_started)
+        self._rational_inputs.calculation_finished.connect(self._rational_frequency.calculation_finished)
         self._visible_dem = VisibleDemController(iface, self)
         self._updates = UpdateNotifier(iface, self)
         self._map_services = ReferenceLayerLoader(iface, self)
@@ -95,6 +99,7 @@ class NativeCaumaxPlugin(QObject):
             self._bridge.stop()
             self._rational.stop()
             self._rational_inputs.stop()
+            self._rational_frequency.stop()
             self._rational_layers.stop()
             self._visible_dem.stop()
 
@@ -183,6 +188,7 @@ class NativeCaumaxPlugin(QObject):
         self._bridge.stop()
         self._rational.stop()
         self._rational_inputs.stop()
+        self._rational_frequency.stop()
         self._rational_layers.stop()
         self._visible_dem.stop()
         if hasattr(self, 'action'):

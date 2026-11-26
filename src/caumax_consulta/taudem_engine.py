@@ -431,7 +431,8 @@ def _preserved_outlet(directions_path, counts, transform, target_crs, x, y, para
             if outlet_analysis is not None:
                 fine_reference = dict(geometry_wkb=outlet_analysis.geometry_wkb,
                     main_course_wkb=outlet_analysis.main_course_wkb, crs_wkt=outlet_analysis.crs_wkt,
-                    cell_width=outlet_analysis.cell_width, cell_height=outlet_analysis.cell_height)
+                    cell_width=outlet_analysis.cell_width, cell_height=outlet_analysis.cell_height,
+                    selection_policy=refinement_reference.get('selection_policy', 'nearest_reference_section'))
                 checked, evidence = select_reference_outlet(directions_path, counts,
                     effective.x, effective.y, radius, fine_reference, cancelled,
                     reference_area_m2=outlet_analysis.area_m2)

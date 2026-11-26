@@ -28,6 +28,7 @@ from .metrics import shape_metrics
 from .morphology_table import ActionGroupBox, InterpretationDelegate, InterpretationHeader, fit_morphology_rows
 from .drainage_panel import DrainageControls, DrainageStatusLabel
 from .flow_quantiles import is_rational_query, rational_flow_text
+from .native_decimal import format_decimal
 
 
 BLUE_BUTTON_STYLE = '''
@@ -100,7 +101,7 @@ class BasinDialog(QDialog):
     def __init__(self, query, iface, parent=None, saved_session=None):
         super().__init__(parent)
         self.setObjectName('CaumaxCuencaHidrograficaDialog')
-        self.setWindowTitle('HidroCAUMAX v1.0.5 · Cuenca hidrográfica')
+        self.setWindowTitle('HidroCAUMAX v1.0.6 · Cuenca hidrográfica')
         self.setStyleSheet(BLUE_BUTTON_STYLE)
         self.setAttribute(Qt.WA_DeleteOnClose)
         self.setModal(False)
@@ -549,7 +550,7 @@ class BasinDialog(QDialog):
     def _update_context(self):
         query,analysis = self.query,self.analysis
         self.analysis_ai_button.setVisible(not is_rational_query(query))
-        coordinates = lambda value: f'{value:.3f}'.rstrip('0').rstrip('.')
+        coordinates = lambda value: format_decimal(value, '.3f').rstrip('0').rstrip(',')
         self.context_point.setText(
             f'Punto original de consulta: X={coordinates(query.x)}; Y={coordinates(query.y)} · '
             f'{query.crs.authid() or query.crs.description()}')
@@ -571,14 +572,14 @@ class BasinDialog(QDialog):
                 'La aplicación CAUMAX original utiliza MDT de tamaño de celda 500mx500m. '
                 'Aquí puede seleccionar una resolución mejorada con MDT oficiales (www.cnig.es). '
                 'Todos los cálculos se actualizarán automáticamente')
-            context = f'Caudal CAUMAX original: {query.flow:g} m³/s · T={query.period} años'
+            context = f'Caudal CAUMAX original: {format_decimal(query.flow)} m³/s · T={query.period} años'
         snap = analysis.diagnostics.get('outlet_snap') if analysis is not None else None
         if snap:
             crs = QgsCoordinateReferenceSystem.fromWkt(analysis.crs_wkt)
             context += (
-                f'\nCierre de cálculo (centro de celda): X={analysis.outlet_x:.3f}; '
-                f'Y={analysis.outlet_y:.3f} · {crs.authid() or crs.description()}\n'
-                f"Desplazamiento desde el punto original: {snap['distance_m']:.2f} m. "
+                f"\nCierre de cálculo (centro de celda): X={format_decimal(analysis.outlet_x, '.3f')}; "
+                f"Y={format_decimal(analysis.outlet_y, '.3f')} · {crs.authid() or crs.description()}\n"
+                f"Desplazamiento desde el punto original: {format_decimal(snap['distance_m'], '.2f')} m. "
                 'Mapa: original naranja; cierre ajustado azul.')
             context += ('\nCierre aproximado a centro de celda; no es una sección topográfica exacta. '
                         'La referencia sigue siendo el punto original.')
@@ -586,7 +587,7 @@ class BasinDialog(QDialog):
             crs = QgsCoordinateReferenceSystem.fromWkt(analysis.crs_wkt)
             context += (
                 f'\nCierre automático (centro de la celda del punto de consulta): '
-                f'X={analysis.outlet_x:.3f}; Y={analysis.outlet_y:.3f} · '
+                f"X={format_decimal(analysis.outlet_x, '.3f')}; Y={format_decimal(analysis.outlet_y, '.3f')} · "
                 f'{crs.authid() or crs.description()}. '
                 'Puedes modificarlo con «Ajuste Punto de Cierre».')
         self.context.setText(context)
@@ -837,8 +838,8 @@ class BasinDialog(QDialog):
         self._render_interpretations()
         crs = QgsCoordinateReferenceSystem.fromWkt(self.analysis.crs_wkt)
         summary = (
-            f'Malla de drenaje: {self.analysis.cell_width:g} × {self.analysis.cell_height:g} m. '
-            f'Centro de celda de cierre: X={self.analysis.outlet_x:.3f}; Y={self.analysis.outlet_y:.3f} '
+            f'Malla de drenaje: {format_decimal(self.analysis.cell_width)} × {format_decimal(self.analysis.cell_height)} m. '
+            f"Centro de celda de cierre: X={format_decimal(self.analysis.outlet_x, '.3f')}; Y={format_decimal(self.analysis.outlet_y, '.3f')} "
             f'({crs.authid() or crs.description()}).'
         )
         if self.analysis.notes:
@@ -1056,7 +1057,7 @@ class BasinDialog(QDialog):
             self.drainage_status.setText('Selecciona un MDT mejorado para preparar sus capas.')
         elif state and not busy:
             self.drainage_status.setText(
-                f"TauDEM · umbral {state['threshold_area_m2']/1e6:g} km² · "
+                f"TauDEM · umbral {format_decimal(state['threshold_area_m2']/1e6)} km² · "
                 f"{len(state['features'])} tramos. Cada archivo se exporta por separado.")
         elif not busy:
             self.drainage_status.setText('TauDEM predeterminado seleccionado. Pulsa Generar capas D8.')
@@ -1811,7 +1812,7 @@ class BasinDialog(QDialog):
             issues.append('cuantiles CAUMAX incompletos')
         self.resolution_status.setText(
             'Recálculo terminado con incidencias: ' + '; '.join(issues) + '.' if issues else
-            f'MDT de {self.analysis.cell_width:g} m: todos los cálculos actualizados automáticamente.')
+            f'MDT de {format_decimal(self.analysis.cell_width)} m: todos los cálculos actualizados automáticamente.')
         self.resolution_progress.hide()
         self._resume_outlet_selection()
 
@@ -2168,7 +2169,7 @@ class BasinDialog(QDialog):
         if self._disposed or generation != self._save_surface_generation or self._save_surface_task is None:
             return
         key = self._save_surface_task.save_item['key']
-        self.resolution_status.setText(f'MDT de {key} m: {text} {percent:.0f} %')
+        self.resolution_status.setText(f'MDT de {str(key).replace(".", ",")} m: {text} {percent:.0f} %')
         self.resolution_progress.setValue(round(percent))
 
     def _save_surface_finished(self, task, success):

@@ -240,6 +240,33 @@ class TauDEMOutletConsistencyTests(unittest.TestCase):
         self.assertEqual(result.metadata['outlet_selection']['method'], 'containing_cell')
         self.assert_session_roundtrip(result)
 
+    def test_rational_policy_survives_products_with_incompatible_coarse_axis(self):
+        from caumax_consulta.refinement_snap import NEAREST_CHAIN_SELECTION_POLICY
+        # The coarse initial course points east while the qualified fine river
+        # is west of the click. The legacy section rule rejects it, although
+        # both footprints identify the same unique drainage chain.
+        line = ogr.Geometry(ogr.wkbLineString)
+        line.AddPoint_2D(*self.click)
+        line.AddPoint_2D(self.click[0] + 500, self.click[1])
+        reference = dict(self.reference, main_course_wkb=bytes(line.ExportToWkb()),
+                         selection_policy=NEAREST_CHAIN_SELECTION_POLICY)
+        accepted = self.fixture.analyze(self.dem, reference, self.click).analysis
+        self.reference = controller_module._refinement_reference(accepted, self.coarse)
+        result = self.prepare(accepted)
+        self.assertEqual(result.analysis.diagnostics['outlet_snap']['selection_policy'],
+                         NEAREST_CHAIN_SELECTION_POLICY)
+        self.assertEqual((result.analysis.outlet_x, result.analysis.outlet_y),
+                         (accepted.outlet_x, accepted.outlet_y))
+        self.assertTrue(result.metadata['outlet_selection']['fine_reference_checked'])
+        self.assertTrue(result.metadata['outlet_selection']['coarse_reference_checked'])
+
+    def test_product_cache_distinguishes_closure_policy(self):
+        reference = controller_module._refinement_reference(self.validated, self.coarse)
+        changed = dict(reference, selection_policy='nearest_reference_chain_cell')
+        self.assertNotEqual(
+            controller_module._signature(self.dem, self.validated, self.coarse, reference, None),
+            controller_module._signature(self.dem, self.validated, self.coarse, changed, None))
+
     def test_manual_change_at_same_red_click_invalidates_previous_product_cache(self):
         tasks, received = [], []
         manager = SimpleNamespace(addTask=tasks.append)

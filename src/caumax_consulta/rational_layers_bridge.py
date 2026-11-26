@@ -103,7 +103,6 @@ class _Binding:
     auto_geometry: object = None
     fitting: bool = False
     basin_button: object = None
-    save_action: object = None
     native_save_button: object = None
     decimal_presentation: object = None
     hidden_native_outline: object = None
@@ -373,9 +372,6 @@ class RationalLayersBridge(QObject):
                 self._sync_basin(binding)
                 if binding.decimal_presentation is not None:
                     binding.decimal_presentation.sync()
-                if binding.save_action is not None:
-                    original = binding.native_save_button
-                    binding.save_action.setEnabled(original is not None and original.isEnabled())
                 if binding.layers_dialog is not None and binding.layers_dialog.isVisible():
                     self._refresh(binding)
             except RuntimeError:
@@ -400,19 +396,10 @@ class RationalLayersBridge(QObject):
         layout.setContentsMargins(0, 0, 0, 0)
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
-        # The existing exporter keeps ownership of its save operation. A
-        # proxy action in this row avoids reparenting/deleting the native button.
+        # Keep the exporter's ownership/lifecycle, but remove its requested
+        # save action from the visible rational-method controls.
         native_save = dialog.findChild(QPushButton, EXPORT_BUTTON_NAME)
-        save_action = _LogoBasinButton('Guardar cuenca...', container)
-        save_action.setObjectName('btnGuardarCuencaRacionalHidroCAUMAX')
-        save_action.setStyleSheet(BASIN_BUTTON_STYLE)
-        save_action.setToolTip('Guardar la cuenca original calculada por CAUMAX.')
-        save_action.setEnabled(native_save is not None and native_save.isEnabled())
-        row.addWidget(save_action, 0, Qt.AlignLeft)
         if native_save is not None:
-            # Keep the original exporter alive for the GEA-logo proxy, but take
-            # its duplicate blue button out of the native action layout.
-            # Hiding alone is not sufficient if Qt later re-shows the layout.
             dialog.horizontalLayout_2.removeWidget(native_save)
             native_save.hide()
         basin_button = _LogoBasinButton('Cuenca hidrográfica', container)
@@ -442,14 +429,11 @@ class RationalLayersBridge(QObject):
         from .native_decimal import RationalDecimalPresentation
         binding.decimal_presentation = RationalDecimalPresentation(dialog)
         binding.basin_button, binding.action_row = basin_button, row
-        binding.save_action, binding.native_save_button = save_action, native_save
+        binding.native_save_button = native_save
         key = id(dialog)
         self._bindings[key] = binding
         self._connect(binding, button.clicked, lambda checked=False: self._open_layers_dialog(binding))
         self._connect(binding, basin_button.clicked, lambda checked=False: self._request_basin(binding))
-        if native_save is not None:
-            self._connect(binding, save_action.clicked,
-                          lambda checked=False, source=native_save: source.click())
         for field_widget in (dialog.txtX, dialog.txtY):
             self._connect(binding, field_widget.textChanged, lambda *unused: self._coordinates_changed(binding))
         for name in _FLOW_INPUTS:
@@ -474,7 +458,7 @@ class RationalLayersBridge(QObject):
         except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
             pass
         self._sync_basin(binding)
-        for action in (save_action, basin_button, button):
+        for action in (basin_button, button):
             action.match_reference_buttons(
                 candidate for candidate in (getattr(dialog, 'btnReport', None),
                                             getattr(dialog, 'btnClose', None))
@@ -585,7 +569,8 @@ class RationalLayersBridge(QObject):
             # Qt.Window gives a real floating dialog even with a QDialog parent.
             # Non-modal is intentional: users must be able to inspect the QGIS
             # map and use the manual outlet-selection tools while it is open.
-            window = QDialog(binding.dialog, Qt.Window)
+            from .rational_layers_dialog import RationalLayersDialog
+            window = RationalLayersDialog(binding.dialog, Qt.Window)
             window.setObjectName('HidroCAUMAXRationalLayersDialog')
             window.setWindowTitle('HidroCAUMAX · Generación capas resolución mejorada')
             window.setModal(False)
@@ -613,10 +598,7 @@ class RationalLayersBridge(QObject):
             layout.addLayout(footer)
             binding.layers_dialog, binding.scroll, binding.panel = window, scroll, panel
             window.finished.connect(lambda *unused: self._layers_closed(binding, window))
-            screen = binding.dialog.screen() or QApplication.primaryScreen()
-            available = screen.availableGeometry()
-            window.resize(min(800, max(350, available.width() - 40)),
-                          min(560, max(280, available.height() - 40)))
+            window.fit_content(panel, scroll)
             binding.error.hide()
             window.show()
             self._refresh(binding)

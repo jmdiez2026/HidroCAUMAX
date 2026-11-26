@@ -1,7 +1,7 @@
 """Reusable, full-width controls for the improved-resolution drainage products."""
 from html import escape
 
-from qgis.PyQt.QtCore import QTimer, Qt, pyqtSignal
+from qgis.PyQt.QtCore import QTimer, Qt, pyqtSignal, QLocale
 from qgis.PyQt.QtGui import QFont, QFontMetrics
 from qgis.PyQt.QtWidgets import (
     QCheckBox, QDoubleSpinBox, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLayout,
@@ -65,6 +65,7 @@ class DrainageControls(QGroupBox):
         self.drainage_prepare_button.setStyleSheet(BUTTON_STYLE)
         self.threshold_label = QLabel('Umbral inicio corriente', self)
         self.drainage_threshold = QDoubleSpinBox(self)
+        self.drainage_threshold.setLocale(QLocale(QLocale.Spanish, QLocale.Spain))
         self.drainage_threshold.setDecimals(6)
         self.drainage_threshold.setRange(.000001, 1000000)
         self.drainage_threshold.setSuffix(' km²')

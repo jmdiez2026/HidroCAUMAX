@@ -192,10 +192,11 @@ class DemDisplayTests(unittest.TestCase):
         rgb = np.asarray([sample[1:4] for sample in samples], dtype=int)
         self.assertGreater(len(np.unique(rgb, axis=0)), 150)
         self.assertLessEqual(int(np.abs(np.diff(rgb, axis=0)).max()), 2)
-        # Bright vegetation at low elevations, warm earth in the middle,
+        # Dark vegetation at low elevations, warm earth in the middle,
         # and light neutral rock at the top, without cyan or white banding.
         self.assertGreater(rgb[0, 1], rgb[0, 0])
-        self.assertGreater(float(rgb[0].mean()), 130.)
+        self.assertLess(float(rgb[0].mean()), 100.)
+        self.assertGreater(float(rgb[-1].mean() - rgb[0].mean()), 140.)
         self.assertGreater(rgb[650, 0], rgb[650, 2])
         self.assertLess(int(rgb[-1].max()-rgb[-1].min()), 20)
 

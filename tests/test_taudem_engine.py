@@ -6,6 +6,7 @@ import tempfile
 import time
 from types import SimpleNamespace
 import unittest
+import subprocess
 from unittest.mock import patch
 
 import numpy as np
@@ -88,6 +89,47 @@ class TauDEMTests(unittest.TestCase):
                     reference_area_m2=1000, reference_cell_width=500, reference_cell_height=500,
                     cancelled=lambda: True)
         self.assertFalse((self.folder / "cache").exists())
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows process-tree cancellation')
+    def test_windows_cancellation_stops_worker_and_its_child(self):
+        import ctypes
+        kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel.OpenProcess.restype = ctypes.c_void_p
+        kernel.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+        kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+        marker = self.folder / 'child.pid'
+        code = ('import subprocess,sys,time,pathlib; '
+                'p=subprocess.Popen([sys.executable,"-c","import time;time.sleep(60)"]); '
+                f'pathlib.Path({str(marker)!r}).write_text(str(p.pid)); time.sleep(60)')
+        real_popen = subprocess.Popen
+        processes, handles = [], []
+        started = time.monotonic()
+        def launch(*args, **kwargs):
+            process = real_popen([sys.executable, '-c', code], **kwargs)
+            processes.append(process)
+            return process
+        def cancelled():
+            if marker.exists() and not handles:
+                handles.append(kernel.OpenProcess(0x100000, False, int(marker.read_text())))
+            return bool(handles) or time.monotonic() - started > 8
+        engine_info = dict(mpiexec='test', executables={'pitremove': 'test'})
+        try:
+            with patch.object(engine._runtime, 'ensure_runtime', side_effect=lambda e,c:e), \
+                    patch.object(engine._runtime, 'subprocess_environment', return_value=os.environ.copy()), \
+                    patch.object(engine.subprocess, 'Popen', side_effect=launch):
+                with self.assertRaises(InterruptedError):
+                    engine._run(engine_info, 'pitremove', [], self.folder, cancelled)
+            self.assertTrue(handles, 'Child must have started before cancellation')
+            self.assertIsNotNone(processes[0].poll())
+            self.assertEqual(kernel.WaitForSingleObject(handles[0], 5000), 0)
+            self.assertLess(time.monotonic() - started, 10)
+        finally:
+            for process in processes:
+                if process.poll() is None:
+                    process.kill(); process.wait()
+            for handle in handles:
+                if handle:
+                    kernel.CloseHandle(handle)
 
     @unittest.skipUnless(engine.probe_taudem()["available"] and os.name != "nt", "MPI Linux requerido")
     def test_running_mpi_process_can_be_cancelled(self):

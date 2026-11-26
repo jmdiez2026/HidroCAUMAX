@@ -13,7 +13,7 @@ from qgis.PyQt import sip
 from qgis.PyQt.QtCore import QObject, QCoreApplication, QEvent
 from qgis.PyQt.QtWidgets import QWidget
 from qgis.core import (QgsApplication, QgsCoordinateReferenceSystem,
-                       QgsCoordinateTransform, QgsPointXY, QgsProject)
+                       QgsCoordinateTransform, QgsPointXY, QgsProject, QgsGeometry)
 from caumax_consulta import rational_layers_controller as module
 
 
@@ -28,7 +28,11 @@ class Query:
 
 def analysis(resolution=500):
     return SimpleNamespace(cell_width=resolution, cell_height=resolution,
-        area_m2=54000000., selected_x=342324.8, selected_y=4709533.9)
+        area_m2=54000000., selected_x=342324.8, selected_y=4709533.9,
+        outlet_x=342337.5, outlet_y=4710262.5,
+        crs_wkt=QgsCoordinateReferenceSystem('EPSG:25830').toWkt(),
+        geometry_wkb=bytes(QgsGeometry.fromWkt(
+            'POLYGON((342275 4710200,342400 4710200,342400 4710325,342275 4710325,342275 4710200))').asWkb()))
 
 
 class Manager:

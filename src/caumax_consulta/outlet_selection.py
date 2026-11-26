@@ -14,6 +14,7 @@ from qgis.gui import QgsMapToolEmitPoint, QgsVertexMarker
 
 from .basin import _aligned, _open_raster, _read, _VALID_CODES
 from .grid import cell_at_point
+from .native_decimal import format_decimal
 
 
 class OutletSelectionDialog(QDialog):
@@ -59,13 +60,13 @@ class OutletSelectionDialog(QDialog):
         layout.addWidget(reason)
         reference = QLabel(
             f"MDT {context.get('resolution_key','')} m · {self.crs.authid() or 'CRS nativo'}\n"
-            f'Punto original: X={self.original_x:.3f}; Y={self.original_y:.3f}', self)
+            f"Punto original: X={format_decimal(self.original_x, '.3f')}; Y={format_decimal(self.original_y, '.3f')}", self)
         reference.setTextFormat(Qt.PlainText)
         reference.setWordWrap(True)
         self.reference_label = reference
         layout.addWidget(reference)
         self.coordinate_label = QLabel('Centro propuesto: sin selección válida.', self)
-        self.distance_label = QLabel(f'Radio máximo: {self.radius:g} m.', self)
+        self.distance_label = QLabel(f'Radio máximo: {format_decimal(self.radius)} m.', self)
         self.status_label = QLabel(self)
         for label in (self.coordinate_label,self.distance_label,self.status_label):
             label.setTextFormat(Qt.PlainText)
@@ -172,7 +173,7 @@ class OutletSelectionDialog(QDialog):
         self.reason_label.setVisible(bool(self.reason_label.text()))
         self.reference_label.setText(
             f"MDT {context.get('resolution_key','')} m · {self.crs.authid() or 'CRS nativo'}\n"
-            f'Punto original: X={self.original_x:.3f}; Y={self.original_y:.3f}')
+            f"Punto original: X={format_decimal(self.original_x, '.3f')}; Y={format_decimal(self.original_y, '.3f')}")
         self.set_busy(False)
         self._propose_point(context.get('initial_x',self.original_x),
                             context.get('initial_y',self.original_y))
@@ -227,11 +228,11 @@ class OutletSelectionDialog(QDialog):
         if 0 <= row < self._rows and 0 <= col < self._cols:
             self._row,self._col = row,col
             x,y = gdal.ApplyGeoTransform(self._transform,col+.5,row+.5)
-            self.coordinate_label.setText(f'Centro propuesto: X={x:.3f}; Y={y:.3f}')
+            self.coordinate_label.setText(f"Centro propuesto: X={format_decimal(x, '.3f')}; Y={format_decimal(y, '.3f')}")
             limit = ('· selección manual en la extensión válida del MDT.'
-                     if self.manual_selection_scope == 'raster_extent' else f'· límite {self.radius:g} m.')
+                     if self.manual_selection_scope == 'raster_extent' else f'· límite {format_decimal(self.radius)} m.')
             self.distance_label.setText(
-                f'Distancia al punto original: {math.hypot(x-self.original_x,y-self.original_y):.2f} m {limit}')
+                f"Distancia al punto original: {format_decimal(math.hypot(x-self.original_x,y-self.original_y), '.2f')} m {limit}")
         try:
             x,y,distance = self._validate_cell(row,col)
             self._candidate = (x,y)

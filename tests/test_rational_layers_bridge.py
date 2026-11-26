@@ -32,6 +32,8 @@ class RationalMethodDialog(QDialog):
         self.body = QWidget(self)
         body = QVBoxLayout(self.body)
         self.txtX, self.txtY = QLineEdit(self.body), QLineEdit(self.body)
+        self.txtX.setObjectName('txtX')
+        self.txtY.setObjectName('txtY')
         body.addWidget(self.txtX)
         body.addWidget(self.txtY)
         root.addWidget(self.body)
@@ -66,7 +68,7 @@ RationalMethodDialog.__module__ = '_hidro_rational_layers_test.rationalmethoddia
 
 
 class HeldPanel(QWidget):
-    def __init__(self, iface, context_getter, parent):
+    def __init__(self, iface, context_getter, parent, on_basin_refined=None):
         super().__init__(parent)
         self.context_getter = context_getter
         self.refresh_context = Mock()
@@ -231,6 +233,7 @@ class RationalLayersBridgeTests(unittest.TestCase):
         listener = Mock()
         self.dialog.btnClose.clicked.connect(listener)
         binding = self.attach()
+        self.app.processEvents()
         native_geometry = QRect(self.dialog.geometry())
         native_body = self.dialog.body
         binding.button.click()
@@ -308,6 +311,7 @@ class RationalLayersBridgeTests(unittest.TestCase):
         original = [self.dialog.layout().itemAt(i)
                     for i in range(self.dialog.layout().count())]
         binding = self.attach()
+        self.app.processEvents()
         native_geometry = QRect(self.dialog.geometry())
         for width, height in ((800, 600), (1200, 900)):
             with self.subTest(screen=(width, height)):
@@ -320,7 +324,9 @@ class RationalLayersBridgeTests(unittest.TestCase):
                     self.assertTrue(window.isVisible())
                     self.assertLessEqual(window.width(), width)
                     self.assertLessEqual(window.height(), height)
-                    self.assertGreater(binding.scroll.height(), 80)
+                    # This fixture contains only a short label; the window now
+                    # follows its content instead of keeping a fixed 560 px height.
+                    self.assertGreater(binding.scroll.height(), 40)
                     self.assertGreater(binding.scroll.width(), 300)
                     self.assertEqual(self.dialog.geometry(), native_geometry)
                     for index, item in enumerate(original):
@@ -338,10 +344,10 @@ class RationalLayersBridgeTests(unittest.TestCase):
         self.assertTrue(binding.basin_button.isEnabled())
         self.assertEqual(binding.basin_button.text(),'Cuenca hidrográfica')
         self.assertFalse(binding.basin_button.icon().isNull())
-        self.assertEqual(binding.action_row.indexOf(binding.save_action),0)
-        self.assertEqual(binding.action_row.indexOf(binding.basin_button),1)
-        self.assertEqual(binding.action_row.indexOf(binding.button),2)
-        self.assertFalse(binding.save_action.icon().isNull())
+        self.assertEqual(binding.action_row.indexOf(binding.basin_button),0)
+        self.assertEqual(binding.action_row.indexOf(binding.button),1)
+        self.assertFalse(any(button.isVisible() and button.text().startswith('Guardar cuenca')
+                             for button in self.dialog.findChildren(QPushButton)))
         self.assertFalse(binding.button.icon().isNull())
         self.assertEqual(len(self.dialog.findChildren(QPushButton,BASIN_BUTTON_NAME)),1)
         query=object();calculator=self.dialog.basinCalc

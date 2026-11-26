@@ -217,6 +217,8 @@ def _raster_export(products, source, destination, product, encoding, add_to_proj
             raise ValueError('El GeoTIFF está guardado pero QGIS no puede abrirlo.')
         from .layer_order import add_result_layer
         add_result_layer(layer)
+    from .generated_cleanup import register_dataset
+    register_dataset(target)
     return target
 
 
@@ -359,4 +361,6 @@ def export_network(products, destination, add_to_project=False, *, snapshot=None
         }))
         from .layer_order import add_result_layer
         add_result_layer(layer)
+    from .generated_cleanup import register_dataset
+    register_dataset(target)
     return target

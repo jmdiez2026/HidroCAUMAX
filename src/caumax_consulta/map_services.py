@@ -5,9 +5,10 @@ identifiers, not translated labels. WMS images and the dated AEMET station map
 are references, not inputs to calculations. Neither carries delineation ownership.
 """
 from dataclasses import dataclass
+from pathlib import Path
 
 from qgis.PyQt import sip
-from qgis.PyQt.QtCore import QObject, pyqtSignal
+from qgis.PyQt.QtCore import QObject, QTimer, pyqtSignal
 from qgis.core import (Qgis, QgsApplication, QgsCoordinateReferenceSystem,
                        QgsDataSourceUri, QgsLayerTreeGroup, QgsProject,
                        QgsRasterLayer, QgsRectangle, QgsTask)
@@ -29,6 +30,7 @@ class WmsLayerSpec:
     image_format: str = 'image/png'
     visible: bool = True
     description: str = ''
+    url: str = ''
 
 
 @dataclass(frozen=True)
@@ -80,6 +82,17 @@ class StationServiceSpec:
     title: str
     layers: tuple
     visible: bool = True
+    exclusive: bool = False
+    description: str = ''
+
+
+@dataclass(frozen=True)
+class LocalRasterServiceSpec:
+    service_id: str
+    title: str
+    path: Path
+    layers: tuple
+    visible: bool = False
     exclusive: bool = False
     description: str = ''
 
@@ -150,19 +163,40 @@ WMS_SERVICES = (
 
 AEMET_SERVICE = StationServiceSpec('aemet', 'Red estaciones AEMET',
     (StationLayerSpec('precipitation_stations', 'Estaciones AEMET · precipitación (inventario histórico)'),))
+FLOOD_EXTENT_SERVICE = WmsServiceSpec('snczi_extent', 'Extensión zonas inundables', '',
+    tuple(WmsLayerSpec(f'extent_t{period}', title, f'Zi_laminas_q{period}',
+        style=f'Zi_laminas_q{period}_estilo', crs='EPSG:25830', visible=False,
+        url=f'https://gis.miteco.gob.es/geoserver/agua/Zi_laminas_q{period}/wms')
+        for period, title in (
+            (10, 'Z.I con alta probabilidad (T=10)'),
+            (50, 'Z.I. de inundación frecuente (T=50)'),
+            (100, 'Z.I. probabilidad media u ocasional (T=100)'),
+            (500, 'Z.I. con probabilidad baja o excepcional (T=500)'))),
+    visible=False,
+    description='Fuente: MITECO, SNCZI. Extensión de zonas inundables de origen fluvial. '
+                'Visualización oficial a partir de 1:1.000.000; acerca el mapa para consultar la zona. '
+                'https://www.miteco.gob.es/es/cartografia-y-sig/ide/directorio_datos_servicios/agua.html')
 GOOGLE_SERVICE = XyzServiceSpec('google_satellite', 'Google Satellite',
     'https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
     (XyzLayerSpec('satellite', 'Google Satellite'),),
     description='Imágenes de satélite de Google. © Google y proveedores de imágenes. '
                 'Fuente: https://maps.google.com',
     attribution='© Google y proveedores de imágenes', attribution_url='https://maps.google.com')
-REFERENCE_SERVICES = (AEMET_SERVICE, WMS_SERVICES[0], GOOGLE_SERVICE) + WMS_SERVICES[1:]
+PO_TITLE = 'Po España (CLC2000) 100mx100m · AdrLBallesteros'
+PO_SERVICE = LocalRasterServiceSpec('po_clc2000', PO_TITLE,
+    Path(__file__).resolve().parent / 'data' / 'Po_Spain_CLC2000_100x100_30N_AdrLBallesteros.tif',
+    (StationLayerSpec('runoff_threshold', PO_TITLE, visible=False),),
+    description='Umbral de escorrentía Po · España · CLC2000 · AdrLBallesteros. '
+                'Ráster local de 100 × 100 m, ETRS89 / UTM huso 30N (EPSG:25830), '
+                'incluido en el complemento. Referencia visual; no modifica los cálculos de CAUMAX.')
+REFERENCE_SERVICES = ((AEMET_SERVICE, FLOOD_EXTENT_SERVICE, WMS_SERVICES[0], GOOGLE_SERVICE)
+                      + WMS_SERVICES[1:] + (PO_SERVICE,))
 
 
 def build_wms_uri(service, layer):
     """Encode Unicode, spaces, empty styles and nested URL query parameters."""
     uri = QgsDataSourceUri()
-    for key, value in (('url', service.url), ('layers', layer.name),
+    for key, value in (('url', layer.url or service.url), ('layers', layer.name),
                        ('styles', layer.style), ('crs', layer.crs),
                        ('format', layer.image_format), ('version', service.version),
                        ('transparent', 'true')):
@@ -238,16 +272,21 @@ def _prepare_layers(pending, layer_factory, cancelled=lambda: False, progress=la
     total = sum(len(layers) for _, layers in pending)
     completed = 0
     for service, specifications in pending:
-        unavailable = ''
+        unavailable, previous_endpoint = '', None
         for spec in specifications:
             if cancelled():
                 break
             progress(spec.title, completed, total)
+            endpoint = getattr(spec, 'url', '') or getattr(service, 'url', '')
+            if endpoint != previous_endpoint:
+                unavailable, previous_endpoint = '', endpoint
             layer = None
             error = unavailable
             if not unavailable:
                 try:
-                    if isinstance(service, StationServiceSpec):
+                    if isinstance(service, LocalRasterServiceSpec):
+                        layer = layer_factory(str(service.path), spec.title, 'gdal')
+                    elif isinstance(service, StationServiceSpec):
                         if station_factory is None:
                             from .aemet_stations import create_station_layer
                             layer = create_station_layer(spec.title, cancelled=cancelled)
@@ -262,10 +301,12 @@ def _prepare_layers(pending, layer_factory, cancelled=lambda: False, progress=la
                         layer.setCustomProperty(SERVICE_PROPERTY, service.service_id)
                         layer.setCustomProperty(LAYER_PROPERTY, spec.layer_id)
                         metadata = layer.metadata()
-                        content = metadata.abstract() if isinstance(service, StationServiceSpec) else (
+                        content = ('Lectura local de la zona visible a la escala del mapa.'
+                            if isinstance(service, LocalRasterServiceSpec) else
+                            metadata.abstract() if isinstance(service, StationServiceSpec) else (
                             ('Visualización mediante teselas XYZ en línea; ' if isinstance(service, XyzServiceSpec)
                              else 'Visualización mediante WMS en línea; ') +
-                            'requiere conexión y no descarga un ráster local ni aporta datos al cálculo hidrológico.')
+                            'requiere conexión y no descarga un ráster local ni aporta datos al cálculo hidrológico.'))
                         description = ' '.join(filter(None, (service.description, spec.description, content)))
                         metadata.setTitle(spec.title)
                         metadata.setAbstract(description)
@@ -364,6 +405,14 @@ def _publish_layers(project, prepared, services, failures=()):
                 continue
             if root is None:
                 root = _root_group(project)
+            if isinstance(service, LocalRasterServiceSpec):
+                project.addMapLayer(layer, False)
+                node = root.addLayer(layer)
+                node.setCustomProperty(SERVICE_PROPERTY, service.service_id)
+                node.setItemVisibilityChecked(False)
+                existing[key] = layer
+                added += 1
+                continue
             group = groups.get(service.service_id)
             if group is None:
                 group = next((node for node in root.children()
@@ -377,13 +426,13 @@ def _publish_layers(project, prepared, services, failures=()):
                     group = root.insertGroup(position, service.title)
                     group.setCustomProperty(SERVICE_PROPERTY, service.service_id)
                     group.setExpanded(False)
-                    group.setItemVisibilityChecked(service.visible)
+                    group.setItemVisibilityChecked(False)
                     created.add(service.service_id)
                 groups[service.service_id] = group
             project.addMapLayer(layer, False)
             node = group.addLayer(layer)
             # Repeating the command does not change the user's selected scene.
-            node.setItemVisibilityChecked(spec.visible if service.service_id in created else False)
+            node.setItemVisibilityChecked(False)
             existing[key] = layer
             added += 1
         for service in services:
@@ -449,14 +498,19 @@ class ReferenceLayerLoader(QObject):
         self.iface, self.services, self.layer_factory = iface, tuple(services), layer_factory
         self.station_factory = station_factory
         self.project = QgsProject.instance() if project is None else project
-        self._task, self._message = None, None
+        self._tasks, self._retiring, self._message = set(), set(), None
+        self._timeout = QTimer(self)
+        self._timeout.setSingleShot(True)
+        self._timeout.setInterval(45000)
+        self._timeout.timeout.connect(self._timed_out)
+        self._added = self._present = 0
         self._failures = []
         self._disposed = False
         self.project.cleared.connect(self.cancel)
 
     @property
     def busy(self):
-        return self._task is not None
+        return bool(self._tasks)
 
     def _bar(self):
         try:
@@ -473,25 +527,42 @@ class ReferenceLayerLoader(QObject):
     def load(self, *unused):
         if self._disposed or self.busy:
             return False
-        pending, present, self._failures = _pending_layers(self.project, self.services)
+        pending, self._present, self._failures = _pending_layers(self.project, self.services)
+        self._added = 0
+        # A cancelled provider may still be leaving a blocking network call.
+        # Do not pile up duplicate tasks on repeated clicks while it exits.
+        retiring = {service.service_id for task in self._retiring for service, _ in task.pending}
+        for service, specs in pending:
+            if service.service_id in retiring:
+                self._failures.extend(LayerFailure(service.service_id, spec.layer_id, service.title,
+                    'La solicitud anterior todavía está terminando. Reintenta en unos segundos.') for spec in specs)
+        pending = [(service, specs) for service, specs in pending if service.service_id not in retiring]
         if not pending:
             self._report(self._publish_preserving_view([], self._failures))
             return True
-        task = _ReferenceTask(pending, self.layer_factory, self._finished, self.station_factory)
-        task.layer_progress.connect(self._progress)
-        self._task = task
+        # Independent services publish as soon as ready. No national image is
+        # downloaded here: native WMS/XYZ providers render the current canvas
+        # BBOX, image size and scale when the user enables a layer.
+        for service in pending:
+            task = _ReferenceTask([service], self.layer_factory, self._finished, self.station_factory)
+            task.layer_progress.connect(self._progress)
+            self._tasks.add(task)
         self.busy_changed.emit(True)
         bar = self._bar()
         if bar is not None:
-            self._message = bar.pushMessage('HidroCAUMAX', 'Cargando capas de referencia…',
-                                           level=Qgis.Info, duration=0)
-        QgsApplication.taskManager().addTask(task)
+            # pushMessage returns None in QGIS: keep the actual item so it can
+            # be updated and removed, including when another message covers it.
+            item = bar.createMessage('HidroCAUMAX', 'Preparando referencias; las capas se activan en el panel de QGIS…')
+            self._message = bar.pushWidget(item, Qgis.Info, 0)
+        self._timeout.start()
+        for task in tuple(self._tasks):
+            QgsApplication.taskManager().addTask(task)
         return True
 
     def _progress(self, title, done, total):
-        if not self._disposed and self._task is not None and self.sender() is self._task:
+        if not self._disposed and self.sender() in self._tasks:
             if self._message is not None and not sip.isdeleted(self._message):
-                self._message.setText(f'Cargando referencias ({done}/{total}): {title}')
+                self._message.setText(f'Preparando: {title} ({done}/{total}). Servicios pendientes: {len(self._tasks)}.')
 
     def _publish_preserving_view(self, prepared, failures):
         bridge = getattr(self.iface, 'layerTreeCanvasBridge', lambda: None)()
@@ -516,21 +587,39 @@ class ReferenceLayerLoader(QObject):
                 bridge.setAutoSetupOnFirstLayer(automatic)
 
     def _finished(self, task, success):
-        if self._disposed or task is not self._task or not success:
+        self._retiring.discard(task)
+        if self._disposed or task not in self._tasks:
             for _, _, layer in task.prepared:
                 layer.deleteLater()
-            if task is self._task:
-                self._task = None
-                self._remove_message()
-                self.busy_changed.emit(False)
             return
-        self._task = None
-        self._remove_message()
+        self._tasks.remove(task)
         try:
-            report = self._publish_preserving_view(task.prepared, self._failures + task.failures)
-            self._report(report)
+            if success:
+                report = self._publish_preserving_view(task.prepared, task.failures)
+                self._added += report.added
+                self._failures.extend(report.failures)
+            else:
+                for _, _, layer in task.prepared:
+                    layer.deleteLater()
+                self._failures.extend(LayerFailure(service.service_id, spec.layer_id, service.title,
+                    'Preparación cancelada o interrumpida.') for service, specs in task.pending for spec in specs)
+        except Exception as error:
+            self._failures.extend(LayerFailure(service.service_id, spec.layer_id, service.title,
+                str(error)) for service, specs in task.pending for spec in specs)
         finally:
-            self.busy_changed.emit(False)
+            if not self._tasks:
+                self._timeout.stop()
+                self._remove_message()
+                self._report(LoadReport(self._added, self._present, tuple(self._failures)))
+                self.busy_changed.emit(False)
+
+    def _timed_out(self):
+        for task in self._tasks:
+            self._failures.extend(LayerFailure(service.service_id, spec.layer_id, service.title,
+                'Tiempo de espera agotado al preparar el servicio. Puedes reintentar su carga.')
+                for service, specs in task.pending for spec in specs)
+        self.cancel()
+        self._report(LoadReport(self._added, self._present, tuple(self._failures)))
 
     def _report(self, report):
         bar = self._bar()
@@ -547,10 +636,13 @@ class ReferenceLayerLoader(QObject):
             QgsMessageLog.logMessage(f'{failure.title}: {failure.detail}', 'HidroCAUMAX', Qgis.Warning)
 
     def cancel(self):
-        task, self._task = self._task, None
-        if task is not None:
+        tasks, self._tasks = self._tasks, set()
+        self._timeout.stop()
+        self._retiring.update(tasks)
+        for task in tasks:
             task.cancel()
-            self._remove_message()
+        self._remove_message()
+        if tasks:
             self.busy_changed.emit(False)
 
     def dispose(self):

@@ -32,6 +32,11 @@ def decimal_display(text):
     return value.replace('.', ',') if _NUMERIC.fullmatch(value) else value
 
 
+def format_decimal(value, specification='g'):
+    """Format a number for a label; keep paths, links and stored data separate."""
+    return format(value, specification).replace('.', ',')
+
+
 def canonical_numeric(text):
     """Convert the Spanish decimal comma into CAUMAX's native float syntax."""
     return str(text).replace(',', '.')

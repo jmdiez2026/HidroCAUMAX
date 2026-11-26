@@ -233,7 +233,7 @@ class RationalInputsBridge(QObject):
                 return original(*args, **kwargs)
             event = dict(completed=False, ready_writes=[], flow_writes=[], period_writes=[])
             restorations = []
-            direct_flows, interpolated_flows = [], []
+            direct_flows, interpolated_flows, requested_periods = [], [], []
 
             def capture_method(name, values):
                 # Capture the unrounded native calculation. This is a local,
@@ -286,6 +286,7 @@ class RationalInputsBridge(QObject):
                 record('txtResultReturnPeriod', 'setText', 'period_writes')
                 capture_method('getFlow', direct_flows)
                 capture_method('_getInterpolatedFlow', interpolated_flows)
+                capture_method('returnPeriod', requested_periods)
             try:
                 result = original(*args, **kwargs)
                 event['completed'] = True
@@ -311,6 +312,13 @@ class RationalInputsBridge(QObject):
                             try:
                                 owner.txtResultFlow.setText(precise)
                                 event['flow_writes'].append(precise)
+                                candidate = (interpolated_flows[-1] if interpolated_flows else
+                                             direct_flows[0] if len(direct_flows) == 1 else float(precise))
+                                event['accepted_flow'] = (candidate if math.isclose(
+                                    candidate, float(precise), abs_tol=.00501, rel_tol=0) else float(precise))
+                                event['accepted_period'] = (requested_periods[-1] if requested_periods
+                                                            else float(event['period_writes'][-1]))
+                                event['supporting_flows'] = tuple(direct_flows) if interpolated_flows else ()
                             except RuntimeError:
                                 pass
                     self.calculation_finished.emit(owner, stage, event)

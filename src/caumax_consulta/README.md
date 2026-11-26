@@ -1,12 +1,12 @@
-# HidroCAUMAX v1.0.5
+# HidroCAUMAX v1.0.6
 
-Complemento auxiliar para **CAUMAX 3.0 y QGIS 3 con Qt 5**. La versión técnica del paquete es **1.0.5** y la identificación pública y del diálogo es **v1.0.5**. Conserva procesamiento con TauDEM, exportación de MDT, direcciones y red, curva hipsométrica, los seis cuantiles originales y **P₀ y precipitación máxima diaria de la cuenca**. Conserva el punto original de consulta y permite ajustar el cierre manualmente. Incluye comprobación de actualizaciones, interfaz compacta y **Análisis IA gratuito sin credenciales**. Los ensayos reproducibles de esta revisión deben ejecutarse en un entorno QGIS 3 con Qt 5; la última validación integral registrada en el repositorio corresponde a versiones anteriores. Las pruebas reproducibles se encuentran en la carpeta `tests` del repositorio; los registros locales de sesiones no se publican.
+Complemento auxiliar para **CAUMAX 3.0 y QGIS 3 con Qt 5**. La versión técnica del paquete es **1.0.6** y la identificación pública y del diálogo es **v1.0.6**. Conserva procesamiento con TauDEM, exportación de MDT, direcciones y red, curva hipsométrica, los seis cuantiles originales y **P₀ y precipitación máxima diaria de la cuenca**. Conserva el punto original de consulta y permite ajustar el cierre manualmente. Incluye comprobación de actualizaciones, interfaz compacta y **Análisis IA gratuito sin credenciales**. Los ensayos reproducibles de esta revisión deben ejecutarse en un entorno QGIS 3 con Qt 5; la última validación integral registrada en el repositorio corresponde a versiones anteriores. Las pruebas reproducibles se encuentran en la carpeta `tests` del repositorio; los registros locales de sesiones no se publican.
 
 ## Selección de resolución en Método racional
 
 La fila «Resolución MDT» permite comparar **500 × 500 m · original CAUMAX** (referencia, sin nueva descarga ni red TauDEM) con los MDT finos disponibles de 25 × 25 m y 5 × 5 m. Seleccionar una resolución disponible actualiza la divisoria visible de QGIS sin requerir «Generar capas D8». La referencia racional en vivo obtiene el área del análisis nativo de drenaje, incluso cuando no tiene un contexto de proyecto serializado, evitando el fallo `area_m2`. El cierre calculado por CAUMAX se conserva como referencia; el botón «Ajustar punto de cierre» ofrece un ajuste manual opcional para las resoluciones finas. Los controles Original, Suavizada y Grado utilizan el procedimiento de suavizado ya disponible. La selección de 500 m restaura la geometría de referencia del Método racional y no modifica el caudal nativo.
 
-Los botones «Guardar cuenca», «Cuenca hidrográfica» y «Generar capas resolución mejorada» se encuentran en una misma fila, con logotipo GEA. El mensaje de estado de «Análisis IA» se muestra bajo la tabla, además de la ayuda emergente, para informar de peticiones en curso y errores del servicio.
+Los botones «Cuenca hidrográfica» y «Generar capas resolución mejorada» se encuentran en una misma fila, con logotipo GEA. Se ha retirado «Guardar cuenca…» de este diálogo. El mensaje de estado de «Análisis IA» se muestra bajo la tabla, además de la ayuda emergente, para informar de peticiones en curso y errores del servicio.
 
 ## Separador decimal en CAUMAX original
 
@@ -20,13 +20,22 @@ El resultado **Caudal (m³/s)** se muestra siempre con dos decimales y coma (por
 
 Las cifras que no pueden recuperarse de un cálculo anterior o de una variante de CAUMAX sin el cálculo observable no se inventan: se presenta el entero original con dos ceros decimales. La captura del valor preciso se realiza de manera reversible sobre el diálogo activo y permite que la cuenca y los informes asociados utilicen el Q aceptado con dos decimales.
 
+## Tabla y gráfico de caudales del Método racional
+
+Después de un cálculo aceptado, se abre una ventana independiente con una tabla de **dos columnas** a la izquierda —T (años) y caudal punta (m³/s)— y el gráfico alineado a la derecha. Incluye T=2, 5, 10, 25, 100 y 500, además del periodo elegido en CAUMAX, sin duplicarlo si ya figura en la tabla. Los caudales visibles tienen un máximo de dos decimales y coma; se conserva la precisión interna.
+
+Las consultas inferiores **T→Q** y **Q→T** añaden sus resultados a la tabla y al gráfico. La selección de una fila resalta su punto y la selección de un punto activa su fila. El gráfico admite rueda para zoom, arrastre, restablecimiento de vista, color, tipo y grosor de línea, cuadrícula, etiquetas opcionales y escala lineal o logarítmica de T. Las marcas de ambos ejes son enteras.
+
+El resultado aceptado se conserva exactamente. Los demás cuantiles se obtienen con las funciones originales de CAUMAX, la lluvia de la cuenca y los correctores de cada periodo. Las consultas adicionales interpolan Q linealmente respecto a log(T) entre los valores disponibles, incluido el resultado aceptado; no representan un nuevo ajuste GEV ni alteran los campos del Método racional. No se extrapola. Si existen varias soluciones inversas o tramos de caudal constante se indican todas. Los periodos sin datos o excluidos por las restricciones regionales de CAUMAX se muestran como no disponibles.
+
 ## Capas de referencia
 
-En **Complementos → HidroCAUMAX → Cargar capas HidroCAUMAX**, el complemento añade **HidroCAUMAX · Capas de referencia** como **primer subgrupo dentro de CAUMAX_CAPAS**, por encima de **Red 10 km²**, **Ríos** y las demás capas de CAUMAX. Si CAUMAX_CAPAS aún no existe, se coloca en la primera posición del árbol. Al repetir el comando se recoloca también un grupo ya cargado, sin duplicarlo. Se respeta esta prioridad de dibujo aunque el proyecto utilice un orden de capas personalizado. Contiene siete subgrupos, en este orden:
+En **Complementos → HidroCAUMAX → Cargar capas HidroCAUMAX**, el complemento añade **HidroCAUMAX · Capas de referencia** como **primer subgrupo dentro de CAUMAX_CAPAS**, por encima de **Red 10 km²**, **Ríos** y las demás capas de CAUMAX. Si CAUMAX_CAPAS aún no existe, se coloca en la primera posición del árbol. Al repetir el comando se recoloca también un grupo ya cargado, sin duplicarlo. Se respeta esta prioridad de dibujo aunque el proyecto utilice un orden de capas personalizado. Contiene ocho subgrupos, en este orden:
 
 | Subgrupo | Contenido |
 |---|---|
 | Red estaciones AEMET | SHP de 3.249 estaciones con precipitación documentada, diferenciadas por su presencia en los catálogos OpenData consultados. |
+| Extensión zonas inundables | SNCZI: Z.I con alta probabilidad (T=10), Z.I. de inundación frecuente (T=50), Z.I. probabilidad media u ocasional (T=100) y Z.I. con probabilidad baja o excepcional (T=500). Las cuatro apagadas inicialmente. |
 | Peligrosidad de inundación · SNCZI | Calados fluviales en tonos azules para T = 10, 100 y 500 años. |
 | Google Satellite | Imagen de Google mediante conexión XYZ, desactivada inicialmente. |
 | Clasificación Pfafstetter | Tramos de ríos clasificados según Pfafstetter modificado, MITECO. |
@@ -34,11 +43,15 @@ En **Complementos → HidroCAUMAX → Cargar capas HidroCAUMAX**, el complemento
 | IGME · Mapa Hidrogeológico | Mapa a escala 1:1.000.000 con hidrogeología, cuencas y unidades hidrogeológicas. |
 | Corine Land Cover · Ocupación del suelo | Servicio multiescala oficial del IGN/SCNE: CLC2018, SIOSE2014 y SIOSE AR2017, según la escala de visualización. |
 
+Después de estos ocho subgrupos aparece, como última capa, **Po España (CLC2000) 100mx100m · AdrLBallesteros**. Es un GeoTIFF local de 100 × 100 m en EPSG:25830 incluido en `data/` del complemento: se instala automáticamente con el ZIP o instalador y funciona sin conexión. Se conserva el archivo original y su atribución; `data/po_clc2000_provenance.json` registra su huella SHA-256. Es una referencia visual y no sustituye automáticamente el Po utilizado por CAUMAX.
+
 Las 25 capas WMS utilizan imagen PNG transparente: se solicitan al servidor al visualizar el mapa y requieren conexión. El comando conserva el CRS y la extensión actual del proyecto. Repetirlo incorpora únicamente las capas que falten. Las capas de referencia permanecen al borrar los delineados de HidroCAUMAX.
 
 **Google Satellite** se coloca inmediatamente después de SNCZI y antes de Pfafstetter. Su grupo y su capa comienzan desactivados; al repetir el comando se conserva la selección de visibilidad que haya hecho el usuario. Utiliza teselas XYZ del servidor de Google, con atribución a Google y sus proveedores.
 
-Los tres escenarios SNCZI se cargan por separado, con **T100 como escenario inicial**. Las variables agroclimáticas se agrupan para elegirlas; su grupo empieza desactivado y conserva Papadakis como selección inicial. El grupo IGME empieza desactivado y conserva sus tres componentes preparados para mostrarse juntos. Si un servicio no responde, se comunican las capas fallidas y las demás pueden seguir cargándose.
+Todas las capas y subgrupos nuevos comienzan **desactivados**. Activa la capa que quieras consultar; los tres escenarios SNCZI son mutuamente excluyentes. Repetir el comando respeta las capas ya activadas. Los servicios se preparan por separado, publicando cada resultado al llegar, y se informa de las fuentes que no respondan en 45 segundos. El aviso de preparación desaparece al terminar, cancelar o agotar la espera.
+
+Las imágenes WMS y teselas XYZ se solicitan **para la zona visible y el zoom actual**, mediante los proveedores nativos de QGIS. Acercar, alejar o desplazar el mapa renueva el encuadre; no se descarga una imagen nacional completa. Las capas apagadas no solicitan imágenes del mapa. La preparación inicial puede consultar el catálogo de un servicio para conocer sus capas y sistemas de coordenadas.
 
 El endpoint de ocupación del suelo indicado no muestra CORINE a todas las escalas: utiliza CLC2018 a escala menos detallada que 1:50.000, SIOSE2014 entre 1:50.000 y 1:10.000 y SIOSE AR2017 al acercar más. Esa procedencia se registra en la descripción de la capa.
 
@@ -85,9 +98,9 @@ El runtime empaquetado es para Windows de 64 bits. Linux/macOS pueden utilizar m
 
 ## Instalación y uso
 
-Como alternativa al ZIP, Windows dispone de **HidroCAUMAX_v1_0_5_Setup.exe** en la misma [publicación de GitHub](https://github.com/jmdiez2026/HidroCAUMAX/releases/tag/v1.0.5). Cierra QGIS, ejecuta el asistente y elige el perfil. La instalación es por usuario, sin permisos de administrador, y conserva una copia de la versión anterior. Después abre QGIS con ese perfil y activa el complemento. El instalador no incluye QGIS ni CAUMAX original y no está firmado digitalmente.
+Como alternativa al ZIP, Windows dispone de **HidroCAUMAX_v1_0_6_Setup.exe** en la misma [publicación de GitHub](https://github.com/jmdiez2026/HidroCAUMAX/releases/tag/v1.0.6). Cierra QGIS, ejecuta el asistente y elige el perfil. La instalación es por usuario, sin permisos de administrador, y conserva una copia de la versión anterior. Después abre QGIS con ese perfil y activa el complemento. El instalador no incluye QGIS ni CAUMAX original y no está firmado digitalmente.
 
-1. Instala **HidroCAUMAX_v1_0_5.zip**, sin descomprimir, desde **Complementos → Administrar e instalar complementos → Instalar a partir de ZIP**. Acepta sustituir la instalación auxiliar anterior y reinicia QGIS después de actualizar para cargar todos los módulos de esta revisión. El nombre visible es **HidroCAUMAX v1.0.5**; la carpeta interna sigue siendo **caumax_consulta** para conservar la continuidad de la actualización.
+1. Instala **HidroCAUMAX_v1_0_6.zip**, sin descomprimir, desde **Complementos → Administrar e instalar complementos → Instalar a partir de ZIP**. Acepta sustituir la instalación auxiliar anterior y reinicia QGIS después de actualizar para cargar todos los módulos de esta revisión. El nombre visible es **HidroCAUMAX v1.0.6**; la carpeta interna sigue siendo **caumax_consulta** para conservar la continuidad de la actualización.
 2. Activa CAUMAX, carga sus capas y abre **Mapa de caudales máximos → Consulta de capas de caudales máximos**. Selecciona periodo y punto; pulsa **Consultar**.
 3. Una consulta válida habilita **Cuenca hidrográfica**, a la izquierda del informe nativo. Su texto conserva el **110 %** del tamaño de los botones de la derecha; en esta revisión la altura del botón aumenta otro **10 %** respecto a 1.2.10, con redondeo al píxel más cercano. La anchura reserva espacio para el texto completo y el logotipo **GEA-UVa**.
 4. Pulsa el botón para calcular la cuenca. El diálogo se alinea con el borde derecho de QGIS, usa toda su altura y aproximadamente el **36 %** de su anchura. Sigue los cambios de posición y tamaño de QGIS. **Morfología de la Cuenca** presenta la tabla blanca de 19 parámetros: **Parámetro, Valor, Unidad e Interpretación**, con anchuras orientativas **40/13/9/38 %** y espacio mínimo para leer la cabecera Unidad. Valor y Unidad se centran. Interpretación empieza vacía y se rellena al pulsar **Análisis IA** en su encabezado; cada texto ocupa como máximo tres líneas y se conserva completo en su ayuda. Las observaciones técnicas se conservan en los resultados y el informe; se retira su recuadro bajo la tabla.

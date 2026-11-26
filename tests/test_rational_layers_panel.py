@@ -9,8 +9,8 @@ from unittest.mock import patch
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 from qgis.PyQt import sip
-from qgis.PyQt.QtCore import QCoreApplication, QEvent, Qt
-from qgis.PyQt.QtWidgets import QDialog, QMainWindow, QScrollArea
+from qgis.PyQt.QtCore import QCoreApplication, QEvent, Qt, QRect
+from qgis.PyQt.QtWidgets import QDialog, QMainWindow, QScrollArea, QVBoxLayout, QPushButton
 from qgis.core import QgsApplication, QgsCoordinateReferenceSystem, QgsGeometry, QgsProject
 from qgis.gui import QgsMapCanvas
 
@@ -29,6 +29,7 @@ class _Drainage(Drainage):
         geometry = QgsGeometry.fromWkt('LINESTRING(342325 4710000,342350 4710025)')
         state = dict(automatic=kwargs['automatic'], metadata={},
             dem_path=str(products.dem_path),
+            caumax_d8_path=str(products.caumax_d8_path),
             threshold_area_m2=kwargs['threshold_area_m2'] or 540000.,
             recommended_threshold_area_m2=540000., network_crs_wkt=query.crs.toWkt(),
             features=[dict(wkb=bytes(geometry.asWkb()), attributes={})])
@@ -66,6 +67,7 @@ class RationalLayersPanelTests(unittest.TestCase):
         self.iface = SimpleNamespace(mainWindow=lambda: self.window, mapCanvas=lambda: self.canvas)
         self.manager = Manager()
         self.patches = [
+            patch('caumax_consulta.boundary_layers.storage_directory', return_value=folder/'boundaries'),
             patch.object(controller_module, 'QgsApplication', SimpleNamespace(taskManager=lambda: self.manager)),
             patch.object(controller_module, 'ResolutionController', Resolution),
             patch.object(controller_module, 'DrainageController', _Drainage),
@@ -97,8 +99,8 @@ class RationalLayersPanelTests(unittest.TestCase):
 
     def prepared(self):
         resolution = self.discovered()
-        self.panel.drainage_prepare_button.click()
         resolution.selected(self.panel._selected_key())
+        self.panel.drainage_prepare_button.click()
         return self.panel._controller.drainage.complete()
 
     def test_resolution_sizes_are_visible_while_reference_is_loading(self):
@@ -123,7 +125,7 @@ class RationalLayersPanelTests(unittest.TestCase):
         self.assertFalse(panel.resolution_combo.model().item(panel.resolution_combo.findData('2')).isEnabled())
         panel.resolution_combo.setCurrentIndex(panel.resolution_combo.findData('5'))
         panel.drainage_prepare_button.click()
-        self.assertEqual(resolution.selections, ['5'])
+        self.assertEqual(resolution.selections, ['25', '5'])
         self.query = replace(self.query, x=self.query.x + 500.)
         self.assertTrue(panel.refresh_context())
         self.assertTrue(resolution.disposed)
@@ -191,10 +193,10 @@ class RationalLayersPanelTests(unittest.TestCase):
     def test_generate_displays_downloaded_dem_before_taudem_network_finishes(self):
         resolution = self.discovered()
         key = self.panel._selected_key()
+        resolution.selected(key)
         with patch.object(self.panel._layers, 'display_dem') as display_dem:
             self.panel.drainage_prepare_button.click()
             self.assertIsNone(self.panel._state)
-            resolution.selected(key)
             display_dem.assert_called_once()
             args = display_dem.call_args.args
             self.assertEqual(args[0].cell_width, float(key))
@@ -219,7 +221,8 @@ class RationalLayersPanelTests(unittest.TestCase):
         self.assertEqual([node.layer().id() for node in group.children()][2], dem.id())
         self.assertTrue(QgsProject.instance().layerTreeRoot()
                         .findLayer(dem.id()).itemVisibilityChecked())
-        self.assertEqual(panel._layers.visibility(), dict(network=True, directions=False))
+        self.assertEqual(panel._layers.visibility(),
+                         dict(network=True, directions=False, dem=True, hillshade=True))
         panel.drainage_visible.setChecked(False)
         self.assertFalse(panel._layers.visibility()['network'])
         self.assertTrue(all(button.isEnabled() for button in panel.product_buttons))
@@ -268,6 +271,7 @@ class RationalLayersPanelTests(unittest.TestCase):
             panel.drainage_prepare_button.click()
             resolution.ambiguous('25')
             self.app.processEvents()
+            panel.outlet_button.click()
             selector = panel._selector
             self.assertIsNotNone(selector)
             selector.accept()
@@ -275,6 +279,7 @@ class RationalLayersPanelTests(unittest.TestCase):
             self.assertIsNone(panel._selector)
             resolution.ambiguous('25')
             self.app.processEvents()
+            panel.outlet_button.click()
             stale = panel._selector
             self.assertIsNotNone(stale)
             self.query = replace(self.query, x=self.query.x + 500.)
@@ -292,6 +297,72 @@ class RationalLayersPanelTests(unittest.TestCase):
         self.assertTrue(task.isCanceled())
         task.finished(True)
         self.assertIsNone(controller.resolution)
+
+    def test_cancel_button_download_and_taudem_restore_retry_and_hide_at_rest(self):
+        resolution = self.discovered()
+        panel = self.panel
+        resolution.selected('25')
+        self.assertTrue(panel.cancel_button.isHidden())
+        panel.drainage_prepare_button.click()
+        drainage = panel._controller.drainage
+        self.assertFalse(panel.cancel_button.isHidden())
+        self.assertFalse(panel.drainage_prepare_button.isEnabled())
+        self.assertFalse(panel.delete_layers_button.isEnabled())
+        panel.cancel_button.click()
+        self.assertFalse(drainage.busy)
+        self.assertIsNone(panel._controller._pending)
+        self.assertTrue(panel.cancel_button.isHidden())
+        self.assertTrue(panel.drainage_prepare_button.isEnabled())
+        self.assertFalse(any(button.isEnabled() for button in panel.product_buttons))
+        panel.drainage_prepare_button.click()
+        drainage.complete()
+        self.assertTrue(panel.cancel_button.isHidden())
+        self.assertTrue(all(button.isEnabled() for button in panel.product_buttons))
+        # An explicit generation that also needs a finer DEM can be stopped.
+        panel._controller.resolution.variants.pop('25')
+        panel.drainage_prepare_button.click()
+        self.assertTrue(resolution.busy)
+        self.assertFalse(panel.cancel_button.isHidden())
+        panel.cancel_button.click()
+        self.assertFalse(resolution.busy)
+        self.assertTrue(panel.drainage_prepare_button.isEnabled())
+
+    def test_requested_text_decimal_comma_and_compact_selector(self):
+        resolution = self.discovered()
+        resolution.selected('25')
+        self.assertEqual(self.panel.help_label.text(), 'Genera las tres capas necesarias para ejecutar CAUMAX con resolución mayor de la original 500x500m (esquema D8-TauDEM/Esri): (1) ráster MDT, (2) ráster Direcciones de flujo, y (3) shape Red de Drenaje.')
+        self.assertIn('54,000 km²', self.panel.drainage_status.text())
+        self.assertIn(',', self.panel.drainage_threshold.text())
+        self.assertLessEqual(self.panel.resolution_combo.width(),
+                             self.panel.fontMetrics().horizontalAdvance('500×500 m') + 38)
+
+    def test_actual_panel_autosizes_at_rest_during_work_and_after_cancel(self):
+        from caumax_consulta.rational_layers_dialog import RationalLayersDialog
+        resolution = self.discovered(); resolution.selected('25')
+        window = RationalLayersDialog(self.window)
+        layout = QVBoxLayout(window)
+        scroll = QScrollArea(window); scroll.setWidgetResizable(True); scroll.setWidget(self.panel)
+        layout.addWidget(scroll); layout.addWidget(QPushButton('Cerrar', window))
+        screen = SimpleNamespace(availableGeometry=lambda: QRect(0, 0, 1600, 1200))
+        with patch.object(window, 'screen', return_value=screen):
+            window.fit_content(self.panel, scroll); window.show()
+            for action in (lambda: None, self.panel.drainage_prepare_button.click,
+                           self.panel.cancel_button.click):
+                action()
+                for _ in range(8):
+                    self.app.processEvents()
+                self.assertEqual(scroll.horizontalScrollBar().maximum(), 0)
+                self.assertEqual(scroll.verticalScrollBar().maximum(), 0)
+                self.assertLessEqual(window.height(), 1140)
+        scroll.takeWidget(); self.panel.setParent(self.window); sip.delete(window)
+
+    def test_cancel_invalidates_queued_automatic_delineation(self):
+        resolution = self.discovered(); resolution.selected('25')
+        self.panel._queued_resolution = '25'
+        self.panel._cancel_generation()
+        count = len(resolution.selections)
+        self.panel._start_delineation('25')
+        self.assertEqual(len(resolution.selections), count)
 
     def test_four_buttons_scale_once_and_fit_narrow_and_wide_panel(self):
         self.discovered()

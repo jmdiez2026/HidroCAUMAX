@@ -30,6 +30,8 @@ venv/
 *.dbf
 *.prj
 *.aux.xml
+!/src/caumax_consulta/data/Po_Spain_CLC2000_100x100_30N_AdrLBallesteros.tif
+!/src/caumax_consulta/data/Po_Spain_CLC2000_100x100_30N_AdrLBallesteros.tif.aux.xml
 *.sqlite
 *.db
 

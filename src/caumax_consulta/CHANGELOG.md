@@ -1,3 +1,21 @@
+# HidroCAUMAX v1.0.6 — curva racional, D8 de 5 m y referencias (2026-11-26)
+
+- Al aceptar Calcular en el Método racional, abre una tabla de dos columnas alineada con un gráfico interactivo: T=2, 5, 10, 25, 100 y 500 años, más el periodo elegido. Cuantiles con un máximo de dos decimales y coma; precisión interna conservada.
+- Consultas T→Q y Q→T incorporadas a la tabla y al gráfico, selección vinculada, zoom, desplazamiento, color, tipo/grosor de línea, cuadrícula, escala lineal/logarítmica y etiquetas opcionales. Marcas enteras en ambos ejes.
+- Mantiene el resultado nativo y obtiene los otros cuantiles con las mismas funciones y datos de CAUMAX. Las consultas adicionales interpolan Q respecto a log(T), sin extrapolar; se indican datos ausentes, restricciones regionales e inversas múltiples.
+
+- Corrige el traslado del criterio de cierre validado al motor TauDEM y a la comprobación fina; mantiene la codificación ESRI/CAUMAX y las validaciones de correspondencia entre cuencas.
+- Ventana D8 independiente ajustada al contenido, texto introductorio solicitado, selector compacto y separación de controles. Cancelar aparece durante la generación, detiene el trabajo y permite reintentar.
+- Eliminar capas retira resultados de QGIS y archivos generados identificables, con revisión previa de rutas y notificación de archivos bloqueados. Conserva fuentes originales y referencias.
+- Rampa de relieve con mayor contraste; decimales con coma en los diálogos, conservando los valores numéricos y la entrada nativa de CAUMAX.
+- Referencias nuevas apagadas, preparación independiente por servicio, límite de espera y retirada correcta del aviso. WMS/XYZ solicitan el encuadre visible y el zoom del mapa.
+- Grupo Extensión zonas inundables debajo de Red estaciones AEMET: T=10, T=50, T=100 y T=500 del SNCZI, con nombres y estilos oficiales verificados.
+- Po España (CLC2000) 100mx100m · AdrLBallesteros como última capa. GeoTIFF original incluido en el complemento e instalado con él.
+- Retira el botón Guardar cuenca… de la fila del Método racional.
+- Regresiones reproducibles, prueba WMS local por BBOX/zoom y script para repetir el caso real de 5 m. Véase `docs/verification-1.0.6.md` para resultados y límites de las pruebas.
+
+---
+
 # HidroCAUMAX v1.0.4 — caudal punta con dos decimales (2026-11-26)
 
 - Método racional: resultado `Caudal (m³/s)` con **dos cifras decimales y coma** en la interfaz (`10,35`).
