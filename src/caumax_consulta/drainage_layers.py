@@ -212,30 +212,70 @@ class DrainageLayers:
         return self._group
 
     def update(self,analysis,state,visible=True):
+        """Register verified TauDEM products and the native-resolution MDT.
+
+        Display order in the result group: drainage network, ESRI D8 raster,
+        the actual elevation GeoTIFF (third), and its optional relief shading.
+        The display uses the original raster without modifying elevation cells.
+        """
         if state is None:
-            self.remove();return {}
-        network=build_network_layer(state)
-        directions=_directions_layer(state.get('caumax_d8_path',''))
-        new={'network':network,'directions':directions}
-        project=QgsProject.instance();group=self._ensure_group()
-        group.setName(f'HidroCAUMAX · Drenaje TauDEM [{analysis.cell_width:g}×{analysis.cell_height:g} m]')
-        flags={'network':bool(state.get('network_visible',visible)),
-               'directions':bool(state.get('directions_visible',False))}
-        previous=dict(self.layers)
-        for kind in ('directions','network'):
-            layer=new[kind]
-            if layer is None:continue
-            layer.setCustomProperty(OWNER_PROPERTY,self.owner_key)
-            layer.setCustomProperty(ROLE_PROPERTY,kind)
-            project.addMapLayer(layer,False)
-            node=group.insertLayer(0,layer);node.setItemVisibilityChecked(flags[kind])
-        self.layers=new
+            self.remove()
+            return {}
+        network = build_network_layer(state)
+        directions = _directions_layer(state.get('caumax_d8_path', ''))
+        new = {'network': network, 'directions': directions}
+        dem_path = state.get('dem_path')
+        if dem_path:
+            from .dem_display import build_terrain_layers
+            # Building first makes failures atomic: an invalid MDT must not
+            # remove or hide the previous valid drainage result.
+            shade, dem = build_terrain_layers(dem_path)
+            size = f'{analysis.cell_width:g}x{analysis.cell_height:g}m'
+            dem.setName(f'MDT {size}')
+            shade.setName(f'Relieve sombreado MDT {size}')
+            # The coloured DEM is the third layer. The fourth (hillshade)
+            # sits underneath; slight transparency allows natural relief
+            # to remain visible while elevation colour stays legible.
+            dem.setOpacity(0.86)
+            new.update(dem=dem, hillshade=shade)
+        project = QgsProject.instance()
+        root = project.layerTreeRoot()
+        previous = dict(self.layers)
+        def last_visibility(kind, fallback):
+            old = previous.get(kind)
+            if old is not None and not sip.isdeleted(old):
+                node = root.findLayer(old.id())
+                if node is not None:
+                    return bool(node.itemVisibilityChecked())
+            return bool(fallback)
+
+        flags = {
+            'network': bool(state.get('network_visible', visible)),
+            'directions': bool(state.get('directions_visible', False)),
+            'dem': last_visibility('dem', True),
+            'hillshade': last_visibility('hillshade', True),
+        }
+        group = self._ensure_group()
+        group.setName(
+            f'HidroCAUMAX · Drenaje TauDEM [{analysis.cell_width:g}×{analysis.cell_height:g} m]')
+        # Insert by final visual order, not by reversing a sequence of index 0
+        # inserts. As long as both D8 products exist, MDT is precisely third.
+        for index, kind in enumerate(('network', 'directions', 'dem', 'hillshade')):
+            layer = new.get(kind)
+            if layer is None:
+                continue
+            layer.setCustomProperty(OWNER_PROPERTY, self.owner_key)
+            layer.setCustomProperty(ROLE_PROPERTY, kind)
+            project.addMapLayer(layer, False)
+            group.insertLayer(index, layer).setItemVisibilityChecked(flags[kind])
+        self.layers = new
         for layer in previous.values():
             if (layer is not None and not sip.isdeleted(layer)
-                    and layer.customProperty(OWNER_PROPERTY)==self.owner_key
+                    and layer.customProperty(OWNER_PROPERTY) == self.owner_key
                     and project.mapLayer(layer.id()) is layer):
                 project.removeMapLayer(layer.id())
-        self.note='' if directions is not None else 'El TIFF D8 CAUMAX/ESRI no está disponible; la red archivada sigue recuperada.'
+        self.note = ('' if directions is not None else
+            'El TIFF D8 CAUMAX/ESRI no está disponible; la red archivada sigue recuperada.')
         from .layer_order import ensure_results_above_official
         ensure_results_above_official(project)
         return dict(self.layers)
