@@ -259,8 +259,16 @@ jobs:
                       or os.environ['GITHUB_REF'] != 'refs/heads/main'):
                   raise RuntimeError('Un reintento manual requiere una etiqueta ya existente.')
               branch = api(f'repos/{repository}/git/ref/heads/main')['object']
-              if branch['type'] != 'commit' or branch['sha'] != sha:
-                  raise RuntimeError('main avanzó: no se etiqueta otro commit.')
+              if branch['type'] != 'commit':
+                  raise RuntimeError('main no apunta a un commit.')
+              if branch['sha'] != sha:
+                  # Source HEAD may advance while Windows smoke runs. Only
+                  # tag the exact immutable source that has been tested, and
+                  # only if that source is still an ancestor of main. Never
+                  # tag an unrelated/rewritten revision.
+                  comparison = api(f'repos/{repository}/compare/{sha}...{branch["sha"]}')
+                  if comparison.get('status') != 'ahead':
+                      raise RuntimeError('La revisión probada ya no es ancestro de main.')
               run(['gh', 'api', '-X', 'POST', f'repos/{repository}/git/refs',
                    '-f', f'ref=refs/tags/{tag}', '-f', f'sha={sha}'])
               reference = api(f'repos/{repository}/git/ref/tags/{tag}')
