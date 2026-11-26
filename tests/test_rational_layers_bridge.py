@@ -10,7 +10,7 @@ import numpy as np
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 from qgis.PyQt import sip, uic
-from qgis.PyQt.QtCore import QObject, QRect, QSize, Qt, pyqtSignal
+from qgis.PyQt.QtCore import QEvent, QObject, QRect, QSize, Qt, pyqtSignal
 from qgis.PyQt.QtGui import QFont, QFontDatabase, QIcon, QPixmap
 from qgis.PyQt.QtTest import QTest
 from qgis.PyQt.QtWidgets import (
@@ -159,9 +159,9 @@ class RationalLayersBridgeTests(unittest.TestCase):
         self.assertIs(self.dialog.btnCalculate, button)
         self.assertTrue(button.icon().isNull())
         self.assertEqual(button.iconSize(), original_size)
-        self.assertFalse(binding.frequency_button.icon().isNull())
+        self.assertTrue(binding.frequency_button.icon().isNull())
         self.assertEqual(binding.frequency_button.text(), 'Calcular')
-        self.assertEqual(binding.action_row.indexOf(binding.frequency_button), 0)
+        self.assertEqual(binding.action_row.indexOf(binding.frequency_button), 1)
         self.assertEqual((button.text(), button.styleSheet()), (text, style))
         button.setEnabled(True)
         button.click()
@@ -187,7 +187,7 @@ class RationalLayersBridgeTests(unittest.TestCase):
         self.assertEqual(button.icon().cacheKey(), original_icon.cacheKey())
         self.assertEqual(button.iconSize(), original_size)
 
-    def test_save_basin_stays_in_native_row_with_gea_and_no_duplicate(self):
+    def test_four_blue_buttons_share_one_gea_logo_and_restore_export_on_detach(self):
         from caumax_consulta.rational_export import RationalExportBridge, BUTTON_NAME as SAVE_NAME
         self.dialog.rubberBand = None
         exporter = RationalExportBridge(self.iface)
@@ -197,16 +197,58 @@ class RationalLayersBridgeTests(unittest.TestCase):
             self.assertIsNotNone(button)
             binding = self.attach()
             self.app.processEvents()
-            self.assertFalse(button.icon().isNull())
+            self.assertTrue(button.icon().isNull())
             self.assertTrue(button.isVisible())
-            self.assertGreaterEqual(self.dialog.horizontalLayout_2.indexOf(button), 0)
+            self.assertEqual(self.dialog.horizontalLayout_2.indexOf(button), -1)
+            self.assertEqual(binding.action_row.indexOf(button), 2)
+            self.assertEqual(binding.action_row.indexOf(binding.basin_button), 3)
+            self.assertEqual(binding.action_row.indexOf(binding.button), 4)
             self.assertEqual(len(self.dialog.findChildren(QPushButton, SAVE_NAME)), 1)
-            self.assertFalse(binding.container.findChildren(QPushButton, SAVE_NAME))
+            self.assertEqual(binding.container.findChildren(QPushButton, SAVE_NAME), [button])
+            logos = binding.container.findChildren(QLabel, 'HidroCAUMAXSharedGEALogo')
+            self.assertEqual(len(logos), 1)
+            self.assertFalse(logos[0].pixmap().isNull())
+            buttons = [binding.frequency_button, button, binding.basin_button, binding.button]
+            self.assertEqual(len({b.geometry().center().y() for b in buttons}), 1)
+            for b in buttons:
+                self.assertTrue(b.icon().isNull())
+                self.assertIn('#D9F0FF', b.styleSheet())
+                self.assertGreaterEqual(b.width(), b.sizeHint().width())
+            self.assertLessEqual(binding.button.geometry().right(), binding.button.parentWidget().width())
+            clicked = Mock()
+            with patch.object(exporter, 'export_dialog', clicked):
+                button.setEnabled(True)
+                button.click()
+            clicked.assert_called_once_with(self.dialog)
             self.bridge.stop()
             self.assertTrue(button.isVisible())
+            self.assertGreaterEqual(self.dialog.horizontalLayout_2.indexOf(button), 0)
+            self.assertFalse(button.icon().isNull())
         finally:
             exporter.stop()
         self.assertIsNone(self.dialog.findChild(QPushButton, SAVE_NAME))
+
+    def test_exporter_loaded_after_strip_joins_once_and_can_unload_first(self):
+        from caumax_consulta.rational_export import RationalExportBridge, BUTTON_NAME as SAVE_NAME
+        self.dialog.rubberBand = None
+        binding = self.attach()
+        exporter = RationalExportBridge(self.iface)
+        try:
+            exporter.start()
+            button = self.dialog.findChild(QPushButton, SAVE_NAME)
+            for _ in range(3):
+                self.bridge.scan()
+                exporter.scan()
+            self.app.processEvents()
+            self.assertEqual(binding.action_row.indexOf(button), 2)
+            self.assertEqual(len(self.dialog.findChildren(QPushButton, SAVE_NAME)), 1)
+            exporter.stop()
+            self.app.sendPostedEvents(None, QEvent.DeferredDelete)
+            self.bridge.scan()
+            self.assertIsNone(self.dialog.findChild(QPushButton, SAVE_NAME))
+            self.assertTrue(binding.container.isVisible())
+        finally:
+            exporter.stop()
 
     def test_native_height_fits_content_preserves_width_and_restores_on_unload(self):
         self.app.processEvents()
@@ -434,12 +476,12 @@ class RationalLayersBridgeTests(unittest.TestCase):
         self.app.processEvents()
         self.assertTrue(binding.basin_button.isEnabled())
         self.assertEqual(binding.basin_button.text(),'Cuenca hidrográfica')
-        self.assertFalse(binding.basin_button.icon().isNull())
-        self.assertEqual(binding.action_row.indexOf(binding.basin_button),1)
-        self.assertEqual(binding.action_row.indexOf(binding.button),2)
+        self.assertTrue(binding.basin_button.icon().isNull())
+        self.assertEqual(binding.action_row.indexOf(binding.basin_button),2)
+        self.assertEqual(binding.action_row.indexOf(binding.button),3)
         self.assertFalse(any(button.isVisible() and button.text().startswith('Guardar cuenca')
                              for button in self.dialog.findChildren(QPushButton)))
-        self.assertFalse(binding.button.icon().isNull())
+        self.assertTrue(binding.button.icon().isNull())
         self.assertEqual(len(self.dialog.findChildren(QPushButton,BASIN_BUTTON_NAME)),1)
         query=object();calculator=self.dialog.basinCalc
         with patch('caumax_consulta.rational_basin.capture_rational_query',return_value=query) as capture:

@@ -12,7 +12,8 @@ import os
 from pathlib import Path
 
 from qgis.PyQt.QtCore import QObject, QStandardPaths, QTimer, QVariant
-from qgis.PyQt.QtWidgets import QApplication, QDialog, QFileDialog, QMessageBox, QPushButton
+from qgis.PyQt.QtGui import QIcon
+from qgis.PyQt.QtWidgets import QApplication, QDialog, QFileDialog, QFrame, QMessageBox, QPushButton
 from qgis.core import (
     QgsCoordinateReferenceSystem, QgsCoordinateTransformContext, QgsFeature,
     QgsField, QgsFillSymbol, QgsGeometry, QgsProject, QgsVectorFileWriter, QgsVectorLayer,
@@ -28,7 +29,30 @@ BUTTON_STYLE = '''QPushButton { background-color: #D9F0FF; color: #173D52;
 border: 1px solid #7EB4D0; border-radius: 3px; padding: 5px 9px; }
 QPushButton:hover { background-color: #C7E8FF; }
 QPushButton:disabled { background-color: #EAF3F8; color: #7A8790; }'''
-_TITLE = 'HidroCAUMAX v1.0.8 · Guardar cuenca'
+ACTION_FRAME_NAME = 'HidroCAUMAXRationalActionFrame'
+ACTION_BUTTON_STYLE = BUTTON_STYLE.replace('padding: 5px 9px', 'padding: 3px 6px')
+EXPORT_OWNER_PROPERTY = 'HidroCAUMAX/rational_export_owned'
+_TITLE = 'HidroCAUMAX v1.0.9 · Guardar cuenca'
+
+
+def _place_export_button(dialog, button, grouped=True):
+    """Share one GEA strip while each bridge retains its own button lifecycle."""
+    frame = dialog.findChild(QFrame, ACTION_FRAME_NAME) if grouped else None
+    if frame is not None:
+        if frame.layout().indexOf(button) >= 0:
+            return
+        dialog.horizontalLayout_2.removeWidget(button)
+        frame.layout().insertWidget(2, button)  # logo, Calcular, Guardar...
+        button.setStyleSheet(ACTION_BUTTON_STYLE)
+        button.setIcon(QIcon())
+    else:
+        if dialog.horizontalLayout_2.indexOf(button) >= 0:
+            return
+        button.setParent(dialog)
+        dialog.horizontalLayout_2.insertWidget(2, button)
+        button.setStyleSheet(BUTTON_STYLE)
+        _set_gea_icon(button)
+    button.show()
 
 
 @dataclass(frozen=True)
@@ -190,6 +214,7 @@ class RationalExportBridge(QObject):
             return
         for key, binding in tuple(self._bindings.items()):
             try:
+                _place_export_button(binding.dialog, binding.button)
                 binding.button.setEnabled(self._available(binding.dialog))
             except RuntimeError:
                 self._detach(key)
@@ -203,10 +228,9 @@ class RationalExportBridge(QObject):
                 continue
             button = QPushButton('Guardar cuenca…', dialog)
             button.setObjectName(BUTTON_NAME)
-            button.setStyleSheet(BUTTON_STYLE)
-            _set_gea_icon(button)
+            button.setProperty(EXPORT_OWNER_PROPERTY, True)
             button.setToolTip('Guardar los polígonos rojos y el cierre calculados por CAUMAX')
-            dialog.horizontalLayout_2.insertWidget(2, button)
+            _place_export_button(dialog, button)
             key = id(dialog)
             clicked = lambda checked=False, current=dialog: self.export_dialog(current)
             closed = lambda *args, current=key: self._detach(current)
@@ -227,6 +251,9 @@ class RationalExportBridge(QObject):
             except (TypeError, RuntimeError):
                 pass
         try:
+            parent_layout = binding.button.parentWidget().layout()
+            if parent_layout is not None:
+                parent_layout.removeWidget(binding.button)
             binding.dialog.horizontalLayout_2.removeWidget(binding.button)
             binding.button.setParent(None)
             binding.button.deleteLater()

@@ -164,7 +164,7 @@ def clear_delineation_layers(project=None):
     return len(layer_ids)
 
 
-def clear_delineations(*, close_dialogs=False, project=None):
+def clear_delineations(*, close_dialogs=False, project=None, include_exports=False):
     """Clear every query, keeping dialogs open unless a new red point begins."""
     project = QgsProject.instance() if project is None else project
     before = set(project.mapLayers())
@@ -190,5 +190,9 @@ def clear_delineations(*, close_dialogs=False, project=None):
             _dialogs.discard(dialog)
     clear_canvas_overlays()
     clear_delineation_layers(project)
+    if include_exports:
+        from .layer_order import EXPORT_OWNER_PROPERTY
+        project.removeMapLayers([layer.id() for layer in project.mapLayers().values()
+            if layer.customProperty(EXPORT_OWNER_PROPERTY, None) == 'HidroCAUMAX'])
     _refresh_canvases()
     return len(before - set(project.mapLayers()))

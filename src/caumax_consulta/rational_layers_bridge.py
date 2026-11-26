@@ -10,14 +10,16 @@ from pathlib import Path
 import sys
 
 from qgis.PyQt.QtCore import QObject, QTimer, Qt
+from qgis.PyQt.QtGui import QPixmap
 from qgis.PyQt.QtWidgets import (
     QApplication, QDialog, QFrame, QHBoxLayout, QLabel, QPushButton,
     QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
 )
 from qgis.core import QgsCoordinateReferenceSystem
 
-from .rational_export import BUTTON_STYLE
-from .caumax_bridge import _LogoBasinButton, BUTTON_STYLE as BASIN_BUTTON_STYLE
+from .rational_export import (BUTTON_STYLE, BUTTON_NAME as SAVE_BUTTON_NAME,
+    ACTION_FRAME_NAME, ACTION_BUTTON_STYLE, EXPORT_OWNER_PROPERTY, _place_export_button)
+from .caumax_bridge import LOGO_PATH
 
 
 BUTTON_NAME = 'btnGenerarCapasResolucionMejoradaHidroCAUMAX'
@@ -377,6 +379,7 @@ class RationalLayersBridge(QObject):
             return
         for key, binding in tuple(self._bindings.items()):
             try:
+                self._group_save_button(binding)
                 self._sync_basin(binding)
                 if binding.decimal_presentation is not None:
                     binding.decimal_presentation.sync()
@@ -404,30 +407,40 @@ class RationalLayersBridge(QObject):
         container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         layout = QVBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
-        row = QHBoxLayout()
-        row.setContentsMargins(0, 0, 0, 0)
-        frequency_button = _LogoBasinButton('Calcular', container)
+        frame = QFrame(container)
+        frame.setObjectName(ACTION_FRAME_NAME)
+        frame.setStyleSheet(f'QFrame#{ACTION_FRAME_NAME} {{ border: 1px solid #7EB4D0; '
+                           'border-radius: 3px; background-color: #F2F9FD; }}')
+        row = QHBoxLayout(frame)
+        row.setContentsMargins(5, 4, 5, 4)
+        row.setSpacing(4)
+        logo = QLabel(frame)
+        logo.setObjectName('HidroCAUMAXSharedGEALogo')
+        logo.setToolTip('GEA · Universidad de Valladolid')
+        pixmap = QPixmap(str(LOGO_PATH))
+        if not pixmap.isNull():
+            logo.setPixmap(pixmap.scaledToHeight(24, Qt.SmoothTransformation))
+        logo.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        row.addWidget(logo, 0, Qt.AlignVCenter)
+        frequency_button = QPushButton('Calcular', frame)
         frequency_button.setObjectName(FREQUENCY_BUTTON_NAME)
-        frequency_button.setStyleSheet(BASIN_BUTTON_STYLE)
+        frequency_button.setStyleSheet(ACTION_BUTTON_STYLE)
         frequency_button.setToolTip('Calcular y mostrar la tabla y el gráfico de caudales '
                                    'para varios periodos de retorno.')
         frequency_button.setEnabled(False)
         row.addWidget(frequency_button, 0, Qt.AlignLeft)
-        basin_button = _LogoBasinButton('Cuenca hidrográfica', container)
+        basin_button = QPushButton('Cuenca hidrográfica', frame)
         basin_button.setObjectName(BASIN_BUTTON_NAME)
-        basin_button.setStyleSheet(BASIN_BUTTON_STYLE)
+        basin_button.setStyleSheet(ACTION_BUTTON_STYLE)
         basin_button.setEnabled(False)
-        basin_button.match_reference_buttons(
-            candidate for candidate in (getattr(dialog, 'btnReport', None), getattr(dialog, 'btnClose', None))
-            if isinstance(candidate, QPushButton))
         row.addWidget(basin_button, 0, Qt.AlignLeft)
-        button = _LogoBasinButton('Generar capas resolución mejorada', container)
+        button = QPushButton('Generar capas resolución mejorada', frame)
         button.setObjectName(BUTTON_NAME)
-        button.setStyleSheet(BASIN_BUTTON_STYLE)
+        button.setStyleSheet(ACTION_BUTTON_STYLE)
         button.setToolTip('Abrir en una ventana independiente las opciones de generación para el punto actual.')
         row.addWidget(button, 0, Qt.AlignLeft)
         row.addStretch()
-        layout.addLayout(row)
+        layout.addWidget(frame)
         error = QLabel(container)
         error.setTextFormat(Qt.PlainText)
         error.setWordWrap(True)
@@ -441,6 +454,7 @@ class RationalLayersBridge(QObject):
         binding.decimal_presentation = RationalDecimalPresentation(dialog)
         binding.basin_button, binding.action_row = basin_button, row
         binding.frequency_button = frequency_button
+        self._group_save_button(binding)
         binding.native_height = native_height
         binding.native_width = native_width
         key = id(dialog)
@@ -476,13 +490,14 @@ class RationalLayersBridge(QObject):
         # Let Qt refresh the nested group boxes' cached minimum sizes before
         # the queued height fit; fitting in the same turn keeps empty space.
         self._compact_native_layout(binding)
-        for action in (frequency_button, basin_button, button):
-            action.match_reference_buttons(
-                candidate for candidate in (getattr(dialog, 'btnReport', None),
-                                            getattr(dialog, 'btnClose', None))
-                if isinstance(candidate, QPushButton))
-            QTimer.singleShot(0, action.install_logo)
         QTimer.singleShot(0, lambda: self._fit_native_height(binding))
+
+    @staticmethod
+    def _group_save_button(binding):
+        button = binding.dialog.findChild(QPushButton, SAVE_BUTTON_NAME)
+        # A foreign or historical standalone export controller stays untouched.
+        if button is not None and button.property(EXPORT_OWNER_PROPERTY):
+            _place_export_button(binding.dialog, button)
 
     def _request_frequency(self, binding):
         if (self._running and self._bindings.get(id(binding.dialog)) is binding
@@ -685,6 +700,9 @@ class RationalLayersBridge(QObject):
             self._layers_closed(binding, binding.layers_dialog)
         try:
             restore_height = binding.dialog.height() == binding.fitted_height
+            button = binding.container.findChild(QPushButton, SAVE_BUTTON_NAME)
+            if button is not None and button.property(EXPORT_OWNER_PROPERTY):
+                _place_export_button(binding.dialog, button, grouped=False)
             self._restore_native_layout(binding)
             self._restore_native_outline(binding)
             binding.dialog.layout().removeWidget(binding.container)

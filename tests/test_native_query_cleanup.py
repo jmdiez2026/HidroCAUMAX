@@ -40,6 +40,7 @@ class NativeQueryCleanupTests(unittest.TestCase):
         self.plugin._dialogs={self.native:self.dialog}
         self.plugin._saved_dialogs=[]
         self.plugin._updates=SimpleNamespace(check=Mock())
+        self.plugin._rational_layers=SimpleNamespace(_bindings={})
         self.dialog.finished.connect(lambda *_:self.plugin._forget(self.native,self.dialog))
 
     def coarse_query(self):

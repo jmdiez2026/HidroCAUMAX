@@ -3,6 +3,7 @@ from qgis.core import QgsProject
 
 
 ORDER_PROPERTY = 'HidroCAUMAX/order_rank'
+EXPORT_OWNER_PROPERTY = 'HidroCAUMAX/export_owner'
 _INACTIVE_PROPERTY = 'HidroCAUMAX/automatically_hidden_result'
 _OWNERS = (('HidroCAUMAX/course_owner', 0),
            ('HidroCAUMAX/drainage_owner', 10),
@@ -138,6 +139,7 @@ def add_result_layer(layer, project=None):
     ensure_results_above_official(project)
     rank = 40 if layer.type() == layer.RasterLayer else 20
     layer.setCustomProperty(ORDER_PROPERTY, rank)
+    layer.setCustomProperty(EXPORT_OWNER_PROPERTY, 'HidroCAUMAX')
     registered = project.addMapLayer(layer, False)
     if registered is not None:
         root = project.layerTreeRoot()

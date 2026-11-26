@@ -1,3 +1,14 @@
+# HidroCAUMAX v1.0.9 — activación automática, barra y recuadro GEA (2026-11-26)
+
+- Las herramientas se activan al cargar el complemento y al terminar el arranque de QGIS. El logo restaura los botones y ya no permite desactivarlos accidentalmente.
+- Barra ordenada: Cargar capas (C1, capas GIS), herramientas HidroCAUMAX, Abrir cuenca, Eliminar capas (E3, capas y escoba) y Actualizar.
+- Eliminar capas cancela el trabajo pendiente y retira del proyecto todos los resultados con identificación de HidroCAUMAX, de cualquier consulta o resolución. Incluye las exportaciones identificadas desde esta versión; conserva los archivos, las fuentes originales y las referencias. Las exportaciones siguen conservándose al iniciar otra consulta.
+- Cargar capas CAUMAX encuadra inicialmente la península ibérica y Baleares en el sistema de referencia del mapa. Respeta proyectos existentes y la navegación posterior.
+- Recuadro inferior del Método racional con un único logo GEA visible a la izquierda y cuatro botones azules: Calcular, Guardar cuenca…, Cuenca hidrográfica y Generar capas resolución mejorada. Mantiene el Calcular original en la fila superior, sin abrir el gráfico.
+- Pruebas de activación, recarga, orden, limpieza selectiva, preservación de archivos, carga tardía de CAUMAX, encuadre, exportación y cálculo. Ver `docs/verification-1.0.9.md` del repositorio.
+
+---
+
 # HidroCAUMAX v1.0.8 — cálculo GEA, tabla alineada y diálogo compacto (2026-11-26)
 
 - Calcular original conserva su formato y calcula solo el caudal individual. El nuevo Calcular con GEA, abajo a la izquierda, abre la tabla y el gráfico de varios periodos de retorno tras aceptar el cálculo nativo.

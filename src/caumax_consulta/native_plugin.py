@@ -2,7 +2,7 @@
 from qgis.PyQt.QtCore import QObject, Qt
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction, QFileDialog, QMessageBox
-from qgis.core import QgsApplication
+from qgis.core import Qgis, QgsApplication
 from pathlib import Path
 
 from .caumax_bridge import CaumaxBridge
@@ -15,6 +15,7 @@ from .visible_dem import VisibleDemController
 from .update_ui import UpdateNotifier
 from .delineation_cleanup import clear_delineations
 from .map_services import ReferenceLayerLoader
+from .native_layers_view import NativeLayersView
 
 
 class NativeCaumaxPlugin(QObject):
@@ -40,12 +41,11 @@ class NativeCaumaxPlugin(QObject):
         self._visible_dem = VisibleDemController(iface, self)
         self._updates = UpdateNotifier(iface, self)
         self._map_services = ReferenceLayerLoader(iface, self)
+        self._native_layers_view = NativeLayersView(iface, self)
 
     def initGui(self):
-        self.action = QAction('Activar herramientas HidroCAUMAX', self.iface.mainWindow())
-        self.action.setCheckable(True)
-        self.action.setChecked(True)
-        self.action.toggled.connect(self.set_enabled)
+        self.action = QAction('Restaurar herramientas HidroCAUMAX', self.iface.mainWindow())
+        self.action.triggered.connect(self._activate_tools)
         self.iface.addPluginToMenu(self.MENU, self.action)
         self.open_action = QAction('Abrir proyecto de cuenca…', self.iface.mainWindow())
         self.open_action.triggered.connect(self._open_saved_project)
@@ -54,6 +54,9 @@ class NativeCaumaxPlugin(QObject):
         self.reference_action.triggered.connect(self._map_services.load)
         self._map_services.busy_changed.connect(self.reference_action.setDisabled)
         self.iface.addPluginToMenu(self.MENU, self.reference_action)
+        self.clear_layers_action = QAction('Eliminar capas creadas por HidroCAUMAX', self.iface.mainWindow())
+        self.clear_layers_action.triggered.connect(self._clear_generated_layers)
+        self.iface.addPluginToMenu(self.MENU, self.clear_layers_action)
         self.update_action = QAction('Buscar actualizaciones…', self.iface.mainWindow())
         self.update_action.triggered.connect(self._check_updates)
         self.iface.addPluginToMenu(self.MENU, self.update_action)
@@ -61,7 +64,7 @@ class NativeCaumaxPlugin(QObject):
         self.set_enabled(True)
 
     def _create_toolbar(self):
-        """Share the menu actions so checked, busy and trigger states agree."""
+        """Share the menu actions so busy and trigger states agree."""
         create = getattr(self.iface, 'addToolBar', None)
         self._toolbar = (create(self.MENU) if callable(create)
                          else self.iface.mainWindow().addToolBar(self.MENU))
@@ -69,12 +72,16 @@ class NativeCaumaxPlugin(QObject):
         self._toolbar.setToolButtonStyle(Qt.ToolButtonIconOnly)
         self.action.setIcon(QIcon(str(Path(__file__).parent / 'assets' / 'hidrocaumax.png')))
         self.open_action.setIcon(QgsApplication.getThemeIcon('/mActionFileOpen.svg'))
-        self.reference_action.setIcon(QgsApplication.getThemeIcon('/mActionAddLayer.svg'))
+        self.reference_action.setIcon(QIcon(str(Path(__file__).parent / 'assets' / 'load_reference_layers.svg')))
+        self.clear_layers_action.setIcon(QIcon(str(Path(__file__).parent / 'assets' / 'clear_generated_layers.svg')))
         self.update_action.setIcon(QgsApplication.getThemeIcon('/mActionRefresh.svg'))
         for action, caption, tip in (
-                (self.action, 'Activar herramientas', 'Activar o desactivar las herramientas HidroCAUMAX'),
-                (self.open_action, 'Abrir cuenca', 'Abrir un proyecto de cuenca guardado'),
                 (self.reference_action, 'Cargar capas', 'Cargar las capas de referencia HidroCAUMAX'),
+                (self.action, 'Herramientas HidroCAUMAX',
+                 'Herramientas activas automáticamente. Pulsar para restaurar los botones de HidroCAUMAX.'),
+                (self.open_action, 'Abrir cuenca', 'Abrir un proyecto de cuenca guardado'),
+                (self.clear_layers_action, 'Eliminar capas',
+                 'Retirar de QGIS todas las capas generadas por HidroCAUMAX. Conserva los archivos en disco.'),
                 (self.update_action, 'Actualizar', 'Buscar actualizaciones de HidroCAUMAX')):
             action.setIconText(caption)
             action.setToolTip(tip)
@@ -84,7 +91,16 @@ class NativeCaumaxPlugin(QObject):
         # QGIS can restore a previously hidden toolbar after loading plugins.
         self._toolbar_startup_signal = getattr(self.iface, 'initializationCompleted', None)
         if self._toolbar_startup_signal is not None:
-            self._toolbar_startup_signal.connect(self._show_toolbar)
+            self._toolbar_startup_signal.connect(self._complete_startup)
+
+    def _activate_tools(self, *args):
+        # Re-scan existing dialogs as well as those opened after plugin loading.
+        # The logo restores the tools; it cannot accidentally turn them off.
+        self.set_enabled(True)
+
+    def _complete_startup(self):
+        self._activate_tools()
+        self._show_toolbar()
 
     def _show_toolbar(self):
         toolbar = getattr(self, '_toolbar', None)
@@ -94,7 +110,7 @@ class NativeCaumaxPlugin(QObject):
     def _remove_toolbar(self):
         signal = getattr(self, '_toolbar_startup_signal', None)
         if signal is not None:
-            signal.disconnect(self._show_toolbar)
+            signal.disconnect(self._complete_startup)
             self._toolbar_startup_signal = None
         toolbar = getattr(self, '_toolbar', None)
         if toolbar is not None:
@@ -106,6 +122,19 @@ class NativeCaumaxPlugin(QObject):
 
     def _check_updates(self, *args):
         self._updates.check(manual=True)
+
+    def _clear_generated_layers(self, *args):
+        # Clear live work first so its late results cannot repopulate the map.
+        # Ownership markers also find previous queries and reopened projects.
+        self.clear_layers_action.setEnabled(False)
+        try:
+            count = clear_delineations(close_dialogs=False, include_exports=True)
+            message = (f'Se han retirado {count} capas generadas por HidroCAUMAX. '
+                       'Los archivos se conservan en disco.' if count else
+                       'No hay capas generadas por HidroCAUMAX cargadas en el proyecto.')
+            self.iface.messageBar().pushMessage('HidroCAUMAX', message, level=Qgis.Info, duration=5)
+        finally:
+            self.clear_layers_action.setEnabled(True)
 
     def _open_saved_project(self):
         self._updates.check()
@@ -131,8 +160,6 @@ class NativeCaumaxPlugin(QObject):
 
     def set_enabled(self, enabled):
         enabled = bool(enabled)
-        if hasattr(self, 'action') and self.action.isChecked() != enabled:
-            self.action.setChecked(enabled)
         self._enabled = enabled
         if enabled:
             self._bridge.start()
@@ -140,6 +167,7 @@ class NativeCaumaxPlugin(QObject):
             self._rational_inputs.start()
             self._rational_layers.start()
             self._visible_dem.start()
+            self._native_layers_view.start()
             self._updates.check()
         else:
             self._updates.cancel()
@@ -150,6 +178,7 @@ class NativeCaumaxPlugin(QObject):
             self._rational_frequency.stop()
             self._rational_layers.stop()
             self._visible_dem.stop()
+            self._native_layers_view.stop()
 
     @staticmethod
     def _key(query):
@@ -240,9 +269,10 @@ class NativeCaumaxPlugin(QObject):
         self._rational_frequency.stop()
         self._rational_layers.stop()
         self._visible_dem.stop()
+        self._native_layers_view.stop()
         if hasattr(self, 'action'):
             try:
-                self.action.toggled.disconnect(self.set_enabled)
+                self.action.triggered.disconnect(self._activate_tools)
             except (RuntimeError, TypeError):
                 pass
             self.iface.removePluginMenu(self.MENU, self.action)
@@ -261,6 +291,13 @@ class NativeCaumaxPlugin(QObject):
                 pass
             self.iface.removePluginMenu(self.MENU, self.update_action)
             self.update_action.deleteLater()
+        if hasattr(self, 'clear_layers_action'):
+            try:
+                self.clear_layers_action.triggered.disconnect(self._clear_generated_layers)
+            except (RuntimeError, TypeError):
+                pass
+            self.iface.removePluginMenu(self.MENU, self.clear_layers_action)
+            self.clear_layers_action.deleteLater()
         if hasattr(self, 'reference_action'):
             try:
                 self.reference_action.triggered.disconnect(self._map_services.load)
