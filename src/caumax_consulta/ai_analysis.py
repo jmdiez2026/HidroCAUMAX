@@ -323,8 +323,8 @@ def _compact_analysis(result, context):
     findings = review_findings(result)
     reviewed = {}
     for metric in METRICS:
-        value = rows[metric.key].replace('\\n', ' ').strip()
-        value = re.sub(r'\\s+', ' ', value)
+        value = rows[metric.key].replace('\n', ' ').strip()
+        value = re.sub(r'\s+', ' ', value)
         if metric.key in findings:
             value = (REVIEW_PREFIX + ' ' + ' '.join(findings[metric.key])
                      + ' **Texto recibido de IA:** ' + value)
@@ -339,13 +339,13 @@ def _compact_analysis(result, context):
         cells = (metric.label, format_value(metric.key, values.get(metric.key)),
                  metric.unit or '—', reviewed[metric.key])
         output.append('| ' + ' | '.join(
-            str(item).replace('|', '\\|').replace('\\n', ' ').strip()
+            str(item).replace('|', '\\|').replace('\n', ' ').strip()
             for item in cells) + ' |')
     output += ['', '## Advertencia de interpretación',
                'Ningún parámetro aislado acredita riesgo, dimensionamiento ni '
                'conformidad con la Norma 5.2-IC.',
                '[Norma 5.2-IC oficial](' + NORM_URL + ')']
-    return '\\n'.join(output), reviewed
+    return '\n'.join(output), reviewed
 
 
 def _structured_analysis(content, context):
