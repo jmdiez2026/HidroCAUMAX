@@ -6,6 +6,7 @@ widgets to comma text therefore breaks both calculations and dependent fields.
 This UI-only editor delegates edits using canonical dot strings, so neither
 CAUMAX files nor their widget values or signals are modified.
 """
+import math
 import re
 
 from qgis.PyQt.QtCore import QEvent, QObject
@@ -37,6 +38,18 @@ def canonical_numeric(text):
 
 
 class _FieldPresentation(QObject):
+    def _display(self, text):
+        # CAUMAX originally displays Q rounded to an integer. Maintain two
+        # decimals in the visual output, including already populated fields.
+        if self.native.objectName() == 'txtResultFlow' and _NUMERIC.fullmatch(str(text)):
+            try:
+                value = float(text)
+                if math.isfinite(value):
+                    return f'{value:.2f}'.replace('.', ',')
+            except (TypeError, ValueError, OverflowError):
+                pass
+        return decimal_display(text)
+
     def __init__(self, native):
         super().__init__(native)
         self.native = native
@@ -50,7 +63,7 @@ class _FieldPresentation(QObject):
         self.editor.setPalette(native.palette())
         self.editor.setReadOnly(native.isReadOnly())
         self.editor.setToolTip(native.toolTip())
-        self.editor.setText(decimal_display(native.text()))
+        self.editor.setText(self._display(native.text()))
         self.editor.textChanged.connect(self._user_edited)
         native.textChanged.connect(self._native_changed)
         native.installEventFilter(self)
@@ -74,7 +87,7 @@ class _FieldPresentation(QObject):
     def _native_changed(self, text):
         if self._writing:
             return
-        localized = decimal_display(text)
+        localized = self._display(text)
         if self.editor.text() != localized:
             cursor = self.editor.cursorPosition()
             self.editor.blockSignals(True)
