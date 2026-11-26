@@ -188,6 +188,21 @@ class RationalLayersPanelTests(unittest.TestCase):
         self.discovered()
         self.assertEqual(self.panel._controller.resolution.selections, ['25'])
 
+    def test_generate_displays_downloaded_dem_before_taudem_network_finishes(self):
+        resolution = self.discovered()
+        key = self.panel._selected_key()
+        with patch.object(self.panel._layers, 'display_dem') as display_dem:
+            self.panel.drainage_prepare_button.click()
+            self.assertIsNone(self.panel._state)
+            resolution.selected(key)
+            display_dem.assert_called_once()
+            args = display_dem.call_args.args
+            self.assertEqual(args[0].cell_width, float(key))
+            self.assertEqual(Path(args[1]).name, f'mdt_{key}.tif')
+            self.assertIsNone(self.panel._state)
+            # QGIS sees the real MDT while the drainage task continues.
+            self.assertTrue(self.panel._controller.drainage.busy)
+
     def test_ready_network_visibility_exports_and_clear_preserve_native_dialog(self):
         products, state = self.prepared()
         panel = self.panel
