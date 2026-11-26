@@ -51,7 +51,7 @@ class _FieldPresentation(QObject):
         self.editor.setReadOnly(native.isReadOnly())
         self.editor.setToolTip(native.toolTip())
         self.editor.setText(decimal_display(native.text()))
-        self.editor.textEdited.connect(self._user_edited)
+        self.editor.textChanged.connect(self._user_edited)
         native.textChanged.connect(self._native_changed)
         native.installEventFilter(self)
         self._fit()
@@ -122,7 +122,7 @@ class _FieldPresentation(QObject):
         try:
             self.native.removeEventFilter(self)
             self.native.textChanged.disconnect(self._native_changed)
-            self.editor.textEdited.disconnect(self._user_edited)
+            self.editor.textChanged.disconnect(self._user_edited)
             self.editor.hide()
             self.editor.setParent(None)
             self.editor.deleteLater()
