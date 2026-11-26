@@ -144,6 +144,17 @@ class RationalLayersBridgeTests(unittest.TestCase):
         self.dialog.btnCalculate.setEnabled(True)
         self.bridge.calculation_finished(self.dialog,'parameters',dict(completed=True,ready_writes=[False,True]))
 
+    def test_native_decimal_presentation_keeps_native_python_inputs_unchanged(self):
+        binding = self.attach()
+        editor = self.dialog.findChild(QLineEdit, 'hidrocaumax_decimal_txtX')
+        self.assertIsNotNone(editor)
+        self.assertEqual(editor.text(), '342324,8')
+        self.assertEqual(self.dialog.txtX.text(), '342324.8')
+        self.assertIsNotNone(binding.decimal_presentation)
+        self.bridge.stop()
+        self.assertIsNone(self.dialog.findChild(QLineEdit, 'hidrocaumax_decimal_txtX'))
+        self.assertEqual(self.dialog.txtX.text(), '342324.8')
+
     def test_lazy_idempotent_binding_and_independent_current_query(self):
         original_items = [self.dialog.layout().itemAt(i) for i in range(self.dialog.layout().count())]
         binding = self.attach()
