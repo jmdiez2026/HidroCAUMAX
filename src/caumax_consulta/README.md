@@ -8,6 +8,12 @@ La fila «Resolución MDT» permite comparar **500 × 500 m · original CAUMAX**
 
 Los botones «Guardar cuenca», «Cuenca hidrográfica» y «Generar capas resolución mejorada» se encuentran en una misma fila, con logotipo GEA. El mensaje de estado de «Análisis IA» se muestra bajo la tabla, además de la ayuda emergente, para informar de peticiones en curso y errores del servicio.
 
+## Separador decimal en CAUMAX original
+
+Con HidroCAUMAX activo, los campos numéricos de la ventana nativa **Método racional** se presentan y editan con **coma decimal** (por ejemplo, `14,750`, `5,306` y `346039,6`). La adaptación es reversible y se aplica solo a esa ventana mientras nuestro complemento está activo. Los controles y archivos originales de CAUMAX permanecen intactos.
+
+Las entradas que CAUMAX recibe y las señales de sus controles nativos conservan el separador interno **punto** que exige su cálculo Python. Se evita así romper funciones como `float(txtArea.text())`, recálculos automáticos y comprobación de datos. No se introducen separadores de millares.
+
 ## Capas de referencia
 
 En **Complementos → HidroCAUMAX → Cargar capas HidroCAUMAX**, el complemento añade **HidroCAUMAX · Capas de referencia** como **primer subgrupo dentro de CAUMAX_CAPAS**, por encima de **Red 10 km²**, **Ríos** y las demás capas de CAUMAX. Si CAUMAX_CAPAS aún no existe, se coloca en la primera posición del árbol. Al repetir el comando se recoloca también un grupo ya cargado, sin duplicarlo. Se respeta esta prioridad de dibujo aunque el proyecto utilice un orden de capas personalizado. Contiene siete subgrupos, en este orden:
