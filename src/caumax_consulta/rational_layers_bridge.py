@@ -104,6 +104,7 @@ class _Binding:
     basin_button: object = None
     save_action: object = None
     native_save_button: object = None
+    decimal_presentation: object = None
     hidden_native_outline: object = None
     native_outline_visibility: object = None
     action_row: object = None
@@ -437,6 +438,8 @@ class RationalLayersBridge(QObject):
         layout.addWidget(scroll)
         dialog.layout().addWidget(container)
         binding = _Binding(dialog, container, button, scroll, error, self._canvas_crs())
+        from .native_decimal import RationalDecimalPresentation
+        binding.decimal_presentation = RationalDecimalPresentation(dialog)
         binding.basin_button, binding.action_row = basin_button, row
         binding.save_action, binding.native_save_button = save_action, native_save
         key = id(dialog)
@@ -697,6 +700,8 @@ class RationalLayersBridge(QObject):
         binding = self._bindings.pop(key, None)
         if binding is None:
             return
+        if binding.decimal_presentation is not None:
+            binding.decimal_presentation.dispose()
         for signal, slot in binding.connections:
             try:
                 signal.disconnect(slot)
