@@ -28,6 +28,7 @@ class _Drainage(Drainage):
             caumax_d8_path=query.directions_path, network_path='network.shp')
         geometry = QgsGeometry.fromWkt('LINESTRING(342325 4710000,342350 4710025)')
         state = dict(automatic=kwargs['automatic'], metadata={},
+            dem_path=str(products.dem_path),
             threshold_area_m2=kwargs['threshold_area_m2'] or 540000.,
             recommended_threshold_area_m2=540000., network_crs_wkt=query.crs.toWkt(),
             features=[dict(wkb=bytes(geometry.asWkb()), attributes={})])
@@ -195,6 +196,14 @@ class RationalLayersPanelTests(unittest.TestCase):
         self.assertTrue(network.isValid())
         self.assertEqual(network.featureCount(), 1)
         self.assertIs(QgsProject.instance().mapLayer(network.id()), network)
+        # Generar capas D8 automatically loads the real MDT into the same
+        # TauDEM group, directly after network and flow-direction raster.
+        dem = panel._layers.layers['dem']
+        self.assertEqual(dem.name(), 'MDT 25x25m')
+        group = QgsProject.instance().layerTreeRoot().findLayer(dem.id()).parent()
+        self.assertEqual([node.layer().id() for node in group.children()][2], dem.id())
+        self.assertTrue(QgsProject.instance().layerTreeRoot()
+                        .findLayer(dem.id()).itemVisibilityChecked())
         self.assertEqual(panel._layers.visibility(), dict(network=True, directions=False))
         panel.drainage_visible.setChecked(False)
         self.assertFalse(panel._layers.visibility()['network'])
