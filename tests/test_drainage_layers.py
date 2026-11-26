@@ -194,6 +194,42 @@ class DrainageLayersTests(unittest.TestCase):
         self.assertEqual(bytes(records[0].geometry().asWkb()),state['features'][0]['wkb'])
         self.assertTrue(QgsWkbTypes.hasZ(layer.wkbType()))
 
+    def test_generated_mdt_is_third_inside_d8_group_with_natural_relief(self):
+        path = self.folder / 'mdt_25.tif'
+        ds = gdal.GetDriverByName('GTiff').Create(str(path), 4, 4, 1, gdal.GDT_Float32)
+        ds.SetGeoTransform((500000,25,0,4700100,0,-25))
+        ds.SetProjection(self.crs.toWkt())
+        ds.GetRasterBand(1).WriteArray(np.array([
+            [130., 132., 146., 160.],
+            [125., 140., 150., 170.],
+            [118., 128., 145., 185.],
+            [110., 120., 150., 190.],
+        ], dtype=np.float32))
+        ds = None
+        state = self.snapshot()
+        state['caumax_d8_path'] = str(self.directions())
+        state['dem_path'] = str(path)
+        controller = self.controller()
+        layers = controller.update(self.analysis, state)
+        self.assertEqual(set(layers), {'network', 'directions', 'dem', 'hillshade'})
+        group = self.project.layerTreeRoot().findLayer(layers['dem'].id()).parent()
+        ordered = [node.layer().id() for node in group.children()]
+        self.assertEqual(ordered, [layers[k].id()
+            for k in ('network', 'directions', 'dem', 'hillshade')])
+        self.assertEqual(layers['dem'].name(), 'MDT 25x25m')
+        self.assertEqual(Path(layers['dem'].source()), path)
+        self.assertEqual(Path(layers['hillshade'].source()), path)
+        self.assertTrue(group.children()[2].itemVisibilityChecked())
+        self.assertTrue(group.children()[3].itemVisibilityChecked())
+        self.assertEqual(layers['dem'].renderer().type(), 'singlebandpseudocolor')
+        self.assertEqual(layers['hillshade'].renderer().type(), 'hillshade')
+        # The user's legend visibility choices survive a second D8 refresh.
+        group.children()[2].setItemVisibilityChecked(False)
+        after = controller.update(self.analysis, state)
+        self.assertFalse(self.project.layerTreeRoot()
+            .findLayer(after['dem'].id()).itemVisibilityChecked())
+        self.assertEqual(after['dem'].name(), 'MDT 25x25m')
+
     def test_real_layers_network_visible_and_categorical_caumax_d8_hidden(self):
         state = self.snapshot()
         state['tau_d8_path'] = str(self.directions(native=True))
