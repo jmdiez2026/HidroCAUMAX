@@ -1,10 +1,14 @@
 # HidroCAUMAX
 
-Complemento para **QGIS 3** que amplía **CAUMAX 3.0** con delimitación y análisis de cuencas, selección de MDT, morfología, curva hipsométrica, umbral de escorrentía P₀, precipitación diaria máxima Pd y consultas de cuantiles. Versión pública actual: **v1.0.6** (versión técnica del paquete: **1.0.6**). Repositorio: **jmdiez2026/HidroCAUMAX**.
+Complemento para **QGIS 3** que amplía **CAUMAX 3.0** con delimitación y análisis de cuencas, selección de MDT, morfología, curva hipsométrica, umbral de escorrentía P₀, precipitación diaria máxima Pd y consultas de cuantiles. Versión pública actual: **v1.0.7** (versión técnica del paquete: **1.0.7**). Repositorio: **jmdiez2026/HidroCAUMAX**.
 
 En **Método racional → Generación de capas resolución mejorada**, el selector incluye **500 × 500 m · original CAUMAX** como referencia informativa, junto a los MDT mejorados de 25 y 5 m. Al seleccionar 500 m se muestra en QGIS la cuenca básica y al elegir una resolución fina se vuelve a delinear automáticamente con su MDT y D8. El ajuste del cierre es opcional; el suavizado original/suavizado y el grado se encuentran en la misma sección. «Guardar cuenca», «Cuenca hidrográfica» y «Generar capas resolución mejorada» comparten la fila inferior y el logotipo GEA. Si falla «Análisis IA», su estado aparece visiblemente debajo de la tabla morfológica.
 
 El diálogo integra los estadísticos de cuenca y recalcula los resultados al cambiar la resolución del MDT o el grado de suavizado. Conserva el punto original consultado y los caudales oficiales de CAUMAX: cambiar el MDT modifica la delimitación y los parámetros de la cuenca, sin inventar nuevos caudales de avenida.
+
+## Barra de herramientas HidroCAUMAX
+
+La barra aparece automáticamente al cargar el complemento y al iniciar QGIS con HidroCAUMAX activo. Usa el logo elegido (gota, hidrograma, río y Q Max) y ofrece cuatro comandos: **Activar herramientas**, **Abrir cuenca**, **Cargar capas** y **Buscar actualizaciones**. Comparte las acciones del menú Complementos; puede moverse u ocultarse durante la sesión y se retira al deshabilitar el complemento en el gestor.
 
 ## Requisitos
 
@@ -15,17 +19,17 @@ El diálogo integra los estadísticos de cuenca y recalcula los resultados al ca
 - Conexión a **Pollinations Classic** para el botón **Análisis IA**, gratuito y sin credenciales. No se requiere una cuenta, una clave ni una biblioteca adicional. La disponibilidad y los límites temporales dependen de ese servicio externo.
 - En **Windows de 64 bits**, TauDEM 5.5.0, MPI y sus bibliotecas y datos de GDAL/PROJ están incluidos en el ZIP y se preparan automáticamente. **CAUMAX es el único complemento previo**; el usuario no instala otro complemento ni un motor hidrológico adicional. Se reutilizan las bibliotecas de ejecución de C++ de QGIS/Windows. El paquete de ejecutables integrado es para Windows: en Linux/macOS se requieren los motores GRASS o TauDEM/MPI ya disponibles en esa instalación; no se presenta el ZIP de Windows como un runtime multiplataforma.
 
-La versión v1.0.6 se distribuye en el canal **estable** (`experimental=False`). El código contiene controles de cobertura, NoData y errores; sus resultados deben revisarse con las fuentes y la resolución de cada proyecto.
+La versión v1.0.7 se distribuye en el canal **estable** (`experimental=False`). El código contiene controles de cobertura, NoData y errores; sus resultados deben revisarse con las fuentes y la resolución de cada proyecto.
 
 ## Instalación
 
 **Cambio de numeración anterior:** v1.0 reinició la serie pública desde 1.2.13. Los usuarios que aún tengan 1.2.13 deben instalar manualmente el ZIP de la serie 1.0.x; quienes ya tengan 1.0.0 podrán actualizar a 1.0.5 y posteriores desde el gestor de QGIS, con este repositorio habilitado.
 
 
-Descargas de la versión **v1.0.6**:
+Descargas de la versión **v1.0.7**:
 
-- [ZIP instalable desde QGIS](https://github.com/jmdiez2026/HidroCAUMAX/releases/download/v1.0.6/HidroCAUMAX_v1_0_6.zip).
-- [Instalador de Windows](https://github.com/jmdiez2026/HidroCAUMAX/releases/download/v1.0.6/HidroCAUMAX_v1_0_6_Setup.exe), con icono propio de río en crecida.
+- [ZIP instalable desde QGIS](https://github.com/jmdiez2026/HidroCAUMAX/releases/download/v1.0.7/HidroCAUMAX_v1_0_7.zip).
+- [Instalador de Windows](https://github.com/jmdiez2026/HidroCAUMAX/releases/download/v1.0.7/HidroCAUMAX_v1_0_7_Setup.exe), con icono propio de río en crecida.
 
 **En Windows**, cierra QGIS, ejecuta el instalador y selecciona tu perfil de QGIS 3. El asistente muestra el destino dentro de `%APPDATA%\QGIS\QGIS3\profiles`, trabaja con el usuario actual y no necesita permisos de administrador. Después, abre QGIS con ese perfil y activa HidroCAUMAX. QGIS y CAUMAX original deben estar instalados previamente. Los perfiles ubicados fuera de la carpeta habitual pueden usar el ZIP desde QGIS.
 
@@ -33,7 +37,7 @@ La instalación nueva se prepara antes de sustituir la anterior. Si ya había Hi
 
 **Instalación mediante ZIP**, válida también en Linux y macOS:
 
-1. Utiliza el archivo instalable **HidroCAUMAX_v1_0_6.zip** de esta entrega. El ZIP de código fuente que ofrece GitHub no es el instalable de QGIS.
+1. Utiliza el archivo instalable **HidroCAUMAX_v1_0_7.zip** de esta entrega. El ZIP de código fuente que ofrece GitHub no es el instalable de QGIS.
 2. En QGIS abre **Complementos → Administrar e instalar complementos → Instalar a partir de ZIP** y selecciona el instalable, sin descomprimirlo.
 3. Si ya utilizas HidroCAUMAX, acepta sustituir el complemento anterior y reinicia QGIS para cargar juntos todos los módulos de la nueva versión. La carpeta interna permanece como **caumax_consulta** para conservar la identidad de instalación.
 4. Activa CAUMAX 3.0, carga sus capas y realiza una consulta válida. Pulsa **Cuenca hidrográfica** para abrir las herramientas ampliadas.
@@ -187,7 +191,7 @@ No se incluyen capas de proyectos, sesiones guardadas, cachés, credenciales ni 
 El empaquetado utiliza **Python 3.10 o posterior** y su biblioteca estándar; no necesita iniciar QGIS:
 
 ```text
-python scripts/build_release.py --output dist --tag v1.0.6
+python scripts/build_release.py --output dist --tag v1.0.7
 ```
 
 Genera el ZIP instalable, sus sumas SHA-256 y el índice XML de distribución. Los archivos resultantes quedan fuera del control de versiones mediante `.gitignore`.
@@ -195,8 +199,8 @@ Genera el ZIP instalable, sus sumas SHA-256 y el índice XML de distribución. L
 Para añadir el instalador Windows se necesitan **NSIS (`makensis`) y 7-Zip (`7z` o `7zz`)** en la máquina de compilación. No se requiere Python en el equipo donde se ejecuta el instalador:
 
 ```text
-python scripts/build_windows_installer.py --zip dist/HidroCAUMAX_v1_0_6.zip --manifest dist/release_manifest.json --output-dir dist
-python scripts/build_release.py --output dist --tag v1.0.6 --reuse-zip dist/HidroCAUMAX_v1_0_6.zip --installer dist/HidroCAUMAX_v1_0_6_Setup.exe --installer-manifest dist/installer_manifest.json
+python scripts/build_windows_installer.py --zip dist/HidroCAUMAX_v1_0_7.zip --manifest dist/release_manifest.json --output-dir dist
+python scripts/build_release.py --output dist --tag v1.0.7 --reuse-zip dist/HidroCAUMAX_v1_0_7.zip --installer dist/HidroCAUMAX_v1_0_7_Setup.exe --installer-manifest dist/installer_manifest.json
 ```
 
 El empaquetador verifica los archivos realmente contenidos en el EXE frente al ZIP, registra las fuentes y la versión del compilador y añade el instalador a las sumas SHA-256 y la página de descarga. El ZIP es reproducible byte a byte; no se presupone que dos versiones distintas de NSIS produzcan un EXE idéntico.

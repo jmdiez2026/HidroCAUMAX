@@ -1,3 +1,13 @@
+# HidroCAUMAX v1.0.7 — barra de herramientas visible al cargar (2026-11-26)
+
+- Barra HidroCAUMAX con el logo elegido por el usuario (gota, hidrograma, río y emblema Q Max), conservado sin modificar la imagen.
+- Accesos a Activar herramientas, Abrir cuenca, Cargar capas y Buscar actualizaciones. Los botones comparten las acciones del menú Complementos, incluido el estado activado y la desactivación temporal durante la carga de referencias.
+- La barra aparece al cargar el complemento y al terminar el arranque de QGIS, incluso si había quedado oculta en la sesión anterior. Puede ocultarse o moverse durante la sesión desde los controles habituales de QGIS.
+- Al descargar el complemento se retiran la barra y su conexión al arranque; una nueva carga crea una única barra.
+- Pruebas con Qt real de botones, estado, visibilidad restaurada y descarga/recarga.
+
+---
+
 # HidroCAUMAX v1.0.6 — curva racional, D8 de 5 m y referencias (2026-11-26)
 
 - Al aceptar Calcular en el Método racional, abre una tabla de dos columnas alineada con un gráfico interactivo: T=2, 5, 10, 25, 100 y 500 años, más el periodo elegido. Cuantiles con un máximo de dos decimales y coma; precisión interna conservada.

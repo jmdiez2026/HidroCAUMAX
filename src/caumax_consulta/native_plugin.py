@@ -1,6 +1,8 @@
 """Plugin entry point: extend CAUMAX's own dialog, not QGIS identify."""
-from qgis.PyQt.QtCore import QObject
+from qgis.PyQt.QtCore import QObject, Qt
+from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction, QFileDialog, QMessageBox
+from qgis.core import QgsApplication
 from pathlib import Path
 
 from .caumax_bridge import CaumaxBridge
@@ -54,7 +56,52 @@ class NativeCaumaxPlugin(QObject):
         self.update_action = QAction('Buscar actualizaciones…', self.iface.mainWindow())
         self.update_action.triggered.connect(self._check_updates)
         self.iface.addPluginToMenu(self.MENU, self.update_action)
+        self._create_toolbar()
         self.set_enabled(True)
+
+    def _create_toolbar(self):
+        """Share the menu actions so checked, busy and trigger states agree."""
+        create = getattr(self.iface, 'addToolBar', None)
+        self._toolbar = (create(self.MENU) if callable(create)
+                         else self.iface.mainWindow().addToolBar(self.MENU))
+        self._toolbar.setObjectName('HidroCAUMAXToolbar')
+        self._toolbar.setToolButtonStyle(Qt.ToolButtonIconOnly)
+        self.action.setIcon(QIcon(str(Path(__file__).parent / 'assets' / 'hidrocaumax.png')))
+        self.open_action.setIcon(QgsApplication.getThemeIcon('/mActionFileOpen.svg'))
+        self.reference_action.setIcon(QgsApplication.getThemeIcon('/mActionAddLayer.svg'))
+        self.update_action.setIcon(QgsApplication.getThemeIcon('/mActionRefresh.svg'))
+        for action, caption, tip in (
+                (self.action, 'Activar herramientas', 'Activar o desactivar las herramientas HidroCAUMAX'),
+                (self.open_action, 'Abrir cuenca', 'Abrir un proyecto de cuenca guardado'),
+                (self.reference_action, 'Cargar capas', 'Cargar las capas de referencia HidroCAUMAX'),
+                (self.update_action, 'Actualizar', 'Buscar actualizaciones de HidroCAUMAX')):
+            action.setIconText(caption)
+            action.setToolTip(tip)
+            action.setStatusTip(tip)
+            self._toolbar.addAction(action)
+        self._show_toolbar()
+        # QGIS can restore a previously hidden toolbar after loading plugins.
+        self._toolbar_startup_signal = getattr(self.iface, 'initializationCompleted', None)
+        if self._toolbar_startup_signal is not None:
+            self._toolbar_startup_signal.connect(self._show_toolbar)
+
+    def _show_toolbar(self):
+        toolbar = getattr(self, '_toolbar', None)
+        if toolbar is not None:
+            toolbar.show()
+
+    def _remove_toolbar(self):
+        signal = getattr(self, '_toolbar_startup_signal', None)
+        if signal is not None:
+            signal.disconnect(self._show_toolbar)
+            self._toolbar_startup_signal = None
+        toolbar = getattr(self, '_toolbar', None)
+        if toolbar is not None:
+            self._toolbar = None
+            self.iface.mainWindow().removeToolBar(toolbar)
+            toolbar.clear()
+            toolbar.hide()
+            toolbar.deleteLater()
 
     def _check_updates(self, *args):
         self._updates.check(manual=True)
@@ -182,6 +229,7 @@ class NativeCaumaxPlugin(QObject):
 
     def unload(self):
         self._enabled = False
+        self._remove_toolbar()
         self._map_services.dispose()
         self._updates.dispose()
         self._close_dialogs()
