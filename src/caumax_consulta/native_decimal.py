@@ -152,6 +152,20 @@ class RationalDecimalPresentation:
             if isinstance(native, QLineEdit):
                 self.fields.append(_FieldPresentation(native))
 
+    def sync(self):
+        """Refresh fields written with blockSignals(True) by original CAUMAX.
+
+        Its calculator intentionally suppresses textChanged on I1/Id and I;
+        the presentation must not infer that an unchanged signal means an
+        unchanged numeric value.
+        """
+        for field in self.fields:
+            try:
+                field._native_changed(field.native.text())
+                field._fit()
+            except RuntimeError:
+                continue
+
     def dispose(self):
         for field in reversed(self.fields):
             field.dispose()
