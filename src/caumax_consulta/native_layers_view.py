@@ -48,12 +48,27 @@ def style_query_network(project):
     for layer in project.mapLayers().values():
         name = ''.join(layer.name().lower().split()).replace('²', '2').replace('^2', '2')
         if (name != 'red>50km2' or not isinstance(layer, QgsVectorLayer)
-                or layer.geometryType() != QgsWkbTypes.LineGeometry
-                or layer.customProperty('HidroCAUMAX/query_network_style', '')
-                   == NETWORK_STYLE_REVISION):
+                or layer.geometryType() != QgsWkbTypes.LineGeometry):
             continue
         renderer = layer.renderer()
         if renderer is None:
+            continue
+        symbols = list(renderer.symbols(QgsRenderContext()))
+        if not symbols:
+            continue
+        # The native CAUMAX layer loader and QGIS project restore may replace
+        # a renderer without removing our customProperty. Check the actual
+        # current symbol instead of trusting the old "already styled" marker.
+        def is_pink(symbol):
+            if (symbol.color().name().lower() != NETWORK_PINK
+                    or abs(symbol.width() - NETWORK_LINE_WIDTH_MM) > 1e-6):
+                return False
+            return (symbol.symbolLayerCount() > 0
+                    and symbol.symbolLayer(0).widthUnit()
+                       == QgsUnitTypes.RenderMillimeters)
+        if all(is_pink(symbol) for symbol in symbols):
+            if layer.customProperty('HidroCAUMAX/query_network_style', '') != NETWORK_STYLE_REVISION:
+                layer.setCustomProperty('HidroCAUMAX/query_network_style', NETWORK_STYLE_REVISION)
             continue
         renderer = renderer.clone()
         for symbol in renderer.symbols(QgsRenderContext()):
@@ -111,11 +126,15 @@ class NativeLayersView(QObject):
         self._zoom_timer = QTimer(self)
         self._zoom_timer.setSingleShot(True)
         self._zoom_timer.timeout.connect(self._apply)
+        self._style_timer = QTimer(self)
+        self._style_timer.setSingleShot(True)
+        self._style_timer.timeout.connect(self._style_loaded_network)
 
     def start(self):
         if self._running:
             return
         self._running = True
+        QgsProject.instance().layersAdded.connect(self._schedule_style)
         self._scan()
         self._scan_timer.start()
 
@@ -123,6 +142,11 @@ class NativeLayersView(QObject):
         self._running = False
         self._scan_timer.stop()
         self._zoom_timer.stop()
+        self._style_timer.stop()
+        try:
+            QgsProject.instance().layersAdded.disconnect(self._schedule_style)
+        except (RuntimeError, TypeError):
+            pass
         self._disconnect()
 
     def _disconnect(self):
@@ -132,6 +156,15 @@ class NativeLayersView(QObject):
                 action.triggered.disconnect(self._loaded)
             except (RuntimeError, TypeError):
                 pass
+
+    def _schedule_style(self, *args):
+        if self._running:
+            # Let CAUMAX finish setting up its default renderer first.
+            self._style_timer.start(0)
+
+    def _style_loaded_network(self):
+        if self._running:
+            style_query_network(QgsProject.instance())
 
     def _scan(self):
         if not self._running:
