@@ -538,6 +538,21 @@ class DrainageLayers:
                        project.mapLayer(self.layers[kind].id()) is not self.layers[kind]
                        for kind in ('network', 'directions', 'dem'))):
             raise ValueError('No se puede conservar una red D8 incompleta.')
+        # The automatically created yellow closure must be a physical
+        # shapefile, not merely a QGIS memory layer. Materialize it only once
+        # the complete D8 result has passed validation and is being published.
+        closure = self.layers.get('closure')
+        if closure is not None and closure.providerType() == 'memory':
+            from .closure_layers import persist_generated_closure
+            saved = persist_generated_closure(closure)
+            saved.setCustomProperty(OWNER_PROPERTY, self.owner_key)
+            saved.setCustomProperty(ROLE_PROPERTY, 'closure')
+            project.addMapLayer(saved, False)
+            node = self._group.insertLayer(0, saved)
+            node.setItemVisibilityChecked(True)
+            node.setExpanded(False)
+            project.removeMapLayer(closure.id())
+            self.layers['closure'] = saved
         self._group.setCustomProperty(PIN_PROPERTY, True)
         for layer in self.layers.values():
             if layer is not None and not sip.isdeleted(layer):
