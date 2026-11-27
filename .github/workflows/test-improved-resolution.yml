@@ -3,6 +3,7 @@ name: Validar correcciones de resolución mejorada
 on:
   push:
     branches:
+      - main
       - fix/1.0.17-retencion-d8-export
       - fix/1.0.18-fine-rational-and-pink-network
       - fix/1.0.19-restore-basin-selector-outlet
