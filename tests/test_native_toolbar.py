@@ -123,6 +123,26 @@ class ToolbarTests(unittest.TestCase):
         self.plugin.clear_layers_action.trigger()
         self.assertIn('No hay capas', self.messages.pushMessage.call_args.args[1])
 
+    def test_hidrocaumax_logo_changes_with_tool_state_without_disabling_restore(self):
+        from qgis.PyQt.QtGui import QIcon
+        p = self.plugin
+        button = p._toolbar.widgetForAction(p.action)
+        active = p.action.icon().pixmap(32, 32, QIcon.Normal).toImage()
+        self.assertTrue(p.action.isEnabled())
+        p.set_enabled(False)
+        muted = p.action.icon().pixmap(32, 32, QIcon.Normal).toImage()
+        self.assertTrue(p.action.isEnabled())
+        self.assertFalse(active.isNull())
+        self.assertFalse(muted.isNull())
+        self.assertTrue(any(
+            active.pixelColor(x, y).rgba() != muted.pixelColor(x, y).rgba()
+            for y in range(min(active.height(), muted.height()))
+            for x in range(min(active.width(), muted.width()))))
+        QTest.mouseClick(button, Qt.LeftButton)
+        self.assertTrue(p._enabled)
+        restored = p.action.icon().pixmap(32, 32, QIcon.Normal).toImage()
+        self.assertEqual(active, restored)
+
     def test_logo_restores_tools_and_repeated_clicks_never_disable_them(self):
         p = self.plugin
         button = p._toolbar.widgetForAction(p.action)
