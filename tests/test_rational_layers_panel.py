@@ -11,7 +11,8 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 from qgis.PyQt import sip
 from qgis.PyQt.QtCore import QCoreApplication, QEvent, Qt, QRect
 from qgis.PyQt.QtWidgets import QDialog, QMainWindow, QScrollArea, QVBoxLayout, QPushButton
-from qgis.core import QgsApplication, QgsCoordinateReferenceSystem, QgsGeometry, QgsProject
+from qgis.core import (QgsApplication, QgsCoordinateReferenceSystem, QgsGeometry,
+                       QgsProject, QgsVectorLayer)
 from qgis.gui import QgsMapCanvas
 
 from caumax_consulta import rational_layers_controller as controller_module
@@ -208,6 +209,41 @@ class RationalLayersPanelTests(unittest.TestCase):
             self.assertIsNone(self.panel._state)
             # QGIS sees the real MDT while the drainage task continues.
             self.assertTrue(self.panel._controller.drainage.busy)
+
+    def test_generate_esri_d8_keeps_new_group_but_deletes_all_old_course_groups(self):
+        from caumax_consulta.course_layers import _OWNER_PROPERTY
+        from caumax_consulta.drainage_layers import DRAINAGE_GROUP_LABEL
+        project = QgsProject.instance()
+        root = project.layerTreeRoot()
+        old_ids = []
+        old_groups = []
+        for i in range(2):
+            group = root.addGroup('HidroCAUMAX · Curso principal [old]')
+            group.setCustomProperty(_OWNER_PROPERTY, 'old-' + str(i))
+            layer = QgsVectorLayer('LineString?crs=EPSG:25830',
+                                   'Curso principal total (L)', 'memory')
+            layer.setCustomProperty(_OWNER_PROPERTY, 'old-' + str(i))
+            project.addMapLayer(layer, False)
+            group.addLayer(layer)
+            old_ids.append(layer.id())
+            old_groups.append(group)
+        resolution = self.discovered()
+        resolution.selected('25')
+        self.panel.drainage_prepare_button.click()
+        # A queued or failed computation must not erase the previous result:
+        # only a successfully published new D8 group may retire it.
+        self.assertTrue(all(project.mapLayer(key) is not None for key in old_ids))
+        self.panel._controller.drainage.complete()
+        self.assertTrue(all(project.mapLayer(key) is None for key in old_ids))
+        self.assertFalse(any(g.customProperty(_OWNER_PROPERTY, '')
+                             for g in root.findGroups(recursive=True)))
+        self.assertEqual(len([g for g in root.findGroups(recursive=True)
+                              if g.name().startswith(DRAINAGE_GROUP_LABEL)]), 1)
+        group = self.panel._layers._group
+        self.assertIn(group, root.findGroups(recursive=True))
+        self.assertTrue(all(project.mapLayer(layer.id()) is layer
+                            for layer in self.panel._layers.layers.values()))
+        self.assertTrue(Path(self.panel._controller.resolution.base_query.dem_path).exists())
 
     def test_ready_network_visibility_exports_and_clear_preserve_native_dialog(self):
         products, state = self.prepared()
