@@ -6,6 +6,8 @@ from pathlib import Path
 import sys
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
+from tempfile import TemporaryDirectory
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 from qgis.PyQt import sip
@@ -15,7 +17,8 @@ from qgis.core import (
 )
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from caumax_consulta.course_layers import CourseLayers, course_symbol
+from caumax_consulta.course_layers import (
+    CourseLayers, course_symbol, deduplicate_course_groups, _OWNER_PROPERTY)
 
 
 class NoCanvasIface:
@@ -183,23 +186,95 @@ class CourseLayersTests(unittest.TestCase):
         self.assertFalse(group.itemVisibilityChecked())
         self.assertEqual(flags,{'main':False,'central':True})
 
-    def test_independent_owners_and_explicit_removal_touch_only_owned_layers(self):
-        unrelated = QgsVectorLayer('LineString?crs=EPSG:25830','User layer','memory')
+    def test_second_course_generation_retires_first_completely_and_keeps_user_layers(self):
+        unrelated = QgsVectorLayer('LineString?crs=EPSG:25830', 'User layer', 'memory')
         self.project.addMapLayer(unrelated)
-        first,second = self.controller(),self.controller()
-        a,b = first.update(self.analysis,self.query),second.update(self.analysis,self.query)
+        first, second = self.controller(), self.controller()
+        previous = first.update(self.analysis, self.query)
         tree = self.project.layerTreeRoot()
-        group_a = tree.findLayer(a['main'].id()).parent()
-        group_b = tree.findLayer(b['main'].id()).parent()
-        self.assertIsNot(group_a,group_b)
-        self.assertNotEqual(first.owner_key,second.owner_key)
-        ids_b = {layer.id() for layer in b.values()}
+        old_group = tree.findLayer(previous['main'].id()).parent()
+        old_ids = {layer.id() for layer in previous.values()}
+        new = second.update(self.analysis, self.query)
+        newest_group = tree.findLayer(new['main'].id()).parent()
+        self.assertNotEqual(first.owner_key, second.owner_key)
+        self.assertTrue(sip.isdeleted(old_group))
+        self.assertEqual(first.layers, {})
+        self.assertIsNone(first._group)
+        self.assertTrue(all(self.project.mapLayer(item) is None for item in old_ids))
+        self.assertEqual(
+            [g for g in tree.findGroups(recursive=True) if g.customProperty(_OWNER_PROPERTY, '')],
+            [newest_group])
+        self.assertTrue(all(self.project.mapLayer(l.id()) is l for l in new.values()))
+        self.assertIs(self.project.mapLayer(unrelated.id()), unrelated)
+        # Disposing the old dialog after eviction must not remove newest work.
         first.remove()
-        self.assertEqual(first.layers,{})
-        self.assertTrue(ids_b.issubset(self.project.mapLayers()))
-        self.assertIs(self.project.mapLayer(unrelated.id()),unrelated)
-        self.assertTrue(sip.isdeleted(group_a))
-        self.assertFalse(sip.isdeleted(group_b))
+        self.assertTrue(all(self.project.mapLayer(l.id()) is l for l in new.values()))
+        self.assertEqual(len([g for g in tree.findGroups(recursive=True)
+                              if g.customProperty(_OWNER_PROPERTY, '')]), 1)
+
+    def test_retired_group_keeps_foreign_child_but_not_its_container(self):
+        first, second = self.controller(), self.controller()
+        old = first.update(self.analysis, self.query)
+        root = self.project.layerTreeRoot()
+        old_group = root.findLayer(old['main'].id()).parent()
+        user = QgsVectorLayer('Point?crs=EPSG:25830', 'Independent user points', 'memory')
+        self.project.addMapLayer(user, False)
+        old_group.addLayer(user)
+        second.update(self.analysis, self.query)
+        self.assertTrue(sip.isdeleted(old_group))
+        self.assertIs(self.project.mapLayer(user.id()), user)
+        self.assertIsNotNone(root.findLayer(user.id()))
+        self.assertIs(root.findLayer(user.id()).parent(), root)
+
+    def test_reopening_legacy_project_retains_lowest_newest_course_group(self):
+        from caumax_consulta.course_layers import _NAMES
+        project = self.project
+        root = project.layerTreeRoot()
+        old, recent = [], []
+        for container in (old, recent):
+            group = root.addGroup('HidroCAUMAX · Curso principal [legacy]')
+            group.setCustomProperty(_OWNER_PROPERTY, 'old' if container is old else 'new')
+            layer = QgsVectorLayer('LineString?crs=EPSG:25830', _NAMES['main'], 'memory')
+            layer.setCustomProperty(_OWNER_PROPERTY, group.customProperty(_OWNER_PROPERTY))
+            project.addMapLayer(layer, False)
+            group.addLayer(layer)
+            container.extend((group, layer))
+        self.assertEqual(deduplicate_course_groups(project), 1)
+        self.assertTrue(sip.isdeleted(old[0]))
+        self.assertIsNone(project.mapLayer(old[1].id()) if not sip.isdeleted(old[1]) else None)
+        self.assertIsNotNone(project.mapLayer(recent[1].id()))
+        self.assertFalse(sip.isdeleted(recent[0]))
+
+    def test_deletes_only_private_course_disk_files_not_shared_dem_or_user_files(self):
+        from osgeo import ogr, osr
+        import caumax_consulta.course_layers as module
+        first, second = self.controller(), self.controller()
+        with TemporaryDirectory() as folder:
+            private = Path(folder) / 'HidroCAUMAX' / 'courses'
+            private.mkdir(parents=True)
+            file = private / 'outdated.gpkg'
+            ds = ogr.GetDriverByName('GPKG').CreateDataSource(str(file))
+            srs = osr.SpatialReference()
+            srs.ImportFromEPSG(25830)
+            ds.CreateLayer('course', srs, ogr.wkbLineString)
+            ds = None
+            old = QgsVectorLayer(str(file), 'Old course', 'ogr')
+            self.assertTrue(old.isValid())
+            old.setCustomProperty(_OWNER_PROPERTY, first.owner_key)
+            self.project.addMapLayer(old, False)
+            old_group = self.project.layerTreeRoot().addGroup('HidroCAUMAX · Curso principal antiguo')
+            old_group.setCustomProperty(_OWNER_PROPERTY, first.owner_key)
+            old_group.addLayer(old)
+            external = Path(folder) / 'user-owned.tif'
+            external.write_bytes(b'Protected user DEM')
+            with patch.object(module, 'QgsApplication',
+                              SimpleNamespace(qgisSettingsDirPath=lambda: folder)):
+                second.update(self.analysis, self.query)
+            self.assertFalse(file.exists())
+            self.assertTrue(external.exists())
+            self.assertTrue(sip.isdeleted(old_group))
+            self.assertEqual(len([g for g in self.project.layerTreeRoot().findGroups(recursive=True)
+                                  if g.customProperty(_OWNER_PROPERTY, '')]), 1)
 
     def test_result_layers_survive_controller_or_dialog_lifetime(self):
         controller = CourseLayers(NoCanvasIface())
@@ -211,26 +286,26 @@ class CourseLayersTests(unittest.TestCase):
         for layer in layers.values():
             self.assertEqual(layer.featureCount(),1)
 
-    def test_new_query_hides_previous_course_and_reactivation_preserves_child_checks(self):
+    def test_newer_rational_course_replaces_maxflow_course_in_both_directions(self):
+        from caumax_consulta.course_layers import _OWNER_PROPERTY
         first, second = self.controller(), self.controller()
-        old = first.update(self.analysis, self.query, {'main': False, 'central': True})
+        previous = first.update(self.analysis, self.query,
+                                {'main': False, 'central': True})
+        previous_ids = {layer.id() for layer in previous.values()}
         tree = self.project.layerTreeRoot()
-        old_main = tree.findLayer(old['main'].id())
-        old_central = tree.findLayer(old['central'].id())
         unrelated = tree.insertGroup(0, 'Relieve del usuario')
         unrelated.setCustomProperty('HidroCAUMAX/terrain_owner', 'terrain')
-        current = second.update(self.analysis, self.query)
-        current_main = tree.findLayer(current['main'].id())
-        self.assertFalse(old_central.isVisible())
-        self.assertTrue(old_central.itemVisibilityChecked())
-        self.assertFalse(old_main.itemVisibilityChecked())
-        self.assertTrue(current_main.isVisible())
+        recent = second.update(self.analysis, self.query)
+        recent_ids = {layer.id() for layer in recent.values()}
+        self.assertFalse(any(self.project.mapLayer(i) for i in previous_ids))
+        self.assertTrue(all(self.project.mapLayer(i) is not None for i in recent_ids))
         self.assertTrue(unrelated.itemVisibilityChecked())
-        self.assertTrue(all(self.project.mapLayer(layer.id()) is layer for layer in old.values()))
+        self.assertEqual(len([g for g in tree.findGroups(recursive=True)
+                              if g.customProperty(_OWNER_PROPERTY, '')]), 1)
         first.update(self.analysis, self.query)
-        self.assertTrue(old_central.isVisible())
-        self.assertFalse(old_main.isVisible())
-        self.assertFalse(current_main.isVisible())
+        self.assertFalse(any(self.project.mapLayer(i) for i in recent_ids))
+        self.assertEqual(len([g for g in tree.findGroups(recursive=True)
+                              if g.customProperty(_OWNER_PROPERTY, '')]), 1)
 
     def test_single_cell_has_empty_layers_and_can_update_in_place_both_directions(self):
         controller = self.controller()
