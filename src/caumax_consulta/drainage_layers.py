@@ -57,7 +57,7 @@ def _remove_unused_taudem_caches(candidates, project, protected_paths):
                 ': ' + str(error), 'HidroCAUMAX', Qgis.Warning)
 
 
-def prune_managed_drainage(project=None, *, keep_owner=None, protected_paths=()):
+def prune_managed_drainage(project=None, *, keep_owner=None, protected_paths=(), retire_paths=()):
     """Only the currently selected TauDEM generation may remain in QGIS.
 
     Remove older managed QGIS layers and unreferenced temporary D8 outputs.
@@ -74,6 +74,7 @@ def prune_managed_drainage(project=None, *, keep_owner=None, protected_paths=())
                 if layer.customProperty(OWNER_PROPERTY) not in editing]
     candidates = {_private_taudem_directory(layer.source()) for layer in obsolete
                   if layer.providerType() == 'gdal'}
+    candidates.update(_private_taudem_directory(path) for path in retire_paths)
     candidates.discard(None)
     if obsolete:
         project.removeMapLayers([layer.id() for layer in obsolete])
