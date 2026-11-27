@@ -85,6 +85,10 @@ class NativeQueryCleanupTests(unittest.TestCase):
         self.dialog._task=late
         self.assertTrue(late.run(),late.error)
         old_ids=set(QgsProject.instance().mapLayers())-self.helper.initial_ids
+        from caumax_consulta.drainage_layers import PIN_PROPERTY
+        pinned_ids = {layer.id() for layer in QgsProject.instance().mapLayers().values()
+                      if layer.customProperty(PIN_PROPERTY, False)}
+        transient_ids = old_ids - pinned_ids
         foreign=QgsVectorLayer('Point?crs=EPSG:25830','HidroCAUMAX · usuario','memory')
         QgsProject.instance().addMapLayer(foreign)
         next_query=replace(self.helper.query,x=self.helper.query.x+25)
@@ -93,7 +97,8 @@ class NativeQueryCleanupTests(unittest.TestCase):
             self.assertTrue(self.dialog._disposed)
             self.assertTrue(saved._disposed)
             self.assertTrue(late.isCanceled())
-            self.assertFalse(old_ids.intersection(QgsProject.instance().mapLayers()))
+            self.assertFalse(transient_ids.intersection(QgsProject.instance().mapLayers()))
+            self.assertTrue(pinned_ids.issubset(QgsProject.instance().mapLayers()))
             self.assertIs(QgsProject.instance().mapLayer(foreign.id()),foreign)
             self.helper.query=query
             self.helper.analysis=analyze_basin(query.directions_path,query.dem_path,query.x,query.y)
