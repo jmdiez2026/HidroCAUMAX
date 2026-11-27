@@ -20,7 +20,8 @@ from qgis.PyQt.QtCore import QObject, QTimer, pyqtSignal
 from qgis.PyQt.QtWidgets import QAbstractButton, QApplication, QDialog, QMessageBox
 from qgis.core import Qgis, QgsMessageLog
 
-from .rational_grid_validation import verify_fine_rational_pair
+from .rational_grid_validation import (verify_fine_rational_pair,
+                                       verify_rational_climate_crs)
 
 
 _MISSING = object()
@@ -263,7 +264,12 @@ def _fine_preflight(dialog, paths):
         y = _rational_coordinate(dialog.txtY.text())
     except (AttributeError, TypeError, ValueError):
         return None  # Let CAUMAX report an invalid native point.
-    return verify_fine_rational_pair(paths[0], paths[1], x, y)
+    verified = verify_fine_rational_pair(paths[0], paths[1], x, y)
+    if verified is not None:
+        all_sources = _configured_rational_paths(dialog, all_sources=True)
+        if all_sources and len(all_sources) > 2:
+            verify_rational_climate_crs(paths[0], all_sources[2:])
+    return verified
 
 
 def _configured_pair_hint(paths, x, y):
