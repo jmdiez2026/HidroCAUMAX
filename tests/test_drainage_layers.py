@@ -288,6 +288,23 @@ class DrainageLayersTests(unittest.TestCase):
         self.assertTrue(all(self.project.mapLayer(layer_id) is None
                             for layer_id in current_ids.values()))
 
+    def test_legacy_qgis_project_adopts_last_complete_d8_not_incomplete_preview(self):
+        state = self.snapshot()
+        state['caumax_d8_path'] = str(self.directions())
+        state['dem_path'] = str(self.elevation())
+        preview = self.controller('preview')
+        preview.display_dem(self.analysis, state['dem_path'])
+        self.assertEqual(drainage.adopt_legacy_published_drainage(self.project), 0)
+        complete = self.controller('legacy-complete')
+        layers = complete.update(self.analysis, state)
+        self.assertFalse(complete._group.customProperty(drainage.PIN_PROPERTY, False))
+        self.assertEqual(drainage.adopt_legacy_published_drainage(self.project), 1)
+        self.assertTrue(complete._group.customProperty(drainage.PIN_PROPERTY, False))
+        self.assertEqual(drainage.prune_managed_drainage(self.project), 2)
+        self.assertTrue(all(self.project.mapLayer(layer.id()) is layer
+                            for layer in layers.values()))
+        self.assertEqual(drainage.adopt_legacy_published_drainage(self.project), 0)
+
     def test_offline_network_survives_missing_caumax_raster_without_native_fallback(self):
         state = self.snapshot()
         state['caumax_d8_path'] = '/missing/offline.tif'
