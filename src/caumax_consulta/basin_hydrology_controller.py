@@ -29,25 +29,35 @@ class _MeanTask(QgsTask):
     def run(self):
         try:
             from .basin_hydrology import basin_raster_mean
-            if self.kind == 'p0':
-                self.result = basin_raster_mean(self.analysis, self.sources.get('p0', ''),
-                    statistics=True,
-                    cancelled=self.isCanceled,
-                    progress=lambda percent: self.publish('Calculando P₀ medio…', percent))
-            else:
+            both = self.kind == 'both'
+            if self.kind in ('p0', 'both'):
+                p0 = basin_raster_mean(self.analysis, self.sources.get('p0', ''),
+                    statistics=True, cancelled=self.isCanceled,
+                    progress=lambda percent: self.publish(
+                        'Calculando P₀ medio…', percent * .2 if both else percent))
+            if self.kind in ('rainfall', 'both'):
                 result = {}
                 periods = (2, 5, 10, 25, 100, 500)
                 for index, period in enumerate(periods):
                     if self.isCanceled():
                         raise InterruptedError('Cálculo de medias cancelado.')
                     text = f'Precipitación máxima diaria media · T = {period} años…'
-                    self.publish(text, index * 100. / len(periods))
+                    start = 20. if both else 0.
+                    span = 80. if both else 100.
+                    self.publish(text, start + index * span / len(periods))
                     result[str(period)] = basin_raster_mean(self.analysis,
                         self.sources.get('rainfall', {}).get(str(period), ''),
-                        statistics=True,profile=True,
+                        statistics=True, profile=True,
                         cancelled=self.isCanceled,
                         progress=lambda percent, i=index, text=text:
-                            self.publish(text, (i + percent / 100.) * 100. / len(periods)))
+                            self.publish(text, start + (i + percent / 100.) * span / len(periods)))
+            if both:
+                # One atomic publication: no P0 from a newer basin mixed with
+                # rainfall from an older one, even if the operation is canceled.
+                self.result = {'p0': p0, 'rainfall': result}
+            elif self.kind == 'p0':
+                self.result = p0
+            else:
                 self.result = result
             return not self.isCanceled()
         except InterruptedError:
@@ -72,7 +82,7 @@ class BasinHydrologyController(QObject):
     def calculate(self, kind, analysis, sources):
         if self._disposed:
             return
-        if kind not in ('p0', 'rainfall'):
+        if kind not in ('p0', 'rainfall', 'both'):
             raise ValueError('Tipo de media no reconocido.')
         from .basin_hydrology import basin_fingerprint
         self.cancel()
