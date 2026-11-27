@@ -36,6 +36,65 @@ def _fine_resolution(calculator):
         return None
 
 
+_ESRI_D8_CODES = (1, 2, 4, 8, 16, 32, 64, 128)
+
+
+def _esri_d8_schema_issue(raster, resolution):
+    """Validate the selected D8's *values*, not just its advertised encoding.
+
+    TauDEM native codes 1..8 cannot be supplied directly to CAUMAX: it
+    expects the ESRI powers-of-two directions. An untagged user GeoTIFF can
+    pass this structural test, but without provenance its generating engine
+    cannot be independently authenticated.
+    """
+    encoding = (raster.GetMetadataItem('FLOW_DIRECTION_ENCODING') or '').strip().upper()
+    product = raster.GetMetadataItem('HIDROCAUMAX_PRODUCT') or ''
+    if encoding == 'TAUDEM_D8':
+        return ('El ráster utiliza códigos nativos TauDEM (1–8), no ESRI D8. '
+                'Selecciona Dirección de flujo D8 · CAUMAX/ESRI en '
+                'ResolucionMejorada, no d8_tau.tif.')
+    if encoding and encoding != 'ESRI_D8':
+        return ('La codificación D8 declarada (' + encoding +
+                ') no corresponde al esquema ESRI que utiliza CAUMAX.')
+    if product in _PRODUCTS and encoding != 'ESRI_D8':
+        return ('La exportación de direcciones HidroCAUMAX no acredita '
+                'FLOW_DIRECTION_ENCODING=ESRI_D8.')
+    band = raster.GetRasterBand(1)
+    if band is None:
+        return 'El ráster de direcciones no contiene una banda D8.'
+    nodata = band.GetNoDataValue()
+    if product in _PRODUCTS and nodata != 255:
+        return ('El D8 exportado por HidroCAUMAX debe conservar NoData=255 '
+                'y los códigos ESRI 1,2,4,8,16,32,64,128.')
+    allowed = _ESRI_D8_CODES if product in _PRODUCTS else (*_ESRI_D8_CODES, 0)
+    has_directions = False
+    # Never allocate a full second fine raster: only bounded stripes.
+    rows = max(1, min(128, 524288 // max(1, raster.RasterXSize)))
+    for top in range(0, raster.RasterYSize, rows):
+        height = min(rows, raster.RasterYSize - top)
+        data = band.ReadAsArray(0, top, raster.RasterXSize, height)
+        if data is None:
+            return 'No se pueden leer todas las celdas del ráster D8.'
+        valid = np.isfinite(data)
+        if nodata is not None:
+            valid &= data != nodata
+        if not (band.GetMaskFlags() & gdal.GMF_ALL_VALID):
+            valid &= band.GetMaskBand().ReadAsArray(
+                0, top, raster.RasterXSize, height) != 0
+        values = data[valid]
+        if np.any(~np.isin(values, allowed)):
+            offending = values[~np.isin(values, allowed)][0]
+            return (f'El ráster D8 de {resolution:g} m contiene el valor '
+                    f'{offending:g}; CAUMAX requiere direcciones ESRI '
+                    '1,2,4,8,16,32,64,128 (y NoData declarado). '
+                    'Es probable que se haya elegido d8_tau.tif sin recodificar.')
+        has_directions |= bool(np.any(np.isin(values, _ESRI_D8_CODES)))
+    if not has_directions:
+        return (f'El D8 de {resolution:g} m no contiene ninguna dirección de '
+                'flujo válida para CAUMAX; no se puede delinear una cuenca.')
+    return None
+
+
 def _fine_grid_issue(calculator, direction_path):
     """CAUMAX indexes D8 by DEM row/col: their georeferencing must agree.
 
@@ -67,10 +126,9 @@ def _fine_grid_issue(calculator, direction_path):
                 or dem_crs.ImportFromWkt(str(calculator.crs)) != 0
                 or not source_crs.IsSame(dem_crs)):
             return f'El MDT y el D8 de {size:g} m utilizan CRS diferentes o inválidos.'
-        if raster.GetMetadataItem('FLOW_DIRECTION_ENCODING') == 'TAUDEM_D8':
-            return ('Se ha configurado un D8 TauDEM sin recodificar. '
-                    'CAUMAX necesita el TIFF de direcciones CAUMAX/ESRI '
-                    'exportado desde HidroCAUMAX.')
+        issue = _esri_d8_schema_issue(raster, size)
+        if issue:
+            return issue
     except (AttributeError, TypeError, ValueError, RuntimeError):
         return f'No se pudo comprobar la compatibilidad del MDT y el D8 de {size:g} m.'
     finally:
