@@ -341,10 +341,12 @@ class BoundaryLayers:
             geometries['suavizada'] = _polygon(smooth)
         self._result_keys.add(key)
         layers = self._existing(key)
-        if _fine_resolution(analysis.cell_width, analysis.cell_height) is not None:
+        resolution = _fine_resolution(analysis.cell_width, analysis.cell_height)
+        if resolution is not None:
             if any(layer.isEditable() and layer not in layers.values()
-                   for _, layer in _managed_fine(project)):
-                raise ValueError('Finaliza la edición de la divisoria de 25 m antes de sustituirla.')
+                   for size, layer in _managed_fine(project) if size == resolution):
+                raise ValueError('Finaliza la edición de la divisoria de '
+                                 + format(resolution, 'g') + ' m antes de sustituirla.')
         root = project.layerTreeRoot()
         group = next((node for node in root.children() if node.customProperty(OWNER_PROPERTY) == key), None)
         title = boundary_display_name(analysis)
