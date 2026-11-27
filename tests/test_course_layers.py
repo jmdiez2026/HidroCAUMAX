@@ -15,7 +15,8 @@ from qgis.core import (
 )
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from caumax_consulta.course_layers import CourseLayers, course_symbol
+from caumax_consulta.course_layers import (
+    CourseLayers, course_symbol, migrate_course_display_names)
 
 
 class NoCanvasIface:
@@ -108,10 +109,49 @@ class CourseLayersTests(unittest.TestCase):
             self.assertAlmostEqual(symbol.symbolLayer(0).width(),1.5)
             self.assertAlmostEqual(symbol.symbolLayer(1).width(),1.1)
         name = self.project.layerTreeRoot().findLayer(layers['main'].id()).parent().name()
-        self.assertIn('HidroCAUMAX · Curso principal',name)
-        self.assertIn('500000',name)
-        self.assertIn('celda Q 5,9',name)
-        self.assertIn('10×20 m',name)
+        self.assertEqual(name, 'HidroCAUMAX · Curso principal 10x20')
+        self.assertNotIn('X=', name)
+        self.assertNotIn('Y=', name)
+        self.assertNotIn('celda', name)
+
+    def test_group_name_is_only_resolution_for_500_25_and_5m(self):
+        controller = self.controller()
+        original_query = self.query
+        ids = None
+        for size in (500., 25., 5.):
+            with self.subTest(resolution=size):
+                analysis = SimpleNamespace(**vars(self.analysis))
+                analysis.cell_width = analysis.cell_height = size
+                current = controller.update(analysis, original_query)
+                group = self.project.layerTreeRoot().findLayer(
+                    current['main'].id()).parent()
+                self.assertEqual(group.name(),
+                                 f'HidroCAUMAX · Curso principal {size:g}x{size:g}')
+                self.assertNotIn('X=', group.name())
+                self.assertNotIn('Y=', group.name())
+                self.assertNotIn('celda', group.name())
+                self.assertNotIn(' m', group.name())
+                if ids is None:
+                    ids = {key:layer.id() for key,layer in current.items()}
+                else:
+                    self.assertEqual(
+                        {key:layer.id() for key,layer in current.items()}, ids)
+
+    def test_migrate_old_course_group_name_without_touching_user_groups_or_features(self):
+        controller = self.controller()
+        layers = controller.update(self.analysis, self.query)
+        owned = self.project.layerTreeRoot().findLayer(layers['main'].id()).parent()
+        old_title = ('HidroCAUMAX · Curso principal [X=500000; Y=4700000; '
+                     'celda Q 5,9; 10×20 m]')
+        owned.setName(old_title)
+        user_group = self.project.layerTreeRoot().addGroup(old_title)
+        before = bytes(next(layers['main'].getFeatures()).geometry().asWkb())
+        self.assertEqual(migrate_course_display_names(self.project), 1)
+        self.assertEqual(owned.name(), 'HidroCAUMAX · Curso principal 10x20')
+        self.assertEqual(user_group.name(), old_title)
+        self.assertEqual(bytes(next(layers['main'].getFeatures()).geometry().asWkb()),
+                         before)
+        self.assertEqual(migrate_course_display_names(self.project), 0)
 
     def test_course_group_is_created_above_existing_terrain_and_symbols_are_independent(self):
         terrain=self.project.layerTreeRoot().insertGroup(0,'HidroCAUMAX · Terreno')
