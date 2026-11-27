@@ -74,7 +74,7 @@ def _point(x, y, kind, crs='EPSG:25830'):
     return None
 
 
-def _query_points(native_dialog=None, queries=()):
+def _query_points(native_dialog=None, queries=(), project=None):
     points = []
     if native_dialog is not None:
         try:
@@ -94,6 +94,31 @@ def _query_points(native_dialog=None, queries=()):
                        crs.authid() if crs is not None and crs.isValid() else 'EPSG:25830')
         if point and point not in points:
             points.append(point)
+    # CAUMAX sometimes displays a historical section as a native QGIS layer
+    # without opening a HidroCAUMAX BasinDialog. Preserve its exact layer CRS
+    # and point as the maximum-flow consultation location as well.
+    if project is not None:
+        for layer in project.mapLayers().values():
+            if not isinstance(layer, QgsVectorLayer) or not layer.isValid():
+                continue
+            label = layer.name().casefold().replace('ó', 'o').replace('í', 'i')
+            if not (label.startswith('seccion de cierre')
+                    or label.startswith('sección de cierre')):
+                continue
+            try:
+                crs = layer.crs().authid() or layer.crs().toWkt()
+                for feature in layer.getFeatures():
+                    geom = feature.geometry()
+                    if geom.isNull() or geom.isEmpty():
+                        continue
+                    candidate = geom.centroid().asPoint()
+                    point = _point(candidate.x(), candidate.y(),
+                                   'consulta_capas', crs)
+                    if point and point not in points:
+                        points.append(point)
+                    break  # Only the actual displayed section per layer.
+            except (RuntimeError, ValueError, TypeError):
+                continue
     return points
 
 
@@ -174,7 +199,7 @@ def save_complete_basin(destination, *, project=None, iface=None,
         total = [0]
         manifest = dict(schema=SCHEMA, version=1, application='HidroCAUMAX',
                         project_crs=project.crs().authid(),
-                        points=_query_points(native_dialog, queries),
+                        points=_query_points(native_dialog, queries, project),
                         rational_values=_native_values(native_dialog),
                         layers=[], improved_files=[], native_sessions=[],
                         unavailable_layers=[])
