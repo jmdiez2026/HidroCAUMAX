@@ -129,6 +129,12 @@ class DrainageController(QObject):
         footprint = _refinement_reference(analysis,reference)
         signature = _signature(source,analysis,reference,footprint,bin_dir)
         previous = self.products.get(key) if self._signatures.get(key) == signature else None
+        # A previous TauDEM cache may have been retired when a different
+        # resolution was chosen. Never rebuild a network from missing D8 TIFFs.
+        if previous is not None and not all(
+                Path(getattr(previous, name)).is_file()
+                for name in ('dem_path', 'tau_d8_path', 'caumax_d8_path')):
+            previous = None
 
         def operation(cancelled,publish):
             from .taudem_engine import prepare_taudem,rebuild_network
