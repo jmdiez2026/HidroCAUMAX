@@ -1,3 +1,13 @@
+# HidroCAUMAX v.1.0 — corrección exportación D8, divisorias y TauDEM (revisión 1.0.17, 2026-11-27)
+
+- Se corrige la comprobación de máscara al exportar direcciones D8 CAUMAX/ESRI cuando TauDEM asigna direcciones fuera del MDT válido. Se verifica el GeoTIFF completo en el destino elegido, incluida la carpeta predeterminada ResolucionMejorada.
+- Se conservan la última divisoria de 25 m y la última de 5 m; las anteriores gestionadas de cada resolución se retiran del proyecto y sus GeoPackages se eliminan sólo cuando se identifican como propios, están sin uso y no están protegidos. Cerrar el diálogo no borra ninguna divisoria vigente.
+- El panel mantiene un solo grupo TauDEM, el correspondiente a Resolución MDT. Al cambiar de resolución, se retiran los grupos antiguos y sus cachés temporales si están libres. Las exportaciones manuales, P0, CAUMAX original y capas ajenas permanecen intactos.
+- Tras Limpiar capas ya no aparece el diálogo modal Archivos conservados. Las incidencias por bloqueo Windows se anotan en el registro de QGIS.
+- Pruebas de regresión y flujo de validación PyQGIS incluidos; la aceptación final para Windows queda condicionada a las pruebas y al despliegue.
+
+---
+
 # HidroCAUMAX v.1.0 - cuencas con capas propias y divisoria única (revisión 1.0.16, 2026-11-27)
 
 - Cuenca hidrográfica abre la cuenca del método racional con MDT y direcciones configurados por el usuario, incluidos archivos de distinta extensión con idénticos origen, resolución y CRS. Se exige cobertura de toda la cuenca, sin remuestreo ni recorte del resultado nativo.

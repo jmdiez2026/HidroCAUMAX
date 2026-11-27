@@ -34,3 +34,6 @@ jobs:
           /usr/bin/python3 -m unittest discover -s tests -p 'test_drainage_layers.py' -v
           /usr/bin/python3 -m unittest discover -s tests -p 'test_rational_layers_panel.py' -v
           /usr/bin/python3 -m unittest discover -s tests -p 'test_resolution_controller.py' -v
+          /usr/bin/python3 -m unittest discover -s tests -p 'test_clean_layers_ui.py' -v
+          /usr/bin/python3 -m unittest discover -s tests -p 'test_generated_cleanup.py' -v
+          /usr/bin/python3 -m unittest discover -s tests -p 'test_release_packaging.py' -v
