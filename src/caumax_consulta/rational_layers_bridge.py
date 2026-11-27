@@ -15,13 +15,15 @@ from qgis.PyQt.QtWidgets import (
     QApplication, QDialog, QFrame, QHBoxLayout, QLabel, QPushButton,
     QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
 )
-from qgis.core import QgsCoordinateReferenceSystem
+from qgis.core import (QgsCoordinateReferenceSystem, QgsCoordinateTransform,
+                       QgsPointXY, QgsProject, QgsCsException)
 
 from .rational_export import (BUTTON_STYLE, BUTTON_NAME as SAVE_BUTTON_NAME,
     ACTION_FRAME_NAME, ACTION_BUTTON_STYLE, EXPORT_OWNER_PROPERTY, _place_export_button)
 from .caumax_bridge import LOGO_PATH
 
 
+RATIONAL_CRS = 'EPSG:25830'  # CAUMAX's native outletPoint() is UTM 30N, never canvas CRS.
 BUTTON_NAME = 'btnGenerarCapasResolucionMejoradaHidroCAUMAX'
 PANEL_NAME = 'HidroCAUMAXRationalLayersContainer'
 BASIN_BUTTON_NAME = 'btnCuencaHidrograficaRacionalHidroCAUMAX'
@@ -166,6 +168,10 @@ class RationalLayersBridge(QObject):
         return QgsCoordinateReferenceSystem(self.iface.mapCanvas().mapSettings().destinationCrs())
 
     @staticmethod
+    def _native_crs():
+        return QgsCoordinateReferenceSystem(RATIONAL_CRS)
+
+    @staticmethod
     def _fields(dialog):
         return dialog.txtX.text(), dialog.txtY.text()
 
@@ -174,18 +180,22 @@ class RationalLayersBridge(QObject):
             raise ValueError('El diálogo de generación de capas ya está cerrado.')
         fields = self._fields(binding.dialog)
         x, y = map(_number, fields)
-        crs = QgsCoordinateReferenceSystem(binding.input_crs)
+        # CAUMAX original reads txtX/txtY directly as EPSG:25830 and looks up
+        # BASINS / climatic data with those exact coordinates. Do not silently
+        # reinterpret the same numbers using the current QGIS canvas CRS.
+        crs = self._native_crs()
         if binding.exact_point is not None and binding.exact_fields == fields:
             x, y, point_crs = binding.exact_point
-            crs = QgsCoordinateReferenceSystem(point_crs)
+            if QgsCoordinateReferenceSystem(point_crs) != crs:
+                raise ValueError('El punto de cierre no está en el CRS nativo EPSG:25830.')
         if not crs.isValid():
-            raise ValueError('El punto de cálculo no tiene un sistema de referencia válido.')
+            raise ValueError('No está disponible el CRS EPSG:25830 del Método racional.')
         dem, directions = _layer_paths(binding.dialog)
         return RationalTerrainQuery(x, y, crs, dem, directions)
 
     def _coordinates_changed(self, binding):
         binding.exact_point = binding.exact_fields = None
-        binding.input_crs = self._canvas_crs()
+        binding.input_crs = self._native_crs()
         self._invalidate_basin(binding, 'Las coordenadas han cambiado. Vuelve a calcular las variables intermedias.')
         self._refresh(binding)
 
@@ -197,11 +207,30 @@ class RationalLayersBridge(QObject):
             if not all(math.isfinite(value) for value in (x, y)) or any(
                     abs(a-b) > .051 for a, b in zip(entered, (x, y))):
                 return
-            binding.input_crs = self._canvas_crs()
-            binding.exact_point = (x, y, QgsCoordinateReferenceSystem(binding.input_crs))
-            binding.exact_fields = self._fields(binding.dialog)
+            canvas_crs = self._canvas_crs()
+            native_crs = self._native_crs()
+            if not canvas_crs.isValid() or not native_crs.isValid():
+                raise ValueError('El lienzo o el sistema EPSG:25830 no tiene un CRS válido.')
+            if canvas_crs != native_crs:
+                # The stock CAUMAX updatePoint() writes raw canvas X/Y and
+                # outletPoint() reads those numbers as 25830, which silently
+                # selects another geographical location. Correct the fields
+                # in-place, preserving the actual map click.
+                native_pt = QgsCoordinateTransform(
+                    canvas_crs, native_crs, QgsProject.instance()
+                ).transform(QgsPointXY(x, y))
+                x, y = native_pt.x(), native_pt.y()
+                binding.dialog.txtX.setText(f'{x:.8f}'.rstrip('0').rstrip('.'))
+                binding.dialog.txtY.setText(f'{y:.8f}'.rstrip('0').rstrip('.'))
+            # Use exactly what the native calculator reads, not a different
+            # high-precision position in the independent improved panel.
+            fields = self._fields(binding.dialog)
+            actual_x, actual_y = map(_number, fields)
+            binding.input_crs = native_crs
+            binding.exact_point = (actual_x, actual_y, QgsCoordinateReferenceSystem(native_crs))
+            binding.exact_fields = fields
             self._refresh(binding)
-        except (AttributeError, RuntimeError, TypeError, ValueError):
+        except (AttributeError, RuntimeError, TypeError, ValueError, QgsCsException):
             return
 
     def _refresh(self, binding):
@@ -468,7 +497,7 @@ class RationalLayersBridge(QObject):
         # Do not enlarge or rearrange the native CAUMAX window: the full D8
         # section belongs to its own independently resizable dialog.
         dialog.layout().addWidget(container)
-        binding = _Binding(dialog, container, button, None, error, self._canvas_crs())
+        binding = _Binding(dialog, container, button, None, error, self._native_crs())
         from .native_decimal import RationalDecimalPresentation
         binding.decimal_presentation = RationalDecimalPresentation(dialog)
         binding.basin_button, binding.action_row = basin_button, row
