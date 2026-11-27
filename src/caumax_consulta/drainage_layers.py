@@ -1,19 +1,105 @@
 """Portable TauDEM network snapshots and owned QGIS drainage layers."""
 import math
 from pathlib import Path
+import re
+import shutil
+import tempfile
 from uuid import uuid4
 
 from osgeo import ogr,osr
 from qgis.PyQt import sip
-from qgis.PyQt.QtCore import QVariant
+from qgis.PyQt.QtCore import QVariant, QTimer
 from qgis.PyQt.QtGui import QColor
 from qgis.core import (QgsCoordinateReferenceSystem,QgsFeature,QgsField,QgsGeometry,
     QgsLineSymbol,QgsPalettedRasterRenderer,QgsProject,QgsRasterLayer,
-    QgsSimpleLineSymbolLayer,QgsVectorLayer,QgsWkbTypes)
+    QgsSimpleLineSymbolLayer,QgsVectorLayer,QgsWkbTypes,QgsMessageLog,Qgis)
 
 
 OWNER_PROPERTY='HidroCAUMAX/drainage_owner'
 ROLE_PROPERTY='HidroCAUMAX/drainage_role'
+
+def _private_taudem_directory(source):
+    """Recognize *only* a query-owned TauDEM temp directory, never exports."""
+    try:
+        root = (Path(tempfile.gettempdir()).resolve() / 'HidroCAUMAX' / 'dem_variants')
+        source = Path(str(source).split('|', 1)[0]).resolve()
+        parts = source.relative_to(root).parts
+        if (len(parts) < 5 or not re.fullmatch(r'[a-f0-9]{20}', parts[0])
+                or parts[1] != 'taudem'
+                or not re.fullmatch(r'[0-9]+(?:[.][0-9]+)?', parts[2])):
+            return None
+        candidate = root / parts[0] / 'taudem' / parts[2]
+        if candidate.is_symlink():
+            return None
+        return candidate
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def _remove_unused_taudem_caches(candidates, project, protected_paths):
+    if not candidates:
+        return
+    protected = {_private_taudem_directory(path) for path in protected_paths}
+    protected.update(_private_taudem_directory(layer.source())
+                     for layer in project.mapLayers().values()
+                     if layer.providerType() in ('gdal', 'ogr'))
+    for cache in candidates - protected:
+        if cache is None or not cache.is_dir() or cache.is_symlink():
+            continue
+        # Do not follow symlink trees during disk cleanup.
+        if any(path.is_symlink() for path in cache.rglob('*')):
+            continue
+        try:
+            shutil.rmtree(cache)
+        except OSError as error:
+            QgsMessageLog.logMessage(
+                'No se pudo retirar la caché TauDEM anterior ' + str(cache) +
+                ': ' + str(error), 'HidroCAUMAX', Qgis.Warning)
+
+
+def prune_managed_drainage(project=None, *, keep_owner=None, protected_paths=()):
+    """Only the currently selected TauDEM generation may remain in QGIS.
+
+    Remove older managed QGIS layers and unreferenced temporary D8 outputs.
+    Explicit TIFF/SHP exports and user-created layers are never removed.
+    """
+    project = project or QgsProject.instance()
+    root = project.layerTreeRoot()
+    obsolete = [layer for layer in project.mapLayers().values()
+                if layer.customProperty(OWNER_PROPERTY, '') and
+                layer.customProperty(OWNER_PROPERTY) != keep_owner]
+    editing = {layer.customProperty(OWNER_PROPERTY)
+               for layer in obsolete if isinstance(layer, QgsVectorLayer) and layer.isEditable()}
+    obsolete = [layer for layer in obsolete
+                if layer.customProperty(OWNER_PROPERTY) not in editing]
+    candidates = {_private_taudem_directory(layer.source()) for layer in obsolete
+                  if layer.providerType() == 'gdal'}
+    candidates.discard(None)
+    if obsolete:
+        project.removeMapLayers([layer.id() for layer in obsolete])
+    for group in reversed(root.findGroups(recursive=True)):
+        if (not sip.isdeleted(group) and group.customProperty(OWNER_PROPERTY, '')
+                and not group.children()):
+            parent = group.parent()
+            if parent is not None:
+                parent.removeChildNode(group)
+    if keep_owner is not None:
+        for layer in project.mapLayers().values():
+            if layer.customProperty(OWNER_PROPERTY) != keep_owner:
+                continue
+            nodes = [node for node in root.findLayers() if node.layerId() == layer.id()]
+            nodes.sort(key=lambda node: (
+                node.parent().customProperty(OWNER_PROPERTY, '') != keep_owner,
+                not node.itemVisibilityChecked()))
+            for node in nodes[1:]:
+                node.parent().removeChildNode(node)
+    if candidates:
+        caches = frozenset(candidates)
+        protected = tuple(protected_paths)
+        QTimer.singleShot(0, lambda: _remove_unused_taudem_caches(caches, project, protected))
+    return len(obsolete)
+
+
 MAX_NETWORK_WKB_BYTES=8*1024*1024
 MAX_NETWORK_VERTICES=500000
 MAX_ATTRIBUTE_ITEMS=50000
