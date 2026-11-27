@@ -638,6 +638,26 @@ def outer():
                 if name == package.__name__ or name.startswith(package.__name__ + '.'):
                     sys.modules.pop(name, None)
 
+    def test_gea_logo_is_muted_when_disabled_and_colorful_when_enabled(self):
+        from qgis.PyQt.QtGui import QIcon, QPixmap
+        original = QPixmap(str(bridge_module.LOGO_PATH))
+        self.assertFalse(original.isNull())
+        icon = bridge_module._gea_state_icon(original)
+        size = QSize(100, 40)
+        normal = icon.pixmap(size, QIcon.Normal)
+        disabled = icon.pixmap(size, QIcon.Disabled)
+        self.assertFalse(normal.isNull())
+        self.assertFalse(disabled.isNull())
+        normal_image, disabled_image = normal.toImage(), disabled.toImage()
+        pixels = [(x, y) for y in range(min(normal_image.height(), disabled_image.height()))
+                  for x in range(min(normal_image.width(), disabled_image.width()))
+                  if normal_image.pixelColor(x, y).alpha() > 0
+                  and disabled_image.pixelColor(x, y).alpha() > 0]
+        self.assertTrue(pixels)
+        self.assertTrue(any(normal_image.pixelColor(x, y).rgb() !=
+                            disabled_image.pixelColor(x, y).rgb()
+                            for x, y in pixels))
+
 
 if __name__ == '__main__':
     unittest.main()
