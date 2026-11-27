@@ -30,20 +30,10 @@ jobs:
           chmod 700 "$RUNNER_TEMP/xdg-runtime"
           export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdg-runtime"
           export PYTHONPATH="$GITHUB_WORKSPACE/src:$GITHUB_WORKSPACE/tests"
-          /usr/bin/python3 -m unittest discover -s tests -p 'test_caumax_bridge.py' -v
-          /usr/bin/python3 -m unittest discover -s tests -p 'test_native_layers_view.py' -v
-          /usr/bin/python3 -m unittest discover -s tests -p 'test_rational_inputs.py' -v
-          /usr/bin/python3 -m unittest discover -s tests -p 'test_rational_custom_grid.py' -v
-          /usr/bin/python3 -m unittest discover -s tests -p 'test_rational_basin.py' -v
-          /usr/bin/python3 -m unittest discover -s tests -p 'test_hydro_export.py' -v
-          /usr/bin/python3 -m unittest discover -s tests -p 'test_boundary_layers.py' -v
-          /usr/bin/python3 -m unittest discover -s tests -p 'test_drainage_layers.py' -v
-          /usr/bin/python3 -m unittest discover -s tests -p 'test_drainage_dialog.py' -v
-          /usr/bin/python3 -m unittest discover -s tests -p 'test_taudem_engine.py' -v
-          /usr/bin/python3 -m unittest discover -s tests -p 'test_taudem_runtime.py' -v
-          /usr/bin/python3 -m unittest discover -s tests -p 'test_native_toolbar.py' -v
-          /usr/bin/python3 -m unittest discover -s tests -p 'test_rational_layers_panel.py' -v
-          /usr/bin/python3 -m unittest discover -s tests -p 'test_resolution_controller.py' -v
-          /usr/bin/python3 -m unittest discover -s tests -p 'test_clean_layers_ui.py' -v
-          /usr/bin/python3 -m unittest discover -s tests -p 'test_generated_cleanup.py' -v
-          /usr/bin/python3 -m unittest discover -s tests -p 'test_release_packaging.py' -v
+          failure=0
+          for pattern in 'test_caumax_bridge.py' 'test_native_layers_view.py' 'test_rational_inputs.py' 'test_rational_custom_grid.py' 'test_rational_basin.py' 'test_hydro_export.py' 'test_boundary_layers.py' 'test_drainage_layers.py' 'test_drainage_dialog.py' 'test_taudem_engine.py' 'test_taudem_runtime.py' 'test_native_toolbar.py' 'test_rational_layers_panel.py' 'test_resolution_controller.py' 'test_clean_layers_ui.py' 'test_generated_cleanup.py' 'test_release_packaging.py'; do
+            echo "::group::Pruebas $pattern"
+            /usr/bin/python3 -m unittest discover -s tests -p "$pattern" -v || failure=1
+            echo "::endgroup::"
+          done
+          exit "$failure"
