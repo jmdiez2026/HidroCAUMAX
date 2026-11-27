@@ -291,6 +291,57 @@ def _configured_pair_hint(paths, x, y):
     return ''
 
 
+def _qgis_drainage_pair_hint(paths, x, y):
+    """Check current QGIS result layers, not assumed filenames or cached labels.
+
+    This is diagnostic only: CAUMAX's explicitly configured raster sources
+    remain unchanged until the user selects the correct pair.
+    """
+    try:
+        from qgis.core import QgsProject, QgsRasterLayer
+        from .drainage_layers import OWNER_PROPERTY, ROLE_PROPERTY
+        from .rational_grid_validation import verify_fine_rational_pair
+        loaded = {}
+        for layer in QgsProject.instance().mapLayers().values():
+            if (not isinstance(layer, QgsRasterLayer) or not layer.isValid()
+                    or layer.providerType() != 'gdal'):
+                continue
+            owner = layer.customProperty(OWNER_PROPERTY, '')
+            role = layer.customProperty(ROLE_PROPERTY, '')
+            if owner and role in ('dem', 'directions'):
+                loaded.setdefault(str(owner), {})[role] = layer
+        configured = tuple(os.path.normcase(os.path.abspath(os.fspath(p)))
+                           for p in paths[:2]) if paths else ()
+        for pair in loaded.values():
+            if 'dem' not in pair or 'directions' not in pair:
+                continue
+            dem, d8 = (os.path.normcase(os.path.abspath(
+                str(pair[role].source()).split('|', 1)[0]))
+                for role in ('dem', 'directions'))
+            if (dem, d8) == configured:
+                continue
+            # Cheap extent test before a full, bounded-window D8 verification.
+            layer = pair['dem']
+            from qgis.core import QgsPointXY
+            if (not layer.extent().contains(QgsPointXY(x, y))
+                    or not os.path.isfile(dem) or not os.path.isfile(d8)):
+                continue
+            try:
+                verified = verify_fine_rational_pair(dem, d8, x, y)
+            except ValueError:
+                continue
+            if verified:
+                return (' El proyecto QGIS contiene una pareja MDT/D8 compatible '
+                        'con este punto, pero Método racional tiene configurados '
+                        'otros archivos. MDT cargado en QGIS: ' + dem +
+                        '; D8 CAUMAX/ESRI: ' + d8 +
+                        '. Configura estos TIFF en las capas de cálculo.')
+    except (OSError, RuntimeError, TypeError, ValueError):
+        pass
+    return ''
+
+
+
 def _is_owned_directions(path):
     """An encoding alone never establishes ownership of another user's data."""
     try:
@@ -629,7 +680,8 @@ class RationalInputsBridge(QObject):
                     try:
                         point_x = float(owner.txtX.text().replace(',', '.'))
                         point_y = float(owner.txtY.text().replace(',', '.'))
-                        message += _configured_pair_hint(paths, point_x, point_y)
+                        message += (_configured_pair_hint(paths, point_x, point_y)
+                                    or _qgis_drainage_pair_hint(paths, point_x, point_y))
                     except (AttributeError, TypeError, ValueError):
                         pass
                     event['failure_reason'] = message
