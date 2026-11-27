@@ -432,8 +432,8 @@ class DrainageLayers:
     def update(self,analysis,state,visible=True,reset_presentation=False):
         """Register verified TauDEM products and the native-resolution MDT.
 
-        Display order in the result group: drainage network, ESRI D8 raster,
-        the actual elevation GeoTIFF (third), and its optional relief shading.
+        Display order in the result group: yellow clicked closure, cyan network,
+        ESRI D8 raster, actual elevation GeoTIFF and optional hillshade.
         The display uses the original raster without modifying elevation cells.
         """
         if state is None:
@@ -442,6 +442,14 @@ class DrainageLayers:
         network = build_network_layer(state)
         directions = _directions_layer(state.get('caumax_d8_path', ''))
         new = {'network': network, 'directions': directions}
+        # Only a successfully delineated watershed carries the exact click
+        # and outlet coordinates. Insert its yellow SHP-compatible point
+        # ABOVE the cyan drainage network; MDT-only previews stay unchanged.
+        if (all(hasattr(analysis, name) for name in
+                ('crs_wkt', 'outlet_x', 'outlet_y')) and
+                network is not None and directions is not None):
+            from .closure_layers import analysis_closure_layer
+            new['closure'] = analysis_closure_layer(analysis)
         dem_path = state.get('dem_path')
         dem_missing = bool(dem_path and not Path(dem_path).is_file())
         if dem_missing and reset_presentation:
@@ -464,6 +472,7 @@ class DrainageLayers:
             return bool(fallback)
 
         flags = {
+            'closure': True,
             'network': bool(state.get('network_visible', visible)),
             'directions': False if reset_presentation else bool(state.get('directions_visible', False)),
             # The preview is visible while TauDEM works, but its checkbox is
@@ -480,7 +489,7 @@ class DrainageLayers:
             f'{DRAINAGE_GROUP_LABEL} [{analysis.cell_width:g}×{analysis.cell_height:g} m]')
         # Insert by final visual order, not by reversing a sequence of index 0
         # inserts. As long as both D8 products exist, MDT is precisely third.
-        for index, kind in enumerate(('network', 'directions', 'dem', 'hillshade')):
+        for index, kind in enumerate(('closure', 'network', 'directions', 'dem', 'hillshade')):
             layer = new.get(kind)
             if layer is None:
                 continue
