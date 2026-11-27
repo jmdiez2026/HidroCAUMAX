@@ -13,7 +13,7 @@ from pathlib import Path
 
 from qgis.PyQt.QtCore import QObject, QStandardPaths, QTimer, QVariant
 from qgis.PyQt.QtGui import QIcon
-from qgis.PyQt.QtWidgets import QApplication, QDialog, QFileDialog, QFrame, QMessageBox, QPushButton
+from qgis.PyQt.QtWidgets import QApplication, QDialog, QFileDialog, QFrame, QHBoxLayout, QMessageBox, QPushButton
 from qgis.core import (
     QgsCoordinateReferenceSystem, QgsCoordinateTransformContext, QgsFeature,
     QgsField, QgsFillSymbol, QgsGeometry, QgsProject, QgsVectorFileWriter, QgsVectorLayer,
