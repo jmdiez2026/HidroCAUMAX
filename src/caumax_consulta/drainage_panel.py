@@ -110,10 +110,7 @@ class DrainageControls(QGroupBox):
             label = QLabel(title, self)
             label.setAlignment(Qt.AlignCenter)
             label.setWordWrap(True)
-            # Centre the heading within its column like the export button.
-            # Without explicit alignment Qt may stretch the header and shift
-            # its visual midpoint at narrow widths on Windows/Qt 5.
-            exports.addWidget(label, 0, column, Qt.AlignHCenter)
+            exports.addWidget(label, 0, column)
             button.setStyleSheet(BUTTON_STYLE + '\nQPushButton { padding: 2px 1px; }')
             button.clicked.connect(lambda checked=False, kind=kind: self.export_requested.emit(kind))
             exports.addWidget(button, 1, column, Qt.AlignHCenter)
@@ -179,13 +176,6 @@ class DrainageControls(QGroupBox):
                     if needed + spacing * (len(controls)-1) <= available or points <= minimum:
                         break
                     points = max(minimum, points-.25)
-            # Keep each heading precisely centred over its export button,
-            # even when Qt 5 shrinks grid columns at narrow dialog widths.
-            export_grid = self._drainage_exports_widget.layout()
-            for column, button in enumerate(self.product_buttons):
-                heading = export_grid.itemAtPosition(0, column).widget()
-                heading.setFixedWidth(button.width())
-            export_grid.activate()
             self.setMinimumHeight(0)
             height = self.layout().heightForWidth(self.width() if width is None else width)
             if height > 0:
