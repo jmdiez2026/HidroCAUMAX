@@ -273,7 +273,8 @@ class NativeCaumaxPlugin(QObject):
 
     def _new_query_started(self, native_dialog):
         if self._enabled:
-            clear_delineations(close_dialogs=True)
+            clear_delineations(close_dialogs=True,
+                               preserve_published_drainage=True)
 
     def _open_basin(self, native_dialog, query):
         if not self._enabled:
@@ -305,7 +306,8 @@ class NativeCaumaxPlugin(QObject):
                 except RuntimeError:
                     pass
         else:
-            clear_delineations(close_dialogs=True)
+            clear_delineations(close_dialogs=True,
+                               preserve_published_drainage=True)
         dialog = BasinDialog(query, self.iface, native_dialog)
         dialog._native_query = query
         self._dialogs[native_dialog] = dialog
