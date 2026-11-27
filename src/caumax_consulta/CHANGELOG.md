@@ -3,6 +3,7 @@
 - Al finalizar un análisis de «Cuenca hidrográfica», se calculan **sin pulsar botones** el P₀ medio y las medias espaciales de Pd(T) para 2, 5, 10, 25, 100 y 500 años. Una única tarea de fondo publica ambos conjuntos atómicamente y conserva cancelación y recalculo manual.
 - La tarea de recálculo completo existente actualiza automáticamente estas medias cuando cambia la divisoria activa, el cierre o la resolución. Una cancelación no publica resultados de dos geometrías diferentes.
 - Se corrige el diagnóstico de simbología: «Red > 50 km²» es la categoría `sup=2` de la capa CAUMAX «Red 10 km²», y ahora se colorea en rosa/violeta `#FF1493`, con ancho **1,30 mm**, sin alterar el símbolo de «Red 10–50 km²» (`sup=1`).
+- Los grupos **HidroCAUMAX · Curso principal** muestran únicamente su resolución (por ejemplo, `HidroCAUMAX · Curso principal 500x500`), sin X/Y ni datos de celda. Migración al abrir proyectos anteriores solo para grupos gestionados; geometría y atributos intactos.
 - Pruebas reales de Qt/PyQGIS verifican tarea automática, seis mapas de precipitación, resultados atómicos, cancelación, restauración de simbología y preservación de la categoría adyacente.
 
 ---
