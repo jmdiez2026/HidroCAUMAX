@@ -1,0 +1,191 @@
+"""Regression checks for actual 25 m / 5 m rational MDT + Esri-D8 exports."""
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
+import unittest
+
+import numpy as np
+from osgeo import gdal, osr
+
+from caumax_consulta.rational_grid_validation import verify_fine_rational_pair
+from caumax_consulta.rational_inputs import _fine_preflight, _safe_secondary_sample
+
+
+class RationalGridValidationTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = TemporaryDirectory(prefix='hc_rational_grid_')
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.srs = osr.SpatialReference()
+        self.srs.ImportFromEPSG(25830)
+        self.default_x = 355900.
+        self.default_y = 4616710.
+
+    def grid(self, name, size, array, *, origin=None, crs=None,
+             nodata=None, product=None, encoding=None):
+        path = self.root / name
+        if origin is None:
+            origin = (self.default_x - 2.5 * size, self.default_y + 2.5 * size)
+        ds = gdal.GetDriverByName('GTiff').Create(
+            str(path), array.shape[1], array.shape[0], 1,
+            gdal.GDT_Byte if array.dtype == np.uint8 else gdal.GDT_Float32)
+        ds.SetGeoTransform((origin[0], size, 0, origin[1], 0, -size))
+        ds.SetProjection((crs or self.srs).ExportToWkt())
+        band = ds.GetRasterBand(1)
+        band.WriteArray(array)
+        if nodata is not None:
+            band.SetNoDataValue(nodata)
+        if product:
+            ds.SetMetadataItem('HIDROCAUMAX_PRODUCT', product)
+        if encoding:
+            ds.SetMetadataItem('FLOW_DIRECTION_ENCODING', encoding)
+        ds = None
+        return path
+
+    def pair(self, size, *, prefix=''):
+        dem = self.grid(prefix + f'MDT_{size}m.tif', size,
+                        np.full((7, 7), 100, dtype=np.float32),
+                        nodata=-9999, product='ELEVATION')
+        d8 = self.grid(prefix + f'Direccion_D8_caumax_{size}m.tif', size,
+                       np.full((7, 7), 1, dtype=np.uint8),
+                       nodata=255, product='FLOW_DIRECTION', encoding='ESRI_D8')
+        return dem, d8
+
+    def test_good_real_exported_pair_covers_rational_outlet_at_25_and_5m(self):
+        for size in (25, 5):
+            with self.subTest(size=size):
+                dem, d8 = self.pair(size)
+                result = verify_fine_rational_pair(
+                    dem, d8, self.default_x, self.default_y)
+                self.assertEqual(result['resolution_m'], size)
+                self.assertEqual((result['col'], result['row']), (2, 2))
+                self.assertEqual(result['elevation_m'], 100)
+                self.assertEqual(result['direction_codes'], 49)
+                self.assertEqual(result['dem_path'], str(dem))
+
+    def test_point_outside_real_mdt_reports_extent_and_original_coordinates(self):
+        for size in (25, 5):
+            with self.subTest(size=size):
+                dem, d8 = self.pair(size)
+                with self.assertRaisesRegex(ValueError, 'no está cubierto por el MDT') as result:
+                    verify_fine_rational_pair(dem, d8, 355909, 4616712 + 5000)
+                self.assertIn('X=355909.00', str(result.exception))
+                self.assertIn('Cobertura del TIFF', str(result.exception))
+
+    def test_d8_from_different_basin_rejected_even_same_resolution(self):
+        for size in (25, 5):
+            with self.subTest(size=size):
+                dem, d8 = self.pair(size)
+                ds = gdal.Open(str(d8), gdal.GA_Update)
+                ds.SetGeoTransform((self.default_x + 4000, size, 0,
+                                    self.default_y + 4000, 0, -size))
+                ds = None
+                with self.assertRaisesRegex(ValueError, 'misma malla'):
+                    verify_fine_rational_pair(dem, d8, self.default_x, self.default_y)
+
+    def test_custom_d8_aligned_but_crs_differs_is_rejected(self):
+        dem, d8 = self.pair(25)
+        alternative = osr.SpatialReference()
+        alternative.ImportFromEPSG(32630)
+        ds = gdal.Open(str(d8), gdal.GA_Update)
+        ds.SetProjection(alternative.ExportToWkt())
+        ds = None
+        with self.assertRaisesRegex(ValueError, 'misma malla y CRS'):
+            verify_fine_rational_pair(dem, d8, self.default_x, self.default_y)
+
+    def test_esri_d8_invalid_code_and_native_taudem_label_are_rejected(self):
+        for size in (25, 5):
+            with self.subTest(size=size):
+                dem, d8 = self.pair(size)
+                ds = gdal.Open(str(d8), gdal.GA_Update)
+                ds.GetRasterBand(1).WriteArray(
+                    np.array([[3]], dtype=np.uint8), 1, 1)
+                ds = None
+                with self.assertRaisesRegex(ValueError, 'código 3'):
+                    verify_fine_rational_pair(dem, d8, self.default_x, self.default_y)
+                ds = gdal.Open(str(d8), gdal.GA_Update)
+                ds.GetRasterBand(1).WriteArray(
+                    np.array([[1]], dtype=np.uint8), 1, 1)
+                ds.SetMetadataItem('FLOW_DIRECTION_ENCODING', 'TAUDEM_D8')
+                ds = None
+                with self.assertRaisesRegex(ValueError, 'ESRI_D8'):
+                    verify_fine_rational_pair(dem, d8, self.default_x, self.default_y)
+
+    def test_dem_nodata_invalidates_selected_cell(self):
+        dem, d8 = self.pair(25)
+        ds = gdal.Open(str(dem), gdal.GA_Update)
+        ds.GetRasterBand(1).WriteArray(
+            np.array([[-9999]], dtype=np.float32), 2, 2)
+        ds = None
+        with self.assertRaisesRegex(ValueError, 'NoData'):
+            verify_fine_rational_pair(dem, d8, self.default_x, self.default_y)
+
+    def test_d8_flow_in_dem_nodata_rejected_even_away_from_outlet(self):
+        dem, d8 = self.pair(5)
+        ds = gdal.Open(str(dem), gdal.GA_Update)
+        ds.GetRasterBand(1).WriteArray(
+            np.array([[-9999]], dtype=np.float32), 0, 0)
+        ds = None
+        with self.assertRaisesRegex(ValueError, 'celdas NoData del MDT'):
+            verify_fine_rational_pair(dem, d8, self.default_x, self.default_y)
+
+    def test_no_data_at_closure_can_be_a_real_terminal_if_inflow_exists(self):
+        dem, d8 = self.pair(25)
+        ds = gdal.Open(str(d8), gdal.GA_Update)
+        ds.GetRasterBand(1).WriteArray(np.array([[255]], dtype=np.uint8), 2, 2)
+        ds.GetRasterBand(1).WriteArray(np.array([[4]], dtype=np.uint8), 2, 1)
+        ds = None
+        inspected = verify_fine_rational_pair(dem, d8, self.default_x, self.default_y)
+        self.assertEqual(inspected['resolution_m'], 25)
+        ds = gdal.Open(str(d8), gdal.GA_Update)
+        ds.GetRasterBand(1).WriteArray(np.array([[255]], dtype=np.uint8), 2, 1)
+        ds.GetRasterBand(1).WriteArray(np.array([[255]], dtype=np.uint8), 1, 2)
+        ds = None
+        with self.assertRaisesRegex(ValueError, 'no recibe flujo'):
+            verify_fine_rational_pair(dem, d8, self.default_x, self.default_y)
+
+    def test_differing_file_dimensions_are_allowed_when_outlet_is_in_overlap(self):
+        for size in (25, 5):
+            with self.subTest(size=size):
+                dem, d8 = self.pair(size)
+                ds = gdal.Open(str(d8), gdal.GA_Update)
+                ds = None
+                # An independently supplied file can end two cells earlier.
+                narrower = self.grid(f'cropped_d8_{size}m.tif', size,
+                    np.full((5, 5), 1, dtype=np.uint8),
+                    nodata=255, product='FLOW_DIRECTION', encoding='ESRI_D8')
+                result = verify_fine_rational_pair(
+                    dem, narrower, self.default_x, self.default_y)
+                self.assertEqual(result['resolution_m'], size)
+
+    def test_native_500m_stays_under_caumax_original_behaviour(self):
+        dem = self.grid('original-mdt.tif', 500,
+                        np.full((5, 5), 120, dtype=np.float32))
+        d8 = self.grid('original-d8.tif', 500,
+                       np.full((5, 5), 1, dtype=np.uint8))
+        self.assertIsNone(verify_fine_rational_pair(
+            dem, d8, self.default_x, self.default_y))
+
+    def test_native_dialog_uses_the_real_configured_paths_for_preflight(self):
+        for size in (25, 5):
+            dem, d8 = self.pair(size, prefix=f'case{size}_')
+            label = SimpleNamespace(text=lambda: str(self.default_x))
+            ordinate = SimpleNamespace(text=lambda: str(self.default_y))
+            dialog = SimpleNamespace(txtX=label, txtY=ordinate)
+            result = _fine_preflight(dialog, (str(dem), str(d8)))
+            self.assertEqual(result['resolution_m'], size)
+
+    def test_secondary_raster_window_does_not_wrap_negative_indices(self):
+        calc = SimpleNamespace(
+            secondaryLayers={'P0': np.arange(9, dtype=float).reshape(3, 3)},
+            secondaryTransforms={'P0': (100, 100, 0, 500, 0, -100)},
+            secondaryNodata={'P0': -9999},
+            getValueAtCoordinate=lambda *unused: 9999)
+        self.assertIsNone(_safe_secondary_sample(calc, 50, 450, 'P0'))
+        self.assertIsNone(_safe_secondary_sample(calc, 200, 550, 'P0'))
+        self.assertEqual(_safe_secondary_sample(calc, 150, 450, 'P0'), 0.)
+        self.assertEqual(_safe_secondary_sample(calc, 250, 350, 'P0'), 4.)
+
+
+if __name__ == '__main__':
+    unittest.main()
