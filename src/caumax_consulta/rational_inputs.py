@@ -685,7 +685,8 @@ class RationalInputsBridge(QObject):
                     verified = _fine_preflight(owner, paths)
                     if verified is not None:
                         binding.checked_sample = (
-                            float(owner.txtX.text()), float(owner.txtY.text()),
+                            _rational_coordinate(owner.txtX.text()),
+                            _rational_coordinate(owner.txtY.text()),
                             verified['elevation_m'])
                 except ValueError as error:
                     message = str(error)
