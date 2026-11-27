@@ -521,6 +521,10 @@ class RationalLayersBridge(QObject):
         from .clean_layers_ui import clean_button
         clean = clean_button(frame)
         clean.setObjectName(CLEAN_BUTTON_NAME)
+        # Match the original size of the blue actions, keeping the red
+        # warning colour and all cleanup behaviour unchanged.
+        clean.setStyleSheet(clean.styleSheet().replace(
+            'padding: 2px 4px', 'padding: 5px 9px'))
         lower_row.addWidget(clean, 0, Qt.AlignRight)
         layout.addWidget(frame)
         error = QLabel(container)
