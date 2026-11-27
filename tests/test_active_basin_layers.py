@@ -67,7 +67,7 @@ class ActiveBasinLayersTests(unittest.TestCase):
         self.assertEqual(feature['RES_X_M'],dialog.analysis.cell_width)
         self.assertAlmostEqual(feature.geometry().length()/1000,dialog.analysis.values['main_length_km'])
 
-    def test_500_to_25_then_new_query_hides_previous_course_and_outline_without_touching_terrain(self):
+    def test_new_d8_retires_old_course_without_touching_terrain_or_outlines(self):
         dialog = self.dialog
         coarse, coarse_query = self.coarse_variant()
         fine, fine_query = self.fixture.analysis, self.fixture.query
@@ -95,8 +95,7 @@ class ActiveBasinLayersTests(unittest.TestCase):
             # Keep a genuine 500 m result in the project when closing this
             # dialog, then reproduce a fresh 25 m query in another dialog.
             dialog._resolution_result('500',coarse,coarse_query)
-        old_course = dialog._course_layers.layers['main']
-        old_course_bytes = bytes(next(old_course.getFeatures()).geometry().asWkb())
+        old_course_id = dialog._course_layers.layers['main'].id()
         terrain_nodes = [node for node in self.tree.findLayers()
                          if node.parent().customProperty('HidroCAUMAX/terrain_owner',None)]
         terrain_before = {node.layerId():(node.itemVisibilityChecked(),node.parent().itemVisibilityChecked(),
@@ -105,12 +104,16 @@ class ActiveBasinLayersTests(unittest.TestCase):
         dialog.dispose()
         dialog.close()
         fresh = self.fixture.make_dialog()
-        self.assert_active_course_matches(fresh)
-        self.assertFalse(self.tree.findLayer(old_course.id()).isVisible())
+        # The newly displayed ESRI-D8 result supersedes every previous
+        # course group. The old course must be destroyed, not merely hidden.
+        self.assertIsNone(self.fixture.project.mapLayer(old_course_id))
+        self.assertIsNone(self.tree.findLayer(old_course_id))
+        self.assertFalse(any(g.customProperty('HidroCAUMAX/course_owner', '')
+                             for g in self.tree.findGroups(recursive=True)))
+        self.assertTrue(any(g.customProperty('HidroCAUMAX/drainage_owner', '')
+                            for g in self.tree.findGroups(recursive=True)))
         self.assertFalse(old_outline_node.isVisible())
         self.assertTrue(old_outline_node.itemVisibilityChecked())
-        self.assertEqual(bytes(next(old_course.getFeatures()).geometry().asWkb()),old_course_bytes)
-        self.assertEqual(next(old_course.getFeatures())['RES_X_M'],500)
         for layer_id, before in terrain_before.items():
             node = self.tree.findLayer(layer_id)
             self.assertIsNotNone(node)
