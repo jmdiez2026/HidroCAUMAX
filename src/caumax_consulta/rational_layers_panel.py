@@ -8,8 +8,8 @@ from qgis.PyQt.QtWidgets import (
 )
 from qgis.core import QgsGeometry, QgsPointXY
 
-from .drainage_layers import DrainageLayers
-from .boundary_layers import BoundaryLayers
+from .drainage_layers import DrainageLayers, prune_managed_drainage
+from .boundary_layers import BoundaryLayers, deduplicate_boundaries
 from .drainage_panel import DrainageControls
 from .drainage_threshold import manual_step, recommended_threshold
 from .rational_layers_controller import RationalLayersController
@@ -54,6 +54,10 @@ class RationalLayersPanel(DrainageControls):
         self._on_basin_refined = on_basin_refined
         self._layers = DrainageLayers(iface)
         self._boundary_layers = BoundaryLayers()
+        # A saved QGIS project can still contain managed results from previous
+        # panels. Opening the new panel does not resurrect old TauDEM groups.
+        prune_managed_drainage()
+        deduplicate_boundaries(storage_roots=(self._boundary_layers.directory,))
         self._outline_timer = QTimer(self)
         self._outline_timer.setSingleShot(True)
         self._outline_timer.setInterval(130)
@@ -254,7 +258,12 @@ class RationalLayersPanel(DrainageControls):
         self._threshold_timer.stop()
         # The selection itself cancels stale fine work. Do not cancel a fresh
         # background coverage discovery when the user selects 500 m.
+        previous = self._products
         self._discard_result()
+        # Only the selected resolution may have a TauDEM group in QGIS.
+        retired = (() if previous is None else
+                   (previous.caumax_d8_path, previous.tau_d8_path))
+        prune_managed_drainage(retire_paths=retired)
         self._default_threshold()
         self._start_delineation()
 
@@ -447,6 +456,8 @@ class RationalLayersPanel(DrainageControls):
         if pending is not None and pending[0] == key and key != '500':
             try:
                 self._layers.display_dem(analysis, query.dem_path)
+                prune_managed_drainage(keep_owner=self._layers.owner_key,
+                                      protected_paths=(query.dem_path,))
             except (RuntimeError, OSError, TypeError, ValueError) as error:
                 self._status('No se puede cargar el MDT seleccionado en QGIS: '
                              + str(error), 0)
@@ -542,6 +553,9 @@ class RationalLayersPanel(DrainageControls):
             state['directions_visible'] = False
             state['metadata']['visible'] = state['network_visible']
             self._layers.update(analysis, state, reset_presentation=True)
+            prune_managed_drainage(keep_owner=self._layers.owner_key,
+                                  protected_paths=(products.caumax_d8_path,
+                                                   products.tau_d8_path))
         except Exception as error:
             self._failed(str(error))
             return
@@ -666,7 +680,7 @@ class RationalLayersPanel(DrainageControls):
         except Exception as error:
             self._failed(str(error))
 
-    def _discard_result(self, clear_boundary=False):
+    def _discard_result(self, clear_boundary=False, remove_boundaries=False):
         self._threshold_timer.stop()
         self._close_selector()
         self._products = self._state = None
@@ -677,7 +691,8 @@ class RationalLayersPanel(DrainageControls):
             self._outlines = {}
             self._outline_choices.clear()
             self._queued_resolution = None
-            self._boundary_layers.remove()
+            if remove_boundaries:
+                self._boundary_layers.remove()
         self._update_controls()
 
     def _clear_local_delineation(self):
@@ -687,7 +702,7 @@ class RationalLayersPanel(DrainageControls):
         self._generation_running = False
         self._queued_prepare = False
         self._controller.cancel()
-        self._discard_result(clear_boundary=True)
+        self._discard_result(clear_boundary=True, remove_boundaries=True)
         self._status('Delineado borrado. Selecciona otra resolución o pulsa Generar capas D8.', 0)
 
     def dispose(self, *args):
