@@ -1,5 +1,5 @@
 """Plugin entry point: extend CAUMAX's own dialog, not QGIS identify."""
-from qgis.PyQt.QtCore import QObject, Qt
+from qgis.PyQt.QtCore import QObject, Qt, QStandardPaths
 from qgis.PyQt.QtGui import QIcon, QImage, QPixmap
 from qgis.PyQt.QtWidgets import QAction, QFileDialog, QMessageBox
 from qgis.core import Qgis, QgsApplication
@@ -62,7 +62,8 @@ class NativeCaumaxPlugin(QObject):
         self._rational_frequency = RationalFrequencyBridge(iface, self)
         self._rational_layers = RationalLayersBridge(iface, self._open_basin,
             self._new_query_started, self._rational_basin_refined,
-            self._rational_frequency.request_calculation)
+            self._rational_frequency.request_calculation,
+            self._save_complete_basin)
         self._rational_inputs.calculation_started.connect(self._rational_layers.calculation_started)
         self._rational_inputs.calculation_finished.connect(self._rational_layers.calculation_finished)
         self._rational_inputs.calculation_started.connect(self._rational_frequency.calculation_started)
@@ -218,14 +219,54 @@ class NativeCaumaxPlugin(QObject):
         finally:
             self.clear_layers_action.setEnabled(True)
 
+    def _save_complete_basin(self, native_dialog):
+        """Portable save, independent of temporary QGIS/GDAL product paths."""
+        from .basin_archive import save_complete_basin, EXTENSION
+        folder = QStandardPaths.writableLocation(
+            QStandardPaths.DocumentsLocation) or str(Path.home())
+        suggested = str(Path(folder) / 'Cuenca_HidroCAUMAX.hidrocuenca')
+        path, _ = QFileDialog.getSaveFileName(
+            native_dialog, 'Guardar CUENCA completa', suggested,
+            'Cuenca completa HidroCAUMAX (*.hidrocuenca)')
+        if not path:
+            return
+        if not Path(path).suffix:
+            path += EXTENSION
+        if Path(path).exists():
+            QMessageBox.warning(native_dialog, 'Guardar CUENCA',
+                                'Ya existe ese archivo. Elige otro nombre para no sobrescribir la cuenca guardada.')
+            return
+        contexts = [getattr(dialog, 'query', None)
+                    for dialog in list(self._dialogs.values()) + self._saved_dialogs]
+        saved, manifest = save_complete_basin(
+            path, iface=self.iface, native_dialog=native_dialog, queries=contexts)
+        QMessageBox.information(
+            native_dialog, 'Guardar CUENCA',
+            'Cuenca completa guardada en:\n' + str(saved) +
+            '\nCapas incorporadas: ' + str(len(manifest['layers'])) +
+            '\nArchivos de ResolucionMejorada: ' +
+            str(len(manifest['improved_files'])) +
+            '\nPuedes recuperarla con Abrir cuenca de la barra de QGIS.')
+
     def _open_saved_project(self):
         self._updates.check()
         source, _ = QFileDialog.getOpenFileName(
             self.iface.mainWindow(), 'Abrir proyecto de consulta', str(Path.home()),
-            'Proyecto de consulta CAUMAX (*.caumax.json);;Archivos JSON (*.json)')
+            'Cuenca completa HidroCAUMAX (*.hidrocuenca);;Proyecto de consulta CAUMAX (*.caumax.json);;Archivos JSON (*.json)')
         if not source:
             return
         try:
+            if source.lower().endswith('.hidrocuenca'):
+                from .basin_archive import open_complete_basin
+                manifest, folder = open_complete_basin(source, iface=self.iface)
+                QMessageBox.information(
+                    self.iface.mainWindow(), 'Abrir cuenca',
+                    'Cuenca recuperada: ' + str(len(manifest['layers'])) +
+                    ' capas con sus estilos y ' +
+                    str(len(manifest['improved_files'])) +
+                    ' archivos de resolución mejorada.\n' +
+                    'Datos disponibles en: ' + str(folder))
+                return
             from .session_store import load_session
             saved = load_session(source)
             dialog = BasinDialog(saved.query, self.iface, self.iface.mainWindow(), saved_session=saved)
