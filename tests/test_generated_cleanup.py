@@ -108,6 +108,26 @@ class GeneratedCleanupTests(unittest.TestCase):
             self.assertFalse(again['files'])
             self.assertFalse(again['layers'])
 
+    def test_late_gdal_auxiliary_is_deleted_after_original_tif(self):
+        cache = self.root / 'private-cache'
+        cache.mkdir()
+        target = cache / 'dem.tif'
+        target.write_bytes(b'generated')
+        auxiliary = Path(str(target) + '.aux.xml')
+        plan = cleanup.deletion_plan(self.project, roots=[cache])
+        real_unlink = Path.unlink
+        def unlink(path, *args, **kwargs):
+            if path == target:
+                auxiliary.write_bytes(b'GDAL sidecar written during release')
+            return real_unlink(path, *args, **kwargs)
+        with patch.object(Path, 'unlink', unlink):
+            result = cleanup.delete_generated(plan, self.project)
+        self.assertFalse(target.exists())
+        self.assertFalse(auxiliary.exists())
+        self.assertFalse(cache.exists())
+        self.assertFalse(result['failed'])
+        self.assertEqual(len(result['removed']), 2)
+
     def test_registered_shapefile_family_and_unloaded_exports_are_included(self):
         target = self.root / 'network.shp'
         for suffix in ('.shp', '.shx', '.dbf', '.prj'):
