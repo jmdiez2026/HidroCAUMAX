@@ -39,9 +39,12 @@ class DialogLayoutTests(unittest.TestCase):
         self.assertTrue(dialog.status.text())
         self.assertLess(body.indexOf(dialog.morphology_group), body.indexOf(dialog.hypsometry_widget))
         self.assertTrue(dialog.status.isReadOnly())
-        button = dialog.export_button
+        closure, button = dialog.export_closure_button, dialog.export_button
         row = button.parentWidget().layout().itemAt(0).layout()
-        self.assertEqual(row.indexOf(button),row.indexOf(dialog.smoothing_degree)+1)
+        self.assertEqual(closure.text(), 'Exportar Cierre')
+        self.assertEqual(button.text(), 'Exportar Cuenca')
+        self.assertEqual(row.indexOf(closure), row.indexOf(dialog.smoothing_degree)+1)
+        self.assertEqual(row.indexOf(button), row.indexOf(closure)+1)
         for width in (520,650,900):
             with self.subTest(width=width):
                 dialog.resize(width,1000)
@@ -49,13 +52,18 @@ class DialogLayoutTests(unittest.TestCase):
                 dialog._fit_rows()
                 self.fixture.app.processEvents()
                 spin = dialog.smoothing_degree
-                self.assertLessEqual(abs(button.geometry().center().y()-spin.geometry().center().y()),1)
-                self.assertEqual(button.x()-spin.geometry().right()-1,row.spacing())
-                self.assertGreaterEqual(button.width(),button.minimumSizeHint().width())
-                self.assertLessEqual(button.mapTo(dialog.body_scroll.viewport(),QPoint()).x()+button.width(),
-                                     dialog.body_scroll.viewport().width())
-                self.assertLess(button.height(),30)
-                self.assertLess(button.width(),160)
+                self.assertEqual(closure.x()-spin.geometry().right()-1,row.spacing())
+                self.assertEqual(button.x()-closure.geometry().right()-1,row.spacing())
+                for current in (closure, button):
+                    self.assertLessEqual(abs(current.geometry().center().y()-
+                                             spin.geometry().center().y()),1)
+                    self.assertGreaterEqual(current.width(),
+                                            current.minimumSizeHint().width())
+                    self.assertLessEqual(
+                        current.mapTo(dialog.body_scroll.viewport(),QPoint()).x()+
+                        current.width(),dialog.body_scroll.viewport().width())
+                    self.assertLess(current.height(),30)
+                    self.assertLess(current.width(),160)
 
     def test_report_buttons_are_compact_left_aligned_with_close_at_right_in_one_row(self):
         dialog=self.dialog
