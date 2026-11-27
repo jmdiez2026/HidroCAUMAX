@@ -1079,9 +1079,10 @@ class BasinDialog(QDialog):
             for key,export_key in (('dem_path','dem'),('tau_d8_path','directions_taudem'),('caumax_d8_path','directions_caumax'),('network_path','network')):
                 if not Path(paths[key]).is_file() and exported.get(export_key):paths[key]=exported[export_key]
             products=SimpleNamespace(analysis=self.analysis,metadata=state['metadata'],**paths)
-        from .improved_storage import export_directory, record_exports, suggested_export_names
-        names=suggested_export_names(self.analysis)
+        size=f'{self.analysis.cell_width:g}m'
+        names={'dem':f'MDT_{size}.tif','directions':f'Direccion_D8_caumax_{size}.tif','network':f'Red_drenaje_{size}.shp'}
         filters='Shapefile (*.shp)' if kind=='network' else 'GeoTIFF (*.tif *.tiff)'
+        from .improved_storage import export_directory, record_exports
         destination,_=QFileDialog.getSaveFileName(self,'Exportar capa hidrológica',str(export_directory()/names[kind]),filters)
         if not destination:return
         try:
