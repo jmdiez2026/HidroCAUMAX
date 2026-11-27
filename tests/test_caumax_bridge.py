@@ -252,6 +252,27 @@ class BridgeTests(unittest.TestCase):
                                  (custom_dem, custom_d8))
         self.paths.update(original)
 
+    def test_recovered_500m_raster_delineates_without_off_grid_error(self):
+        # Real GDAL/QGIS analysis of a native max-flow query on a river point
+        # while Method rational points to a completely different 5 m tile.
+        from caumax_consulta.basin_dialog import AnalysisTask
+        self.valid_query(period=5, flow='18')
+        module = sys.modules['_caumax_bridge_fixture.layers']
+        official_dem = self._reference_grid('national_dem_500.tif', 500, 340000, 4648000)
+        official_d8 = self._reference_grid('national_d8_500.tif', 500, 340000, 4648000)
+        module._defaultLayerPaths = {'MDT': official_dem, 'FLOWDIRS': official_d8}
+        self.paths.update(
+            MDT=self._reference_grid('far_5m_dem.tif', 5, 500000, 4800000),
+            FLOWDIRS=self._reference_grid('far_5m_d8.tif', 5, 500000, 4800000),
+        )
+        query = bridge_module.make_native_query(self.dialog, self.native_module)
+        task = AnalysisTask(query, lambda *_: None)
+        self.assertTrue(task.run(), task.error + '\n' + task.trace)
+        self.assertGreater(task.result.cell_count, 0)
+        self.assertEqual(task.result.cell_width, 500)
+        self.assertEqual((query.x, query.y), (341825, 4646700))
+        self.assertEqual(query.flow, 18)
+
     def test_fine_grid_is_kept_when_it_covers_the_selected_river_point(self):
         """Keep a valid custom grid; fallback only for missing coverage."""
         self.valid_query(period=5, flow='29')
