@@ -11,13 +11,107 @@ import sys
 import types
 import weakref
 
-from osgeo import gdal
+import numpy as np
+from osgeo import gdal, osr
 from qgis.PyQt.QtCore import QObject, QTimer, pyqtSignal
 from qgis.PyQt.QtWidgets import QApplication, QDialog
+from qgis.core import Qgis, QgsMessageLog
 
 
 _MISSING = object()
 _PRODUCTS = {'FLOW_DIRECTION', 'CAUMAX_FLOW_DIRECTIONS'}
+_FINE_RESOLUTIONS = (25., 5.)
+
+
+class FineGridError(ValueError):
+    """An actionable fine-grid mismatch, never a fabricated rational result."""
+
+
+def _fine_resolution(calculator):
+    try:
+        cell = abs(float(calculator.cellsize))
+        return next((value for value in _FINE_RESOLUTIONS
+                     if math.isclose(cell, value, abs_tol=1e-7, rel_tol=0)), None)
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def _fine_grid_issue(calculator, direction_path):
+    """CAUMAX indexes D8 by DEM row/col: their georeferencing must agree.
+
+    Differing *dimensions* are allowed when the raster origin, cell size and
+    CRS coincide. Files and selections remain unchanged.
+    """
+    size = _fine_resolution(calculator)
+    if size is None or not direction_path:
+        return None
+    raster = None
+    try:
+        raster = gdal.Open(str(direction_path), gdal.GA_ReadOnly)
+        if raster is None or raster.RasterCount != 1:
+            return f'No se puede leer el ráster D8 de {size:g} m seleccionado.'
+        transform = tuple(raster.GetGeoTransform())
+        terrain_transform = tuple(calculator.geoTransform)
+        if (len(transform) != 6 or len(terrain_transform) != 6
+                or any(not math.isclose(float(a), float(b), rel_tol=0, abs_tol=1e-7)
+                       for a, b in zip(transform, terrain_transform))):
+            return (f'El MDT y el D8 de {size:g} m no comparten origen y malla. '
+                    'CAUMAX relaciona ambos por fila y columna; selecciona dos TIFF '
+                    'georreferenciados sobre la misma malla, sin reproyectar el D8.')
+        directions = np.asarray(calculator.dirs)
+        if directions.shape != (raster.RasterYSize, raster.RasterXSize):
+            return 'Las dimensiones del D8 cargado no corresponden al archivo seleccionado.'
+        source_crs = osr.SpatialReference()
+        dem_crs = osr.SpatialReference()
+        if (source_crs.ImportFromWkt(raster.GetProjectionRef() or '') != 0
+                or dem_crs.ImportFromWkt(str(calculator.crs)) != 0
+                or not source_crs.IsSame(dem_crs)):
+            return f'El MDT y el D8 de {size:g} m utilizan CRS diferentes o inválidos.'
+        if raster.GetMetadataItem('FLOW_DIRECTION_ENCODING') == 'TAUDEM_D8':
+            return ('Se ha configurado un D8 TauDEM sin recodificar. '
+                    'CAUMAX necesita el TIFF de direcciones CAUMAX/ESRI '
+                    'exportado desde HidroCAUMAX.')
+    except (AttributeError, TypeError, ValueError, RuntimeError):
+        return f'No se pudo comprobar la compatibilidad del MDT y el D8 de {size:g} m.'
+    finally:
+        raster = None
+    return None
+
+
+def _fine_failure_message(calculator, error):
+    """Report an invalid D8/relief with no made-up length or concentration time."""
+    size = _fine_resolution(calculator)
+    if size is None:
+        return None
+    try:
+        distance = float(calculator.maxDistance)
+        relief = float(calculator.maxH) - float(calculator.minH)
+        if not math.isfinite(distance) or distance <= 0:
+            return (f'No existe recorrido aguas arriba con longitud positiva '
+                    f'en el cierre de {size:g} m (L=0). Comprueba el ráster D8 '
+                    'CAUMAX/ESRI, la superposición de su malla con el MDT y '
+                    'selecciona un punto de cierre que reciba aportaciones. '
+                    'No se calcula Tc ni caudal con una longitud ficticia.')
+        if not math.isfinite(relief) or relief <= 0:
+            return (f'El recorrido de {size:g} m no tiene un desnivel positivo '
+                    '(Hmáx − Hmín ≤ 0). Comprueba el MDT, el D8 y el cierre. '
+                    'No se calcula Tc ni caudal con una pendiente ficticia.')
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        pass
+    return None
+
+
+def _report_fine_failure(iface, message):
+    QgsMessageLog.logMessage(str(message), 'HidroCAUMAX', Qgis.Warning)
+    bar_method = getattr(iface, 'messageBar', None)
+    if callable(bar_method):
+        try:
+            bar = bar_method()
+            if bar is not None:
+                bar.pushMessage('HidroCAUMAX', str(message),
+                                level=Qgis.Warning, duration=12)
+        except (AttributeError, RuntimeError, TypeError):
+            pass
 
 
 def _is_owned_directions(path):
@@ -36,8 +130,11 @@ def _is_owned_directions(path):
 def _process_cell_iterative(self, x, y, distance=0):
     """Preserve CAUMAX's preorder and arithmetic, adding bounds and cycle guards."""
     rows, cols = self.mdt.shape
+    drows, dcols = self.dirs.shape
     if not (0 <= x < cols and 0 <= y < rows):
         raise ValueError('La sección de cierre está fuera del MDT de cálculo.')
+    if not (0 <= x < dcols and 0 <= y < drows):
+        raise FineGridError('El cierre no está cubierto por el ráster D8 seleccionado.')
     # Native calculate() creates this zero-filled array for every new run.
     # Reusing it as the visited mask avoids a large additional allocation.
     pending = [(x, y, distance)]
@@ -67,7 +164,7 @@ def _process_cell_iterative(self, x, y, distance=0):
         # Reversed push order exactly reproduces the recursive native DFS.
         for dx, dy, direction in reversed(self.directions):
             nx, ny = cx + dx, cy + dy
-            if (0 <= nx < cols and 0 <= ny < rows
+            if (0 <= nx < min(cols, dcols) and 0 <= ny < min(rows, drows)
                     and self.basinCells[ny, nx] == 0
                     and self.dirs[ny, nx] == direction):
                 step = 1 if 0 in (dx, dy) else 1.414
@@ -208,7 +305,12 @@ class RationalInputsBridge(QObject):
                     path = get_path(getattr(module, 'FLOWDIRS', 'FLOWDIRS'))
             owned = _is_owned_directions(path) if path else False
             calculator = original(*args, **kwargs)
-            if owned and self._running:
+            fine = _fine_resolution(calculator)
+            if fine is not None and self._running:
+                issue = _fine_grid_issue(calculator, path)
+                if issue:
+                    raise FineGridError(issue)
+            if (owned or fine is not None) and self._running:
                 previous = vars(calculator).get('_processCell', _MISSING)
                 replacement = types.MethodType(_process_cell_iterative, calculator)
                 calculator._processCell = replacement
@@ -288,7 +390,21 @@ class RationalInputsBridge(QObject):
                 capture_method('_getInterpolatedFlow', interpolated_flows)
                 capture_method('returnPeriod', requested_periods)
             try:
-                result = original(*args, **kwargs)
+                try:
+                    result = original(*args, **kwargs)
+                except (FineGridError, ZeroDivisionError, ValueError) as error:
+                    calculator = getattr(owner, 'basinCalc', None)
+                    message = (str(error) if isinstance(error, FineGridError)
+                               else _fine_failure_message(calculator, error)
+                               if stage == 'parameters' and calculator is not None
+                               else None)
+                    if not message:
+                        raise
+                    event['failure_reason'] = message
+                    _report_fine_failure(self.iface, message)
+                    # CAUMAX has disabled Calcular while the basin is invalid.
+                    # Do not publish a stale basin or an invented Tc.
+                    return None
                 event['completed'] = True
                 return result
             finally:
