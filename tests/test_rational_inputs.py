@@ -175,6 +175,71 @@ class FineGridProtectionTests(unittest.TestCase):
                 tau = self.d8(size, encoding='TAUDEM_D8')
                 self.assertIn('sin recodificar', _fine_grid_issue(calc, tau))
 
+    def test_native_taudem_1_to_8_is_rejected_even_without_metadata(self):
+        native = np.array([[8, 7, 6, 1, 5],
+                           [2, 3, 4, 1, 1],
+                           [1, 1, 1, 1, 1],
+                           [1, 1, 1, 1, 1],
+                           [1, 1, 1, 1, 1]], dtype=np.uint8)
+        for size in (25, 5):
+            with self.subTest(size=size):
+                path = self.d8(size, encoding='ESRI_D8')
+                dataset = gdal.Open(str(path), gdal.GA_Update)
+                dataset.GetRasterBand(1).WriteArray(native)
+                dataset = None
+                issue = _fine_grid_issue(self.calc(size), path)
+                self.assertIn('valor', issue)
+                self.assertIn('ESRI', issue)
+
+    def test_valid_taudem_to_esri_recode_flows_to_caumax_closure(self):
+        from caumax_consulta.taudem_engine import _LUT
+        # Independent CAUMAX BasinCalculator._processCell neighbour ordering:
+        # each neighbour encodes its downstream direction into the centre.
+        upstream = ((-1, 0, 1), (-1, -1, 2), (0, -1, 4),
+                    (1, -1, 8), (1, 0, 16), (1, 1, 32),
+                    (0, 1, 64), (-1, 1, 128))
+        native = np.array([[8, 7, 6],
+                           [1, 255, 5],
+                           [2, 3, 4]], dtype=np.uint8)
+        coded = np.where(native == 255, 255,
+                         _LUT[np.where(native == 255, 0, native)])
+        expected = np.array([[2, 4, 8],
+                             [1, 255, 16],
+                             [128, 64, 32]], dtype=np.uint8)
+        np.testing.assert_array_equal(coded, expected)
+        for size in (25, 5):
+            with self.subTest(size=size):
+                calc = self.calc(size)
+                calc.directions = upstream
+                calc.dirs = np.full((5, 5), 255, dtype=np.uint8)
+                calc.dirs[1:4, 1:4] = coded
+                calc.basinCells = np.zeros((7, 7), dtype=np.uint8)
+                calc.p0Values, calc.i1idValues = [], []
+                calc.rainFiles, calc.rainValues = {}, {}
+                calc.area = 0
+                calc.cellarea = size ** 2
+                calc.getValueAtCoordinate = lambda *args: None
+                _process_cell_iterative(calc, 2, 2)
+                self.assertEqual(int(calc.basinCells.sum()), 9)
+                self.assertEqual(calc.area, 9 * size ** 2)
+                self.assertAlmostEqual(calc.maxDistance, size * 1.414)
+
+    def test_corrupt_owned_export_and_wrong_encoding_are_rejected(self):
+        for size in (25, 5):
+            with self.subTest(size=size):
+                path = self.d8(size)
+                dataset = gdal.Open(str(path), gdal.GA_Update)
+                dataset.SetMetadataItem('HIDROCAUMAX_PRODUCT', 'FLOW_DIRECTION')
+                dataset.SetMetadataItem('HIDROCAUMAX_ENGINE', 'TauDEM')
+                dataset.GetRasterBand(1).SetNoDataValue(0)
+                dataset = None
+                self.assertIn('NoData=255', _fine_grid_issue(self.calc(size), path))
+                dataset = gdal.Open(str(path), gdal.GA_Update)
+                dataset.GetRasterBand(1).SetNoDataValue(255)
+                dataset.SetMetadataItem('FLOW_DIRECTION_ENCODING', 'TAUDEM_D8')
+                dataset = None
+                self.assertIn('nativos TauDEM', _fine_grid_issue(self.calc(size), path))
+
     def test_directions_smaller_than_mdt_do_not_read_outside_array(self):
         # Different extents sharing a grid are supported by 1.0.16.
         for size in (25, 5):
