@@ -76,13 +76,14 @@ class ToolbarTests(unittest.TestCase):
         self.assertEqual(self.storage_mocks['prepare_export_directory'].call_count, 2)
         self.storage_mocks['restore_exports'].assert_not_called()
 
-    def test_delete_button_calls_session_cleanup_and_shows_a_temporary_count(self):
+    def test_delete_button_uses_the_same_confirmed_disk_cleanup_as_the_d8_panel(self):
         p = self.plugin
-        with patch.object(native, 'clear_delineations', return_value=7) as cleanup:
+        with patch.object(native, 'confirm_cleanup',
+                          return_value='Se han retirado 7 capas y eliminado 5 archivos.') as cleanup:
             QTest.mouseClick(p._toolbar.widgetForAction(p.clear_layers_action), Qt.LeftButton)
-        cleanup.assert_called_once_with(close_dialogs=False, include_exports=True, include_references=True)
-        self.assertIn('7 capas', self.messages.pushMessage.call_args.args[1])
-        self.assertEqual(self.messages.pushMessage.call_args.kwargs['duration'], 5)
+        cleanup.assert_called_once_with(self.window, iface=self.iface)
+        self.assertIn('eliminado 5 archivos', self.messages.pushMessage.call_args.args[1])
+        self.assertEqual(self.messages.pushMessage.call_args.kwargs['duration'], 10)
         self.assertTrue(p.clear_layers_action.isEnabled())
 
     def test_delete_action_removes_every_owned_kind_but_keeps_other_layers(self):
@@ -114,14 +115,22 @@ class ToolbarTests(unittest.TestCase):
             layer.setCustomProperty(key, f'cuenca-{index}')
             project.addMapLayer(layer)
             owned.append(layer.id())
-        self.plugin.clear_layers_action.trigger()
+        with patch.object(native, 'confirm_cleanup',
+                          side_effect=lambda *args, **kwargs: (
+                              'Se han retirado ' + str(clear_delineations(
+                                  close_dialogs=False, include_exports=True,
+                                  include_references=True)) +
+                              ' capas y eliminado 0 archivos.')):
+            self.plugin.clear_layers_action.trigger()
         self.assertTrue(all(project.mapLayer(key) is None for key in owned))
         self.assertIs(project.mapLayer(foreign.id()), foreign)
         self.assertIs(project.mapLayer(reference.id()), reference)
         self.assertIsNone(project.mapLayer(exported_id))
         self.assertIn('5 capas', self.messages.pushMessage.call_args.args[1])
-        self.plugin.clear_layers_action.trigger()
-        self.assertIn('No hay capas', self.messages.pushMessage.call_args.args[1])
+        with patch.object(native, 'confirm_cleanup',
+                          return_value='No hay resultados ni referencias de HidroCAUMAX para limpiar.'):
+            self.plugin.clear_layers_action.trigger()
+        self.assertIn('No hay resultados', self.messages.pushMessage.call_args.args[1])
 
     def test_hidrocaumax_logo_changes_with_tool_state_without_disabling_restore(self):
         from qgis.PyQt.QtGui import QIcon
@@ -171,7 +180,14 @@ class ToolbarTests(unittest.TestCase):
         reference.setCustomProperty(maps.LAYER_PROPERTY, 'stations')
         project.addMapLayer(reference, False); group.addLayer(reference)
         self.assertTrue(self.plugin.reference_action.isChecked())
-        self.plugin.clear_layers_action.trigger()
+        from caumax_consulta.delineation_cleanup import clear_delineations
+        with patch.object(native, 'confirm_cleanup',
+                          side_effect=lambda *args, **kwargs: (
+                              'Se han retirado ' + str(clear_delineations(
+                                  close_dialogs=False, include_exports=True,
+                                  include_references=True)) +
+                              ' capas y eliminado 0 archivos.')):
+            self.plugin.clear_layers_action.trigger()
         self.assertFalse(project.mapLayers())
         self.assertFalse(project.layerTreeRoot().findGroups())
         self.assertFalse(self.plugin.reference_action.isChecked())
