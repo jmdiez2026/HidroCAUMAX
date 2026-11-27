@@ -1,0 +1,36 @@
+name: Validar correcciones de resolución mejorada
+
+on:
+  push:
+    branches:
+      - fix/1.0.17-retencion-d8-export
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  regressions:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validar sintaxis Python
+        run: python3 -m compileall -q src/caumax_consulta tests
+      - name: Instalar PyQGIS, Qt5 y GDAL
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends python3-qgis python3-gdal
+      - name: Comprobar comportamiento en PyQGIS
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          mkdir -p "$RUNNER_TEMP/xdg-runtime"
+          chmod 700 "$RUNNER_TEMP/xdg-runtime"
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdg-runtime"
+          export PYTHONPATH="$GITHUB_WORKSPACE/src:$GITHUB_WORKSPACE/tests"
+          /usr/bin/python3 -m unittest discover -s tests -p 'test_hydro_export.py' -v
+          /usr/bin/python3 -m unittest discover -s tests -p 'test_boundary_layers.py' -v
+          /usr/bin/python3 -m unittest discover -s tests -p 'test_drainage_layers.py' -v
+          /usr/bin/python3 -m unittest discover -s tests -p 'test_rational_layers_panel.py' -v
+          /usr/bin/python3 -m unittest discover -s tests -p 'test_resolution_controller.py' -v
