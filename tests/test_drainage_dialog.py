@@ -108,6 +108,23 @@ class DrainageDialogTests(unittest.TestCase):
         self.dialog.drainage_threshold.setValue(self.state['threshold_area_m2']/2e6)
         self.assertTrue(self.dialog._drainage_timer.isActive())
 
+    def test_initial_basin_task_shows_all_resolution_choices_before_it_finishes(self):
+        # The 1.0.18 window was empty when AnalysisTask failed before
+        # _setup_resolutions(). Do not make the selector disappear again.
+        dialog = self.dialog
+        self.assertEqual(dialog.resolution_checkboxes, {})
+        manager = SimpleNamespace(tasks=[], addTask=lambda task: manager.tasks.append(task))
+        with patch('caumax_consulta.basin_dialog.QgsApplication.taskManager',
+                   return_value=manager):
+            dialog._start()
+        self.assertEqual(set(dialog.resolution_checkboxes), {'500', '25', '5'})
+        self.assertEqual(len(manager.tasks), 1)
+        self.assertTrue(all(not control.isEnabled()
+                            for control in dialog.resolution_checkboxes.values()))
+        dialog._failed('El punto está fuera de la extensión de la malla.')
+        self.assertIn('cálculo no disponible', dialog.context_mdt.text())
+        self.assertEqual(set(dialog.resolution_checkboxes), {'500', '25', '5'})
+
     def test_pending_threshold_blocks_save_and_export_until_effective_network_arrives(self):
         dialog=self.dialog;self.choose_manual_threshold()
         for name in ('save_project_button','report_button','export_button','network_export_button'):
