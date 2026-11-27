@@ -372,7 +372,7 @@ class RationalLayersPanelTests(unittest.TestCase):
     def test_requested_text_decimal_comma_and_compact_selector(self):
         resolution = self.discovered()
         resolution.selected('25')
-        self.assertEqual(self.panel.help_label.text(), 'Genera las tres capas necesarias para ejecutar CAUMAX con resolución mayor de la original 500x500m (esquema D8-TauDEM/Esri): (1) ráster MDT, (2) ráster Direcciones de flujo, y (3) shape Red de Drenaje.')
+        self.assertEqual(self.panel.help_label.text(), 'Genera las tres capas necesarias para ejecutar CAUMAX con resolución mayor de la original 500x500m (esquema Esri-D8): (1) ráster MDT, (2) ráster Direcciones de flujo, y (3) shape Red de Drenaje.')
         self.assertIn('54,000 km²', self.panel.drainage_status.text())
         self.assertIn(',', self.panel.drainage_threshold.text())
         self.assertLessEqual(self.panel.resolution_combo.width(),

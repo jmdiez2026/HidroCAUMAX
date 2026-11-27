@@ -238,7 +238,7 @@ class FineGridProtectionTests(unittest.TestCase):
                 dataset.GetRasterBand(1).SetNoDataValue(255)
                 dataset.SetMetadataItem('FLOW_DIRECTION_ENCODING', 'TAUDEM_D8')
                 dataset = None
-                self.assertIn('nativos TauDEM', _fine_grid_issue(self.calc(size), path))
+                self.assertIn('códigos D8 nativos', _fine_grid_issue(self.calc(size), path))
 
     def test_directions_smaller_than_mdt_do_not_read_outside_array(self):
         # Different extents sharing a grid are supported by 1.0.16.

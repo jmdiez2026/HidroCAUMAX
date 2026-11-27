@@ -315,6 +315,26 @@ class DrainageLayersTests(unittest.TestCase):
         self.assertEqual(drainage.prune_managed_drainage(
             self.project, keep_owner=current_5.owner_key), 0)
 
+    def test_legacy_group_and_layer_names_migrate_without_touching_user_data(self):
+        controller = self.controller('legacy_presentation')
+        network = controller.update(self.analysis, self.snapshot())['network']
+        group = self.project.layerTreeRoot().findLayer(network.id()).parent()
+        group.setName('HidroCAUMAX · Drenaje TauDEM [25×25 m]')
+        network.setName('Red de drenaje TauDEM')
+        foreign = QgsVectorLayer('LineString?crs=EPSG:25830',
+                                 'Red de drenaje TauDEM', 'memory')
+        self.project.addMapLayer(foreign)
+        before_ids = set(self.project.mapLayers())
+        before_source = network.source()
+        drainage.migrate_drainage_display_names(self.project)
+        self.assertEqual(group.name(), 'HidroCAUMAX · Drenaje Esri-D8 [25×25 m]')
+        self.assertEqual(network.name(), 'Red de drenaje Esri-D8')
+        self.assertEqual(foreign.name(), 'Red de drenaje TauDEM')
+        self.assertEqual(set(self.project.mapLayers()), before_ids)
+        self.assertEqual(network.source(), before_source)
+        drainage.migrate_drainage_display_names(self.project)
+        self.assertEqual(group.name(), 'HidroCAUMAX · Drenaje Esri-D8 [25×25 m]')
+
     def test_drainage_group_is_below_courses_above_terrain_and_persists_on_close(self):
         tree = self.project.layerTreeRoot()
         terrain = tree.insertGroup(0,'Terrain');course = tree.insertGroup(0,'Course')

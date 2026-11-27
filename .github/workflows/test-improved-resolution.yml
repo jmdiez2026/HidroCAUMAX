@@ -38,6 +38,10 @@ jobs:
           /usr/bin/python3 -m unittest discover -s tests -p 'test_hydro_export.py' -v
           /usr/bin/python3 -m unittest discover -s tests -p 'test_boundary_layers.py' -v
           /usr/bin/python3 -m unittest discover -s tests -p 'test_drainage_layers.py' -v
+          /usr/bin/python3 -m unittest discover -s tests -p 'test_drainage_dialog.py' -v
+          /usr/bin/python3 -m unittest discover -s tests -p 'test_taudem_engine.py' -v
+          /usr/bin/python3 -m unittest discover -s tests -p 'test_taudem_runtime.py' -v
+          /usr/bin/python3 -m unittest discover -s tests -p 'test_native_toolbar.py' -v
           /usr/bin/python3 -m unittest discover -s tests -p 'test_rational_layers_panel.py' -v
           /usr/bin/python3 -m unittest discover -s tests -p 'test_resolution_controller.py' -v
           /usr/bin/python3 -m unittest discover -s tests -p 'test_clean_layers_ui.py' -v

@@ -307,7 +307,7 @@ class DrainageDialogTests(unittest.TestCase):
         group.show()
         self.assertEqual(group.title(),'Generación capas resolución mejorada')
         self.assertEqual(group.layout().itemAt(0).widget().text(),
-            'Genera el MDT elegido, el ráster de Dirección de Flujo y el shape de la Red de Drenaje con el esquema D8 (TauDEM/Esri)')
+            'Genera el MDT elegido, el ráster de Dirección de Flujo y el shape de la Red de Drenaje con el esquema Esri-D8')
         row=group.layout().itemAt(1).layout()
         controls=[row.itemAt(i).widget() for i in range(5)]
         self.assertEqual(controls,[group.drainage_prepare_button,controls[1],group.drainage_threshold,

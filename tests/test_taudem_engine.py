@@ -65,7 +65,7 @@ class TauDEMTests(unittest.TestCase):
         with patch.object(engine.shutil, "which", return_value=None), patch.dict(os.environ, {}, clear=True):
             result = engine.probe_taudem(self.folder / "missing")
         self.assertFalse(result["available"])
-        self.assertIn("TauDEM", result["reason"])
+        self.assertIn("Esri-D8", result["reason"])
         self.assertIn("MPI", result["reason"])
         self.assertIn("github.com/dtarb/TauDEM", result["reason"])
 
