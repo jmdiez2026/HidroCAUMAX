@@ -30,7 +30,7 @@ border: 1px solid #7EB4D0; border-radius: 3px; padding: 5px 9px; }
 QPushButton:hover { background-color: #C7E8FF; }
 QPushButton:disabled { background-color: #EAF3F8; color: #7A8790; }'''
 ACTION_FRAME_NAME = 'HidroCAUMAXRationalActionFrame'
-ACTION_BUTTON_STYLE = BUTTON_STYLE.replace('padding: 5px 9px', 'padding: 2px 3px')
+ACTION_BUTTON_STYLE = BUTTON_STYLE
 EXPORT_OWNER_PROPERTY = 'HidroCAUMAX/rational_export_owned'
 _TITLE = 'HidroCAUMAX v.1.0 · Guardar Divisoria'
 
@@ -39,10 +39,15 @@ def _place_export_button(dialog, button, grouped=True):
     """Share one GEA strip while each bridge retains its own button lifecycle."""
     frame = dialog.findChild(QFrame, ACTION_FRAME_NAME) if grouped else None
     if frame is not None:
-        if frame.layout().indexOf(button) >= 0:
+        # The shared GEA bar has two rows; insert the export in the first
+        # row between Calcular and Guardar Cierre regardless of load order.
+        primary = frame.findChild(QHBoxLayout, 'HidroCAUMAXPrimaryActions')
+        if primary is None:
+            primary = frame.layout()  # compatibility with the earlier strip
+        if primary.indexOf(button) >= 0:
             return
         dialog.horizontalLayout_2.removeWidget(button)
-        frame.layout().insertWidget(2, button)  # logo, Calcular, Guardar...
+        primary.insertWidget(2, button)  # logo, Calcular, Guardar Divisoria
         button.setStyleSheet(ACTION_BUTTON_STYLE)
         button.setIcon(QIcon())
     else:
