@@ -143,6 +143,15 @@ class BridgeTests(unittest.TestCase):
             setattr(layers_module, key, key)
         layers_module.getLayerPath = self.paths.__getitem__
         layers_module.getLayer = self.layers.__getitem__
+        # CAUMAX ships an independent immutable original pair; the rational
+        # layer chooser may point to completely different 25/5 m sources.
+        self.original_mdt = self._reference_grid(
+            'original_mdt_500.tif', 500, 340000, 4648000)
+        self.original_d8 = self._reference_grid(
+            'original_d8_500.tif', 500, 340000, 4648000)
+        layers_module._defaultLayerPaths = {
+            'MDT': self.original_mdt, 'FLOWDIRS': self.original_d8,
+        }
         self.native_module = types.ModuleType('_caumax_bridge_fixture.maxflowdialog')
         self.native_module.MaxFlowDialog = MaxFlowDialog
         self.native_module.getLayer = self.layers.__getitem__
@@ -206,7 +215,8 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual((query.x, query.y), (341825, 4646700))
         self.assertEqual((query.cell.x, query.cell.y), (341750, 4646750))
         self.assertEqual(query.crs.authid(), 'EPSG:25830')
-        self.assertEqual(query.directions_path, self.paths['FLOWDIRS'])
+        self.assertEqual((query.dem_path, query.directions_path),
+                         (self.original_mdt, self.original_d8))
         with self.assertRaises(FrozenInstanceError):
             query.x = 0
         self.dialog.txtX.setText('123')
@@ -273,8 +283,8 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual((query.x, query.y), (341825, 4646700))
         self.assertEqual(query.flow, 18)
 
-    def test_fine_grid_is_kept_when_it_covers_the_selected_river_point(self):
-        """Keep a valid custom grid; fallback only for missing coverage."""
+    def test_map_query_always_ignores_even_valid_fine_rational_grids(self):
+        """Fine 25/5 m coverage must never leak into a max-flow query."""
         self.valid_query(period=5, flow='29')
         module = sys.modules['_caumax_bridge_fixture.layers']
         module._defaultLayerPaths = {
@@ -289,10 +299,13 @@ class BridgeTests(unittest.TestCase):
                 )
                 self.paths.update(MDT=fine[0], FLOWDIRS=fine[1])
                 query = bridge_module.make_native_query(self.dialog, self.native_module)
-                self.assertEqual((query.dem_path, query.directions_path), fine)
+                self.assertEqual((query.dem_path, query.directions_path),
+                                 (module._defaultLayerPaths['MDT'],
+                                  module._defaultLayerPaths['FLOWDIRS']))
                 self.assertEqual((query.x, query.y), (341825, 4646700))
+                self.assertEqual((self.paths['MDT'], self.paths['FLOWDIRS']), fine)
 
-    def test_changed_caummx_grid_paths_refresh_basin_without_new_coordinates(self):
+    def test_changing_rational_grid_paths_does_not_change_the_native_map_query(self):
         self.valid_query()
         module = sys.modules['_caumax_bridge_fixture.layers']
         official = (
@@ -314,7 +327,8 @@ class BridgeTests(unittest.TestCase):
         self.basin_button().click()
         self.assertEqual(len(self.calls), 2)
         self.assertEqual((self.calls[-1][1].dem_path,
-                          self.calls[-1][1].directions_path), fine)
+                          self.calls[-1][1].directions_path), official)
+        self.assertEqual((self.paths['MDT'], self.paths['FLOWDIRS']), fine)
         self.assertEqual((self.calls[-1][1].x, self.calls[-1][1].y),
                          (341825, 4646700))
         self.assertFalse(self.bridge._bindings[id(self.dialog)].query_dirty)
@@ -330,9 +344,55 @@ class BridgeTests(unittest.TestCase):
             MDT=self._reference_grid('other_25_dem.tif', 25, 100000, 4400000),
             FLOWDIRS=self._reference_grid('other_25_d8.tif', 25, 100000, 4400000),
         )
-        with self.assertRaisesRegex(ValueError, 'fuera de la cobertura válida'):
+        with self.assertRaisesRegex(ValueError, 'originales de CAUMAX'):
             bridge_module.make_native_query(self.dialog, self.native_module)
 
+
+    def test_native_max_flow_does_not_consult_mutable_rational_layer_paths(self):
+        # A successful CAUMAX Q(T) result requires only the original 500 m
+        # pair. This prevents the regression even when custom rasters are
+        # valid at the query point or the mutable config is inaccessible.
+        self.valid_query()
+        module = sys.modules['_caumax_bridge_fixture.layers']
+        with patch.object(module, 'getLayerPath',
+                          side_effect=AssertionError('Se ha leído la configuración racional')):
+            result = bridge_module.make_native_query(self.dialog, self.native_module)
+        self.assertEqual((result.dem_path, result.directions_path),
+                         (self.original_mdt, self.original_d8))
+
+    def test_missing_original_grid_does_not_fall_back_to_fine_rational_tiff(self):
+        self.valid_query()
+        module = sys.modules['_caumax_bridge_fixture.layers']
+        fine = (
+            self._reference_grid('alone_fine_dem_5.tif', 5, 341800, 4646725),
+            self._reference_grid('alone_fine_d8_5.tif', 5, 341800, 4646725),
+        )
+        self.paths.update(MDT=fine[0], FLOWDIRS=fine[1])
+        originals = module._defaultLayerPaths
+        module._defaultLayerPaths = {'MDT': str(self.folder/'missing-original-dem.tif'),
+                                     'FLOWDIRS': str(self.folder/'missing-original-d8.tif')}
+        with self.assertRaisesRegex(ValueError, 'originales de CAUMAX'):
+            bridge_module.make_native_query(self.dialog, self.native_module)
+        self.assertEqual((self.paths['MDT'], self.paths['FLOWDIRS']), fine)
+        module._defaultLayerPaths = originals
+
+    def test_alternating_25_and_5_m_rational_settings_keeps_identical_originals(self):
+        self.valid_query()
+        initial = bridge_module.make_native_query(self.dialog, self.native_module)
+        for resolution in (25, 5, 25, 500):
+            with self.subTest(resolution=resolution):
+                dem = self._reference_grid(
+                    f'rational_dem_{resolution}.tif', resolution,
+                    341825 - 5*resolution, 4646700 + 5*resolution)
+                d8 = self._reference_grid(
+                    f'rational_d8_{resolution}.tif', resolution,
+                    341825 - 5*resolution, 4646700 + 5*resolution)
+                self.paths.update(MDT=dem, FLOWDIRS=d8)
+                new = bridge_module.make_native_query(self.dialog, self.native_module)
+                self.assertEqual((new.dem_path, new.directions_path),
+                                 (initial.dem_path, initial.directions_path))
+                self.assertEqual((new.flow, new.period, new.x, new.y),
+                                 (initial.flow, initial.period, initial.x, initial.y))
 
     def test_enabled_change_and_changed_inputs_require_a_fresh_native_query(self):
         self.bridge.start()
