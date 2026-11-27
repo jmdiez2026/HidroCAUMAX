@@ -102,18 +102,24 @@ def _check_directions(products, encoding):
         if not _reference(dem.GetProjectionRef()).IsSame(target):
             raise ValueError('La exportación para CAUMAX requiere el CRS original EPSG:25830. '
                              'No se reproyectan códigos de dirección.')
-    nb, cb = native.GetRasterBand(1), caumax.GetRasterBand(1)
+    nb, cb, eb = native.GetRasterBand(1), caumax.GetRasterBand(1), dem.GetRasterBand(1)
     for window in _blocks(native):
-        n, c = nb.ReadAsArray(*window), cb.ReadAsArray(*window)
-        if n is None or c is None:
-            raise ValueError('No se pueden leer las direcciones completas.')
-        flags, other = _valid(nb, n, window), _valid(cb, c, window)
-        if not np.array_equal(flags, other):
-            raise ValueError('Las dos codificaciones D8 no comparten la máscara de datos.')
-        values = n[flags]
+        n, c, elevations = (band.ReadAsArray(*window) for band in (nb, cb, eb))
+        if n is None or c is None or elevations is None:
+            raise ValueError('No se pueden leer las direcciones y el MDT completos.')
+        # The CAUMAX raster is deliberately masked where the *original* DEM
+        # is NoData. PitRemove/D8FlowDir can nonetheless assign a TauDEM D8
+        # direction to such edge cells. Compare the two encodings only on the
+        # real, unaltered DEM footprint (as _recode_tau_d8 does).
+        dem_valid = _valid(eb, elevations, window)
+        native_valid = _valid(nb, n, window) & dem_valid
+        caumax_valid = _valid(cb, c, window)
+        if not np.array_equal(native_valid, caumax_valid):
+            raise ValueError('El D8 CAUMAX/ESRI no conserva la máscara válida del MDT original.')
+        values = n[native_valid]
         if np.any(~np.isin(values, np.arange(1, 9))):
             raise ValueError('Las direcciones nativas TauDEM deben usar códigos enteros 1–8.')
-        if not np.array_equal(c[flags], _TAU_TO_ESRI[values.astype(np.uint8)]):
+        if not np.array_equal(c[native_valid], _TAU_TO_ESRI[values.astype(np.uint8)]):
             raise ValueError('La codificación ESRI no corresponde a las ocho direcciones TauDEM.')
     return native if encoding == 'taudem' else caumax
 
@@ -210,6 +216,19 @@ def _raster_export(products, source, destination, product, encoding, add_to_proj
                 copied.Close()
             copied = None
         _publish(stage, target)
+    # Verify the *published* GeoTIFF on disk, not only the temporary staging
+    # copy. A reported success must be a readable, complete file at the
+    # destination the user selected.
+    published = None
+    try:
+        if not target.is_file() or target.stat().st_size == 0:
+            raise ValueError('El GeoTIFF no se ha creado en la carpeta elegida.')
+        published = _open_raster(target)
+        _check_copy(source, published)
+        if any(published.GetMetadataItem(key) != value for key, value in tags.items()):
+            raise ValueError('El GeoTIFF guardado no conserva los metadatos de procedencia.')
+    finally:
+        published = None
     if add_to_project:
         from qgis.core import QgsProject, QgsRasterLayer
         layer = QgsRasterLayer(str(target), target.stem, 'gdal')
