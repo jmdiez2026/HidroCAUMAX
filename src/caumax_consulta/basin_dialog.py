@@ -2314,6 +2314,7 @@ class BasinDialog(QDialog):
         if self._qgis_window is not None:
             self._qgis_window.removeEventFilter(self)
         self._smoothing_timer.stop()
+        self._auto_hydrology_timer.stop()
         self._cancel_surface()
         self._drainage_timer.stop()
         if self._basin_hydrology_controller is not None:
