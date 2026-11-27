@@ -289,6 +289,14 @@ class RationalLayersPanelTests(unittest.TestCase):
         group = QgsProject.instance().layerTreeRoot().findLayer(dem.id()).parent()
         self.assertEqual([node.layer().id() for node in group.children()][3], dem.id())
         self.assertEqual(group.children()[0].layer().customProperty('HidroCAUMAX/closure_point'), True)
+        closure = panel._layers.layers['closure']
+        self.assertEqual(closure.providerType(), 'ogr')
+        self.assertEqual(Path(closure.source()).suffix.lower(), '.shp')
+        self.assertTrue(Path(closure.source()).is_file())
+        self.assertEqual(closure.featureCount(), 1)
+        self.assertEqual(closure.renderer().symbol().color().name(), '#ffe800')
+        self.assertAlmostEqual(next(closure.getFeatures()).geometry().asPoint().x(),
+                               products.analysis.selected_x, places=5)
         self.assertFalse(QgsProject.instance().layerTreeRoot()
                         .findLayer(dem.id()).itemVisibilityChecked())
         self.assertEqual(panel._layers.visibility(),
