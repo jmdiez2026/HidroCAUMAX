@@ -326,6 +326,18 @@ def delete_generated(plan, project=None, canvas=None):
     clear_delineations(close_dialogs=True, project=project, include_exports=True,
                        include_references=plan.get('include_references', False))
     _cancel_plugin_tasks()
+    if project is QgsProject.instance():
+        # The D8 panel may stay open after Clear. Explicitly drop its cached
+        # analysis, resolution variants and ndarray products; next generation
+        # is reactivated by the user, never by a background timer.
+        from .delineation_cleanup import _participants
+        for participant in tuple(_participants):
+            try:
+                purge = getattr(participant, 'purge_generated_memory', None)
+                if callable(purge):
+                    purge()
+            except RuntimeError:
+                pass
     # Workers can finish staging a file between the initial review and their
     # cancellation. A second scan is confined to the same *approved private*
     # directories; never extend to arbitrary external files after confirmation.
