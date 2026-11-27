@@ -128,6 +128,32 @@ class DrainageDialogTests(unittest.TestCase):
         self.assertIn('cálculo no disponible', dialog.context_mdt.text())
         self.assertEqual(set(dialog.resolution_checkboxes), {'500', '25', '5'})
 
+    def test_exportar_cierre_green_shapefile_from_visible_blue_cross_button(self):
+        dialog = self.dialog
+        self.assertEqual(dialog.export_closure_button.text(), 'Exportar Cierre')
+        self.assertEqual(dialog.export_button.text(), 'Exportar Cuenca')
+        self.assertTrue(dialog._smoothing_ready)
+        self.assertTrue(dialog._surface_valid)
+        self.assertFalse(dialog._basin_hydrology_busy())
+        target = self.folder / 'Cierre_visible.shp'
+        dialog._set_export_enabled(True)
+        with patch('caumax_consulta.basin_dialog.QFileDialog.getSaveFileName',
+                   return_value=(str(target), 'Shapefile (*.shp)')):
+            dialog.export_closure_button.click()
+        self.assertTrue(target.is_file())
+        self.assertTrue(target.with_suffix('.qml').is_file())
+        layer = next(layer for layer in self.project.mapLayers().values()
+                     if layer.customProperty('HidroCAUMAX/main_course_outlet', False))
+        self.assertEqual(layer.renderer().symbol().color().name(), '#23e733')
+        self.assertTrue(layer.isValid())
+        self.assertEqual(layer.featureCount(), 1)
+        point = next(layer.getFeatures()).geometry().asPoint()
+        self.assertAlmostEqual(point.x(), self.analysis.outlet_x, places=6)
+        self.assertAlmostEqual(point.y(), self.analysis.outlet_y, places=6)
+        dialog._mark_drainage_pending()
+        self.assertFalse(dialog.export_closure_button.isEnabled())
+        self.assertFalse(dialog.export_button.isEnabled())
+
     def test_pending_threshold_blocks_save_and_export_until_effective_network_arrives(self):
         dialog=self.dialog;self.choose_manual_threshold()
         for name in ('save_project_button','report_button','export_button','network_export_button'):
