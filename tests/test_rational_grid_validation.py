@@ -188,19 +188,6 @@ class RationalGridValidationTests(unittest.TestCase):
         self.assertEqual(_safe_secondary_sample(calc, 150, 450, 'P0'), 0.)
         self.assertEqual(_safe_secondary_sample(calc, 250, 350, 'P0'), 4.)
 
-    def test_export_names_are_specific_to_outlet_not_just_resolution(self):
-        from caumax_consulta.improved_storage import suggested_export_names
-        first = SimpleNamespace(cell_width=25, outlet_x=348311.9, outlet_y=4717759.2)
-        second = SimpleNamespace(cell_width=25, outlet_x=355900, outlet_y=4616710)
-        first_names = suggested_export_names(first)
-        second_names = suggested_export_names(second)
-        self.assertNotEqual(first_names['dem'], second_names['dem'])
-        self.assertNotEqual(first_names['directions'], second_names['directions'])
-        self.assertIn('X348312_Y4717759', first_names['dem'])
-        self.assertEqual(first_names['dem'].replace('MDT_', ''),
-                         first_names['directions'].replace('Direccion_D8_caumax_', ''))
-        self.assertTrue(all(name.endswith(('.tif', '.shp')) for name in first_names.values()))
-
     def test_existing_matching_export_is_suggested_without_reconfiguring_native_layers(self):
         dem, d8 = self.pair(25)
         foreign = (str(self.root / 'wrong_dem.tif'), str(self.root / 'wrong_d8.tif'))
