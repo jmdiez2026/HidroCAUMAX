@@ -544,10 +544,11 @@ class RationalLayersBridgeTests(unittest.TestCase):
         current.complete_button.click()
         callback.assert_called_once_with(self.dialog)
         output = Path('/tmp/Cierre_353387_4725249.shp')
-        with patch.object(ui.QFileDialog, 'getSaveFileName',
-                          return_value=(str(output), 'Shapefile (*.shp)')), \\
-             patch.object(closure_layers, 'export_closure',
-                          return_value=(output, object())) as writer:
+        choose = patch.object(ui.QFileDialog, 'getSaveFileName',
+                              return_value=(str(output), 'Shapefile (*.shp)'))
+        save = patch.object(closure_layers, 'export_closure',
+                            return_value=(output, object()))
+        with choose, save as writer:
             current.closure_button.click()
         args = writer.call_args.args
         self.assertAlmostEqual(args[0], 353387.14651812)
