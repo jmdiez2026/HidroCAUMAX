@@ -184,8 +184,12 @@ def _report_fine_failure(iface, message, dialog=None):
                 pass
 
 
-def _configured_rational_paths(dialog):
-    """Resolve only the actual rational settings, never original Q(T) paths."""
+def _configured_rational_paths(dialog, *, all_sources=False):
+    """Resolve actual rational settings, never original maximum-flow paths.
+
+    Include climatic and P0 layers in cache identity, because BasinCalculator
+    reads their arrays only once upon construction.
+    """
     for cls in type(dialog).__mro__:
         if not cls.__module__.endswith('.rationalmethoddialog'):
             continue
@@ -196,7 +200,12 @@ def _configured_rational_paths(dialog):
         if not callable(reader):
             return None
         try:
-            return (os.fspath(reader(module.MDT)), os.fspath(reader(module.FLOWDIRS)))
+            keys = [module.MDT, module.FLOWDIRS]
+            if all_sources:
+                keys.extend(getattr(module, name) for name in (
+                    'I1ID', 'P0', 'RAIN_2', 'RAIN_5', 'RAIN_10',
+                    'RAIN_25', 'RAIN_100', 'RAIN_500') if hasattr(module, name))
+            return tuple(os.fspath(reader(key)) for key in keys)
         except (OSError, KeyError, AttributeError, ValueError, TypeError):
             return None
     return None
@@ -584,7 +593,8 @@ class RationalInputsBridge(QObject):
                     _report_fine_failure(self.iface, message, owner)
                     self.calculation_finished.emit(owner, stage, event)
                     return None
-                current_identity = _rational_source_identity(paths)
+                current_identity = _rational_source_identity(
+                    _configured_rational_paths(owner, all_sources=True))
                 # CAUMAX only creates BasinCalculator if basinCalc is None.
                 # A changed 25/5 m TIFF pair must never reuse stale arrays
                 # from the previous configuration. Do not reset it merely
@@ -600,7 +610,8 @@ class RationalInputsBridge(QObject):
                 record('btnCalculate', 'setEnabled', 'ready_writes')
             else:
                 # A parameter result is bound to its exact MDT/D8 pair.
-                current = _rational_source_identity(_configured_rational_paths(owner))
+                current = _rational_source_identity(
+                    _configured_rational_paths(owner, all_sources=True))
                 if (binding.checked_sample is not None and current != binding.source_identity):
                     message = ('Han cambiado las capas MDT/D8 del Método racional. '
                                'Vuelve a calcular las variables intermedias antes del caudal.')
@@ -694,7 +705,7 @@ class RationalInputsBridge(QObject):
                 previous = dialog.calculateParameters
                 binding = _DialogBinding(dialog, _MISSING, None)
                 binding.source_identity = _rational_source_identity(
-                    _configured_rational_paths(dialog))
+                    _configured_rational_paths(dialog, all_sources=True))
                 try:
                     adapted = _clone_calculation(
                         previous, lambda cls: self._factory(cls, binding),
