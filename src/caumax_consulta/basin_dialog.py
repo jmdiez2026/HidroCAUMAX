@@ -954,6 +954,11 @@ class BasinDialog(QDialog):
             self._drainage_controller.prepare(key,self.analysis,source_query,reference,cache,
                 threshold_area_m2=threshold,automatic=automatic,
                 encoding='caumax',bin_dir=None)
+            # As soon as generation has been queued, clear the former 500 m
+            # display and its private outline files. Preserve source rasters.
+            if self._drainage_controller.busy:
+                from .improved_result_cleanup import retire_500m_results
+                retire_500m_results(self.iface)
             self._refresh_drainage_controls()
         except Exception as error:
             self._drainage_failed(str(error))
