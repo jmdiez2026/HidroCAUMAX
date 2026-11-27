@@ -75,28 +75,35 @@ def style_query_network(project):
         if name == 'red10km2' and isinstance(renderer, QgsCategorizedSymbolRenderer):
             if renderer.classAttribute().strip().lower() != 'sup':
                 continue
-            categories = renderer.categories()
-            for index, category in enumerate(categories):
+            selected_index = None
+            for index, category in enumerate(renderer.categories()):
                 label = ''.join(category.label().lower().split()).replace('²', '2').replace('^2', '2')
-                if label != 'red>50km2' or str(category.value()) != '2':
-                    continue
-                symbol = category.symbol()
-                if symbol is None:
+                if label == 'red>50km2' and str(category.value()) == '2':
+                    selected_index = index
                     break
-                if _network_symbol_matches(symbol):
-                    layer.setCustomProperty('HidroCAUMAX/query_network_style',
-                                            NETWORK_STYLE_REVISION)
-                    break
-                new_renderer = renderer.clone()
-                new_symbol = symbol.clone()
-                _paint_network_symbol(new_symbol)
-                new_renderer.updateCategorySymbol(index, new_symbol)
-                layer.setRenderer(new_renderer)
-                layer.setCustomProperty('HidroCAUMAX/query_network_pink', True)
+            if selected_index is None:
+                continue
+            # QgsRendererCategory/QgsSymbol Python wrappers refer to C++ data
+            # owned by the renderer. Replacing the whole renderer while those
+            # wrappers still exist can invalidate their pointers in PyQGIS.
+            # Update *only* its matched category in place, keeping the layer
+            # and other categories untouched.
+            symbol = renderer.categories()[selected_index].symbol()
+            if symbol is None:
+                continue
+            if _network_symbol_matches(symbol):
                 layer.setCustomProperty('HidroCAUMAX/query_network_style',
                                         NETWORK_STYLE_REVISION)
-                layer.triggerRepaint()
-                break
+                continue
+            painted = symbol.clone()
+            _paint_network_symbol(painted)
+            del symbol
+            renderer.updateCategorySymbol(selected_index, painted)
+            layer.setCustomProperty('HidroCAUMAX/query_network_pink', True)
+            layer.setCustomProperty('HidroCAUMAX/query_network_style',
+                                    NETWORK_STYLE_REVISION)
+            layer.triggerRepaint()
+            layer.emitStyleChanged()
             continue
         # Older user projects can contain an independent line layer with
         # this name; retain compatibility without changing unrelated networks.
