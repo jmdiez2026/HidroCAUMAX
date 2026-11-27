@@ -7,7 +7,7 @@ from qgis.PyQt import sip
 from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtWidgets import QAction
 from qgis.core import (QgsApplication, QgsCoordinateReferenceSystem, QgsCoordinateTransform,
-                       QgsProject, QgsRectangle, QgsVectorLayer)
+                       QgsProject, QgsRectangle, QgsVectorLayer, QgsUnitTypes)
 from qgis.gui import QgsMapCanvas
 import qgis.utils
 
@@ -170,3 +170,12 @@ class NativeLayersViewTests(unittest.TestCase):
         self.assertNotEqual(pink.renderer().symbol().width(), width)
         self.assertEqual(other.renderer().symbol().color().name(),color)
         self.assertEqual(pink.featureCount(),0)
+        # A layer already painted by the older pink-only release must receive
+        # the new width when HidroCAUMAX is updated.
+        pink.setCustomProperty('HidroCAUMAX/query_network_style', '')
+        pink.setCustomProperty('HidroCAUMAX/query_network_pink', True)
+        pink.renderer().symbol().setWidth(.26)
+        style_query_network(self.project)
+        self.assertAlmostEqual(pink.renderer().symbol().width(), 1.30)
+        style_query_network(self.project)
+        self.assertAlmostEqual(pink.renderer().symbol().width(), 1.30)
