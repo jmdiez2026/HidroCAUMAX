@@ -122,6 +122,7 @@ class _Binding:
     hidden_native_outline: object = None
     native_outline_visibility: object = None
     action_row: object = None
+    action_row_bottom: object = None
     basin_ready: bool = False
     parameters_validated: bool = False
     basin_stamp: object = None
@@ -465,15 +466,27 @@ class RationalLayersBridge(QObject):
         frame.setObjectName(ACTION_FRAME_NAME)
         frame.setStyleSheet(f'QFrame#{ACTION_FRAME_NAME} {{ border: 1px solid #7EB4D0; '
                            'border-radius: 3px; background-color: #F2F9FD; }}')
-        row = QHBoxLayout(frame)
-        row.setContentsMargins(2, 3, 2, 3)
-        row.setSpacing(2)
+        # Use two rows rather than shrinking buttons to fit a single strip.
+        # Original 5x9 px button padding and the native UI font are retained.
+        rows = QVBoxLayout(frame)
+        rows.setContentsMargins(8, 7, 8, 7)
+        rows.setSpacing(8)
+        row = QHBoxLayout()
+        row.setObjectName('HidroCAUMAXPrimaryActions')
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(10)
+        rows.addLayout(row)
+        lower_row = QHBoxLayout()
+        lower_row.setObjectName('HidroCAUMAXSecondaryActions')
+        lower_row.setContentsMargins(0, 0, 0, 0)
+        lower_row.setSpacing(10)
+        rows.addLayout(lower_row)
         logo = QLabel(frame)
         logo.setObjectName('HidroCAUMAXSharedGEALogo')
         logo.setToolTip('GEA · Universidad de Valladolid')
         pixmap = QPixmap(str(LOGO_PATH))
         if not pixmap.isNull():
-            logo.setPixmap(pixmap.scaledToHeight(24, Qt.SmoothTransformation))
+            logo.setPixmap(pixmap.scaledToHeight(28, Qt.SmoothTransformation))
         logo.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         row.addWidget(logo, 0, Qt.AlignVCenter)
         frequency_button = QPushButton('Calcular', frame)
@@ -497,17 +510,18 @@ class RationalLayersBridge(QObject):
         basin_button.setObjectName(BASIN_BUTTON_NAME)
         basin_button.setStyleSheet(ACTION_BUTTON_STYLE)
         basin_button.setEnabled(False)
-        row.addWidget(basin_button, 0, Qt.AlignLeft)
+        lower_row.addWidget(basin_button, 0, Qt.AlignLeft)
         button = QPushButton('Mejorar resolución', frame)
         button.setObjectName(BUTTON_NAME)
         button.setStyleSheet(ACTION_BUTTON_STYLE)
         button.setToolTip('Abrir en una ventana independiente las opciones de generación para el punto actual.')
-        row.addWidget(button, 0, Qt.AlignLeft)
+        lower_row.addWidget(button, 0, Qt.AlignLeft)
         row.addStretch()
+        lower_row.addStretch()
         from .clean_layers_ui import clean_button
         clean = clean_button(frame)
         clean.setObjectName(CLEAN_BUTTON_NAME)
-        row.addWidget(clean, 0, Qt.AlignRight)
+        lower_row.addWidget(clean, 0, Qt.AlignRight)
         layout.addWidget(frame)
         error = QLabel(container)
         error.setTextFormat(Qt.PlainText)
@@ -521,6 +535,7 @@ class RationalLayersBridge(QObject):
         from .native_decimal import RationalDecimalPresentation
         binding.decimal_presentation = RationalDecimalPresentation(dialog)
         binding.basin_button, binding.action_row = basin_button, row
+        binding.action_row_bottom = lower_row
         binding.frequency_button = frequency_button
         binding.closure_button = closure_button
         binding.complete_button = complete_button
