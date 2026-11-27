@@ -22,6 +22,8 @@ Al finalizar la delimitación de «**Cuenca hidrográfica**», HidroCAUMAX inici
 
 **Precisión:** Pd(T) corresponde al promedio espacial de los mapas de cuantiles puntuales de precipitación máxima diaria, **no** al valor estadístico de una nueva serie de máximas anuales no incluida entre las fuentes. No se corrigen ni se rellenan los píxeles sin dato.
 
+El grupo **«Curso principal»** ahora se identifica únicamente por la resolución —por ejemplo, **«HidroCAUMAX · Curso principal 500x500»**, «25x25» o «5x5»—, sin coordenadas ni índices de celda. La actualización renombra también los grupos antiguos propiedad del complemento al abrir un proyecto, conservando geometrías y atributos.
+
 Se corrige también el estilo de la red principal: en la capa vectorial CAUMAX «**Red 10 km²**» las etiquetas «Red 10–50 km²» y «Red > 50 km²» son **categorías del atributo `sup`**. La categoría `sup=2` (Red > 50 km²) se muestra ahora en **rosa-violeta `#FF1493` y ancho 1,30 mm**, conservando sin modificaciones el estilo `sup=1`. No se modifica CAUMAX ni el GeoPackage original.
 
 ## Método racional con capas MDT y ESRI-D8 propias (1.0.22)
