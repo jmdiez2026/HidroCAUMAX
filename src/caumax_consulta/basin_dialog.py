@@ -259,17 +259,28 @@ class BasinDialog(QDialog):
         self.smoothing_degree.setValue(3)
         self.smoothing_degree.setToolTip('Grado entero de 1 a 45. Recalcula automáticamente morfología, hipsometría, P₀ y Pd sobre la divisoria activa.')
         degree_label = QLabel('Grado:', smoothing)
-        self.export_button = QPushButton('Guardar Divisoria', smoothing)
-        self.export_button.setStyleSheet('QPushButton { padding: 2px 2px; min-height: 0px; }')
-        export_font = self.export_button.font()
-        export_font.setPointSizeF(8.5)
-        self.export_button.setFont(export_font)
-        self.export_button.setSizePolicy(QSizePolicy.Maximum,QSizePolicy.Fixed)
-        self.export_button.setMaximumWidth(155)
-        self.export_button.setEnabled(False)
+        # The blue cross is the accepted outlet of the currently displayed
+        # basin, not the yellow originally clicked D8 selection.
+        self.export_closure_button = QPushButton('Exportar Cierre', smoothing)
+        self.export_closure_button.setToolTip(
+            'Exportar la posición exacta de la cruz azul como SHP de punto '
+            'con círculo verde intenso y añadirla a QGIS.')
+        self.export_button = QPushButton('Exportar Cuenca', smoothing)
+        self.export_button.setToolTip(
+            'Exportar los polígonos de la divisoria activa como SHP o GPKG.')
+        for export_control in (self.export_closure_button, self.export_button):
+            export_control.setStyleSheet(
+                'QPushButton { padding: 2px 3px; min-height: 0px; }')
+            export_font = export_control.font()
+            export_font.setPointSizeF(8.)
+            export_control.setFont(export_font)
+            export_control.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+            export_control.setEnabled(False)
+        self.export_closure_button.clicked.connect(self._export_green_closure)
         self.export_button.clicked.connect(self._export)
-        self._smoothing_controls = (self.original_check,self.smooth_check,degree_label,
-                                    self.smoothing_degree,self.export_button)
+        self._smoothing_controls = (
+            self.original_check, self.smooth_check, degree_label,
+            self.smoothing_degree, self.export_closure_button, self.export_button)
         self._smoothing_controls_layout = controls
         controls.setSpacing(4)
         for control in self._smoothing_controls:
@@ -829,7 +840,7 @@ class BasinDialog(QDialog):
         self.save_project_button.setEnabled(available and not busy and not drainage_busy
             and not self._saving_project and not self._resolution_discovering)
         self.resolution_refresh_button.setEnabled(not busy and not self._saving_project and not self._resolution_pending)
-        self.export_button.setEnabled(available and self._smoothing_ready and not busy and not self._saving_project)
+        self._set_export_enabled(available and self._smoothing_ready and not busy and not self._saving_project)
         self._refresh_drainage_controls()
         self._refresh_outlet_button()
 
@@ -965,7 +976,7 @@ class BasinDialog(QDialog):
             threshold = None if automatic else self.drainage_threshold.value()*1e6
             self.report_button.setEnabled(False)
             self.save_project_button.setEnabled(False)
-            self.export_button.setEnabled(False)
+            self._set_export_enabled(False)
             source_query=self.query
             if not Path(source_query.dem_path).is_file() and self._drainage_state:
                 exported=self._drainage_state.get('metadata',{}).get('exports',{}).get('dem','')
@@ -1052,7 +1063,7 @@ class BasinDialog(QDialog):
         self.drainage_status.setText(text)
         self.report_button.setEnabled(self.analysis is not None)
         self.save_project_button.setEnabled(self.analysis is not None)
-        self.export_button.setEnabled(self._smoothing_ready)
+        self._set_export_enabled(self._smoothing_ready)
 
     def _cancel_drainage(self):
         self._drainage_timer.stop()
@@ -1062,7 +1073,7 @@ class BasinDialog(QDialog):
         if hasattr(self,'report_button'):
             self.report_button.setEnabled(self.analysis is not None)
             self.save_project_button.setEnabled(self.analysis is not None)
-            self.export_button.setEnabled(self._smoothing_ready)
+            self._set_export_enabled(self._smoothing_ready)
 
     def _drainage_threshold_changed(self,*args):
         if self._drainage_loading or not self._drainage_state:return
@@ -1073,7 +1084,8 @@ class BasinDialog(QDialog):
         self._drainage_timer.start()
 
     def _mark_drainage_pending(self):
-        for name in ('report_button','save_project_button','export_button','network_export_button'):
+        for name in ('report_button','save_project_button','export_button',
+                     'export_closure_button','network_export_button'):
             button=getattr(self,name,None)
             if button is not None:button.setEnabled(False)
 
@@ -1214,7 +1226,7 @@ class BasinDialog(QDialog):
         self.resolution_refresh_button.setEnabled(True)
         self.report_button.setEnabled(self.analysis is not None)
         self.save_project_button.setEnabled(self.analysis is not None)
-        self.export_button.setEnabled(self._smoothing_ready)
+        self._set_export_enabled(self._smoothing_ready)
         self._refresh_basin_hydrology_controls()
         if self._outlet_apply_pending:
             self._resume_outlet_selection(str(text))
@@ -1394,7 +1406,7 @@ class BasinDialog(QDialog):
                 self.resolution_refresh_button.setEnabled(True)
                 self.report_button.setEnabled(True)
                 self.save_project_button.setEnabled(not self._resolution_discovering)
-                self.export_button.setEnabled(self._smoothing_ready)
+                self._set_export_enabled(self._smoothing_ready)
                 self.resolution_status.setText('Se mantiene el MDT activo; descarga anterior cancelada.')
             self._queue_smoothing()
             return
@@ -1406,7 +1418,7 @@ class BasinDialog(QDialog):
         self.basin_hydrology_widget.setEnabled(False)
         self.report_button.setEnabled(False)
         self.save_project_button.setEnabled(False)
-        self.export_button.setEnabled(False)
+        self._set_export_enabled(False)
         self.resolution_progress.show()
         self.resolution_refresh_button.setEnabled(False)
         self._resolution_controller.select(key)
@@ -1578,7 +1590,7 @@ class BasinDialog(QDialog):
         for widget in (self.table, self.hypsometry_widget, self.quantiles_widget):
             widget.setEnabled(False)
         self._smoothing_ready = False
-        self.export_button.setEnabled(False)
+        self._set_export_enabled(False)
         self._map_data = {}
         self._restored = False
         self.smoothing_degree.setEnabled(self.analysis is not None and self.smooth_check.isChecked())
@@ -1610,7 +1622,7 @@ class BasinDialog(QDialog):
                     self._queue_smoothing()
                     self._smoothing_timer.stop()
         self._smoothing_ready = False
-        self.export_button.setEnabled(False)
+        self._set_export_enabled(False)
         self.preview_geometries = {}
         self._smoothing_error = ''
         try:
@@ -1845,13 +1857,13 @@ class BasinDialog(QDialog):
             self._remove_preview()
             # Removing the live drawing does not invalidate calculated geometry.
             self._smoothing_ready = bool(self.preview_geometries)
-            self.export_button.setEnabled(self._smoothing_ready and self._surface_valid
+            self._set_export_enabled(self._smoothing_ready and self._surface_valid
                 and not self._basin_hydrology_busy() and not self._resolution_pending
                 and not self._saving_project)
             return
         self._remove_preview()
         self._smoothing_ready = False
-        self.export_button.setEnabled(False)
+        self._set_export_enabled(False)
         if self._disposed or self.analysis is None:
             return
         canvas = self.iface.mapCanvas()
@@ -1900,7 +1912,7 @@ class BasinDialog(QDialog):
                 self._original_marker.setPenWidth(3)
             canvas.viewport().repaint()
             self._smoothing_ready = bool(self.preview_geometries)
-            self.export_button.setEnabled(self._smoothing_ready and self._surface_valid and not self._basin_hydrology_busy()
+            self._set_export_enabled(self._smoothing_ready and self._surface_valid and not self._basin_hydrology_busy()
                                           and not self._resolution_pending and not self._saving_project)
         except Exception as error:
             self._remove_preview()
@@ -1922,6 +1934,43 @@ class BasinDialog(QDialog):
             except Exception as error:
                 if not self._disposed:
                     QMessageBox.critical(self, 'Informe de la cuenca', str(error))
+
+    def _set_export_enabled(self, enabled):
+        """Keep green closure and basin polygon actions synchronized."""
+        self.export_button.setEnabled(bool(enabled))
+        self.export_closure_button.setEnabled(bool(enabled))
+
+    def _export_green_closure(self, *args):
+        if (self.analysis is None or self._disposed or not self._smoothing_ready
+                or self._resolution_pending or not self._surface_valid
+                or self._basin_hydrology_busy() or self._saving_project):
+            return
+        from .closure_layers import export_green_course_closure
+        from .improved_storage import export_directory
+        analysis = self.analysis
+        suggested = export_directory() / (
+            f'Cierre_CursoPrincipal_X{round(analysis.outlet_x)}_'
+            f'Y{round(analysis.outlet_y)}.shp')
+        destination, _ = QFileDialog.getSaveFileName(
+            self, 'Exportar Cierre · cruz azul',
+            str(suggested), 'Shapefile (*.shp)',
+            options=QFileDialog.DontConfirmOverwrite)
+        if not destination:
+            return
+        if not Path(destination).suffix:
+            destination += '.shp'
+        try:
+            path, saved = export_green_course_closure(analysis, destination)
+            self.status.setText(
+                'Cierre de la cruz azul exportado como punto verde: ' + str(path))
+            try:
+                self.iface.messageBar().pushMessage(
+                    'HidroCAUMAX', 'Cierre verde guardado y cargado: ' + str(path),
+                    level=Qgis.Info, duration=7)
+            except (AttributeError, RuntimeError):
+                pass
+        except Exception as error:
+            QMessageBox.critical(self, 'Exportar Cierre', str(error))
 
     def _export(self):
         if (self.analysis is not None and not self._disposed and self._smoothing_ready
@@ -2262,7 +2311,7 @@ class BasinDialog(QDialog):
                     self.original_check.setEnabled(False)
                     self.smooth_check.setEnabled(False)
                     self.smoothing_degree.setEnabled(False)
-                    self.export_button.setEnabled(False)
+                    self._set_export_enabled(False)
                     self.basin_hydrology_widget.setEnabled(False)
                     self._refresh_drainage_controls()
                     self.save_project_button.setEnabled(False)
