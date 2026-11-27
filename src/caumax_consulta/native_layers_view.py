@@ -89,20 +89,28 @@ def style_query_network(project):
         if name == 'red10km2' and isinstance(renderer, QgsCategorizedSymbolRenderer):
             if renderer.classAttribute().strip().casefold() != 'sup':
                 continue
+            # Hold QgsRendererCategory wrappers alive while cloning symbols:
+            # categories()[i].symbol() from a temporary list may be a dangling
+            # SIP pointer after that list's C++ categories are released.
+            categories = renderer.categories()
             targets = [
-                i for i, category in enumerate(renderer.categories())
+                i for i, category in enumerate(categories)
                 if (str(category.value()) == '2'
                     and _normal_name(category.label()) == 'red>50km2'
                     and category.symbol() is not None)
             ]
             if not targets:
                 continue
-            if any(not _correct_network_symbol(renderer.categories()[i].symbol())
+            if any(not _correct_network_symbol(categories[i].symbol())
                    for i in targets):
+                replacements = {
+                    i: _styled_network_symbol(categories[i].symbol())
+                    for i in targets
+                }
                 modified = renderer.clone()
-                for i in targets:
-                    modified.updateCategorySymbol(
-                        i, _styled_network_symbol(modified.categories()[i].symbol()))
+                for i, symbol in replacements.items():
+                    modified.updateCategorySymbol(i, symbol)
+                del categories
                 layer.setRenderer(modified)
                 layer.triggerRepaint()
         elif name == 'red>50km2':
