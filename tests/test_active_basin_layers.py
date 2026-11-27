@@ -67,58 +67,35 @@ class ActiveBasinLayersTests(unittest.TestCase):
         self.assertEqual(feature['RES_X_M'],dialog.analysis.cell_width)
         self.assertAlmostEqual(feature.geometry().length()/1000,dialog.analysis.values['main_length_km'])
 
-    def test_new_d8_retires_old_course_without_touching_terrain_or_outlines(self):
+    def test_latest_d8_group_retires_course_without_deleting_terrain_or_input_rasters(self):
+        from caumax_consulta.course_layers import CourseLayers
+        from caumax_consulta.drainage_layers import OWNER_PROPERTY, PIN_PROPERTY
         dialog = self.dialog
-        coarse, coarse_query = self.coarse_variant()
-        fine, fine_query = self.fixture.analysis, self.fixture.query
-        options = [dict(key=key,resolution=float(key),available=True,provider='Fixture',
-                        label=key+' m',status='Disponible') for key in ('500','25')]
-        controller = SimpleNamespace(options=options,dispose=lambda:None,variants={
-            '500':dict(analysis=coarse,query=coarse_query,smoothing_state=None),
-            '25':dict(analysis=fine,query=fine_query,smoothing_state=None)})
-        dialog._resolution_controller = controller
-        # Resolution worker results, geometries, layers and Qt previews are
-        # real; hold only the subsequent hydrology/smoothing worker scheduling.
-        with patch.object(dialog,'_queue_smoothing'):
-            dialog._resolution_result('500',coarse,coarse_query)
-            course_id = dialog._course_layers.layers['main'].id()
-            old_outline = dialog._boundary_layers.layers['original']
-            old_outline_node = self.tree.findLayer(old_outline.id())
-            self.assertTrue(old_outline_node.isVisible())
-            self.assert_active_course_matches(dialog)
-            dialog._resolution_result('25',fine,fine_query)
-            self.assertEqual(dialog._course_layers.layers['main'].id(),course_id)
-            self.assert_active_course_matches(dialog)
-            self.assertFalse(old_outline_node.isVisible())
-            self.assertTrue(old_outline_node.itemVisibilityChecked())
-            self.assertTrue(self.tree.findLayer(dialog._boundary_layers.layers['original'].id()).isVisible())
-            # Keep a genuine 500 m result in the project when closing this
-            # dialog, then reproduce a fresh 25 m query in another dialog.
-            dialog._resolution_result('500',coarse,coarse_query)
-        old_course_id = dialog._course_layers.layers['main'].id()
-        terrain_nodes = [node for node in self.tree.findLayers()
-                         if node.parent().customProperty('HidroCAUMAX/terrain_owner',None)]
-        terrain_before = {node.layerId():(node.itemVisibilityChecked(),node.parent().itemVisibilityChecked(),
-                                        node.layer().source()) for node in terrain_nodes}
-        self.assertTrue(terrain_before)
-        dialog.dispose()
-        dialog.close()
-        fresh = self.fixture.make_dialog()
-        # The newly displayed ESRI-D8 result supersedes every previous
-        # course group. The old course must be destroyed, not merely hidden.
-        self.assertIsNone(self.fixture.project.mapLayer(old_course_id))
-        self.assertIsNone(self.tree.findLayer(old_course_id))
+        # The old 500 m/main-course group may have been produced by a
+        # previous maximum-flow calculation; the new rational D8 must replace
+        # it while preserving both the displayed network and source rasters.
+        dialog._course_layers = CourseLayers(self.fixture.iface)
+        old = dialog._course_layers.update(dialog.analysis, dialog.query)
+        old_ids = {layer.id() for layer in old.values()}
+        terrain = [layer for layer in self.fixture.project.mapLayers().values()
+                   if layer.customProperty('HidroCAUMAX/terrain_owner', '')]
+        terrain_ids = {layer.id() for layer in terrain}
+        self.assertTrue(old_ids)
+        self.assertTrue(terrain_ids)
+        new_dialog = self.fixture.make_dialog()
+        self.assertTrue(all(self.fixture.project.mapLayer(key) is None for key in old_ids))
         self.assertFalse(any(g.customProperty('HidroCAUMAX/course_owner', '')
                              for g in self.tree.findGroups(recursive=True)))
-        self.assertTrue(any(g.customProperty('HidroCAUMAX/drainage_owner', '')
-                            for g in self.tree.findGroups(recursive=True)))
-        self.assertFalse(old_outline_node.isVisible())
-        self.assertTrue(old_outline_node.itemVisibilityChecked())
-        for layer_id, before in terrain_before.items():
-            node = self.tree.findLayer(layer_id)
-            self.assertIsNotNone(node)
-            self.assertEqual((node.itemVisibilityChecked(),node.parent().itemVisibilityChecked(),
-                              node.layer().source()),before)
+        self.assertTrue(terrain_ids.issubset(self.fixture.project.mapLayers()))
+        published = [g for g in self.tree.findGroups(recursive=True)
+                     if g.customProperty(OWNER_PROPERTY, '')
+                     and g.customProperty(PIN_PROPERTY, False)]
+        self.assertTrue(published)
+        self.assertTrue(all(self.fixture.project.mapLayer(layer.id()) is layer
+                            for layer in new_dialog._drainage_layers.layers.values()
+                            if layer is not None))
+        self.assertTrue(self.fixture.dem.exists())
+        self.assertTrue(self.fixture.directions.exists())
 
 
 if __name__ == '__main__':
