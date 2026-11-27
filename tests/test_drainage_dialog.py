@@ -52,6 +52,8 @@ class DrainageDialogTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory(prefix='hidrocaumax_drainage_dialog_')
         self.addCleanup(self.tmp.cleanup);self.folder=Path(self.tmp.name)
+        private = patch('caumax_consulta.improved_storage.PLUGIN_ROOT', self.folder / 'plugin')
+        private.start(); self.addCleanup(private.stop)
         self.project=QgsProject.instance();self.initial_ids=set(self.project.mapLayers())
         self.initial_groups=list(self.project.layerTreeRoot().children())
         self.crs=QgsCoordinateReferenceSystem('EPSG:25830')
