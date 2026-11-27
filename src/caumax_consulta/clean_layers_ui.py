@@ -43,12 +43,18 @@ def confirm_cleanup(parent):
         return None
     result = delete_generated(plan)
     from .improved_storage import preserve_exports
+    from qgis.core import Qgis, QgsMessageLog
     try:
         preserve_exports()
     except OSError as error:
-        QMessageBox.warning(parent, 'Conservación de exportaciones', str(error))
+        # No modal dialogue after clearing. The status stays readable and the
+        # full failure is available under QGIS -> Log Messages.
+        QgsMessageLog.logMessage('No se han podido conservar las exportaciones: '
+                                 + str(error), 'HidroCAUMAX', Qgis.Warning)
     message = f"Se han retirado {result['layers']} capas y eliminado {len(result['removed'])} archivos."
     if result['failed']:
         message += f" No se han podido eliminar {len(result['failed'])} archivos."
-        QMessageBox.warning(parent, 'Archivos conservados', '\n'.join(result['failed']))
+        QgsMessageLog.logMessage('No se pudieron eliminar estos archivos:\n'
+                                 + '\n'.join(result['failed']),
+                                 'HidroCAUMAX', Qgis.Warning)
     return message
