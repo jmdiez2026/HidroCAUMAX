@@ -1,14 +1,19 @@
 """Persistent QGIS layers for the original D8 course and its 10–85% reach."""
 
 from bisect import bisect_right
+import gc
 import math
+from pathlib import Path
+import tempfile
 from uuid import uuid4
+from weakref import WeakSet
 
 from qgis.PyQt import sip
 from qgis.PyQt.QtCore import QVariant
 from qgis.core import (
     QgsCoordinateReferenceSystem, QgsFeature, QgsField, QgsGeometry,
-    QgsLineSymbol, QgsPointXY, QgsProject, QgsSimpleLineSymbolLayer, QgsVectorLayer, QgsWkbTypes,
+    QgsApplication, QgsLineSymbol, QgsMessageLog, Qgis, QgsPointXY, QgsProject,
+    QgsSimpleLineSymbolLayer, QgsVectorLayer, QgsWkbTypes,
 )
 
 from .layer_order import activate_result_group, create_result_group, ensure_results_above_official
@@ -17,6 +22,7 @@ from .layer_order import activate_result_group, create_result_group, ensure_resu
 _KINDS = ('main', 'central')
 _DEFAULT_VISIBILITY = {'main': True, 'central': False}
 _OWNER_PROPERTY = 'HidroCAUMAX/course_owner'
+_CONTROLLERS = WeakSet()
 _NAMES = {
     'main': 'Curso principal total (L)',
     'central': 'Tramo del curso principal 10–85 % (0,75 L)',
@@ -93,6 +99,183 @@ def _course_geometries(analysis):
     return {'main': main, 'central': central}
 
 
+
+def _legacy_course_layer(layer):
+    """Recognize untagged old plugin memory results by their exact schema.
+
+    A name alone is not proof of ownership and must never delete user layers.
+    """
+    if not isinstance(layer, QgsVectorLayer) or layer.providerType() != 'memory':
+        return False
+    if layer.name() not in _NAMES.values():
+        return False
+    return {'TIPO', 'L_KM', 'RES_X_M', 'RES_Y_M', 'X_CIERRE', 'Y_CIERRE',
+            'T_ANOS', 'Q_M3S'} <= set(layer.fields().names())
+
+
+def _private_course_files(layer):
+    """Locate only course-owned private disk results; current courses are memory.
+
+    Never retire shared DEM/D8 rasters or files outside these *course-specific*
+    plugin stores, even when a group happens to display them.
+    """
+    if layer.providerType() not in ('ogr', 'gdal'):
+        return ()
+    raw = layer.source().split('|', 1)[0]
+    if not raw:
+        return ()
+    source = Path(raw)
+    if not source.is_file() or source.is_symlink():
+        return ()
+    roots = (
+        Path(QgsApplication.qgisSettingsDirPath()) / 'HidroCAUMAX' / 'courses',
+        Path(tempfile.gettempdir()) / 'HidroCAUMAX' / 'courses',
+    )
+    try:
+        path = source.resolve()
+        if not any(path.is_relative_to(root.resolve()) for root in roots):
+            return ()
+        if any(part.is_symlink() or
+               (hasattr(part, 'is_junction') and part.is_junction())
+               for part in (source, *source.parents)):
+            return ()
+        from .generated_cleanup import _family
+        return tuple(path for path in _family(source) if path.is_file())
+    except (OSError, ValueError):
+        return ()
+
+
+def retire_other_course_groups(project=None, *, keep_group=None,
+                               keep_layer_ids=(), iface=None):
+    """Keep the just-generated course; permanently remove older QGIS results.
+
+    A course group currently consists of two QGIS memory layers, so it has no
+    per-course DEM, D8 or disk cache to delete. The optional private-file
+    branch is for older plugin-owned on-disk course representations only.
+    It cannot remove shared input rasters or manually exported files.
+    """
+    project = QgsProject.instance() if project is None else project
+    root = project.layerTreeRoot()
+    retained = set(keep_layer_ids)
+    old_groups = []
+    for group in root.findGroups(recursive=True):
+        if group is keep_group:
+            continue
+        tagged = bool(group.customProperty(_OWNER_PROPERTY, ''))
+        legacy = (group.name().startswith('HidroCAUMAX · Curso principal')
+                  and any(_legacy_course_layer(node.layer())
+                          for node in group.findLayers()
+                          if node.layer() is not None))
+        if tagged or legacy:
+            old_groups.append(group)
+
+    ids = set()
+    for layer in project.mapLayers().values():
+        if (layer.id() not in retained
+                and layer.customProperty(_OWNER_PROPERTY, '')):
+            ids.add(layer.id())
+    for group in old_groups:
+        for node in group.findLayers():
+            layer = node.layer()
+            if (layer is not None and layer.id() not in retained
+                    and (_legacy_course_layer(layer) or
+                         layer.customProperty(_OWNER_PROPERTY, ''))):
+                ids.add(layer.id())
+    if not ids and not old_groups:
+        return 0
+    obsolete_layers = [project.mapLayer(layer_id) for layer_id in ids]
+    obsolete_layers = [layer for layer in obsolete_layers if layer is not None]
+    old_owners = {layer.customProperty(_OWNER_PROPERTY, '')
+                  for layer in obsolete_layers}
+    old_owners.update(group.customProperty(_OWNER_PROPERTY, '')
+                      for group in old_groups)
+
+    # There is no course-specific cache in current code; for legacy file-backed
+    # course outputs, remove only privately owned paths not referenced elsewhere.
+    disk = {path for layer in obsolete_layers for path in _private_course_files(layer)}
+    surviving_paths = set()
+    for layer in project.mapLayers().values():
+        if layer.id() not in ids and layer.providerType() in ('ogr', 'gdal'):
+            try:
+                surviving_paths.add(Path(layer.source().split('|', 1)[0]).resolve())
+            except (OSError, ValueError):
+                pass
+    if ids:
+        project.removeMapLayers(sorted(ids))
+    for group in reversed(old_groups):
+        if sip.isdeleted(group):
+            continue
+        parent = group.parent()
+        if parent is None:
+            continue
+        # A user layer accidentally placed inside an owned group is retained,
+        # but moved out. Its data must never be treated as a course result.
+        position = parent.children().index(group)
+        for child in list(group.children()):
+            parent.insertChildNode(position, child.clone())
+            position += 1
+            group.removeChildNode(child)
+        parent.removeChildNode(group)
+
+    for controller in tuple(_CONTROLLERS):
+        if controller.owner_key in old_owners:
+            controller.layers = {}
+            controller._group = None
+            controller._visibility = dict(_DEFAULT_VISIBILITY)
+            controller.note = ''
+    # Discard stale Python references before trying to unlink old OGR sources
+    # on Windows, where open handles would otherwise prevent their deletion.
+    obsolete_layers.clear()
+    gc.collect()
+    removed_files = []
+    for path in disk - surviving_paths:
+        try:
+            path.unlink()
+            removed_files.append(str(path.resolve()))
+        except OSError as error:
+            QgsMessageLog.logMessage(
+                'No se pudo borrar un curso principal antiguo: '
+                + str(path) + ' (' + str(error) + ')',
+                'HidroCAUMAX', Qgis.Warning)
+    if removed_files:
+        from .generated_cleanup import _registry, _save_registry
+        registry = _registry(project)
+        for path in removed_files:
+            registry.pop(path, None)
+        _save_registry(project, registry)
+    if iface is not None:
+        try:
+            canvas = iface.mapCanvas()
+            if canvas is not None:
+                canvas.stopRendering()
+                canvas.clearCache()
+                canvas.refresh()
+                canvas.scene().update()
+                canvas.viewport().update()
+        except (AttributeError, RuntimeError, AssertionError):
+            pass
+    return len(ids)
+
+
+def deduplicate_course_groups(project=None):
+    """Migrate older projects: the lowest owned course group is the newest.
+
+    New generations use an explicit keep_group, so position is relevant only
+    for already duplicated saved projects without creation timestamps.
+    """
+    project = QgsProject.instance() if project is None else project
+    groups = [
+        group for group in project.layerTreeRoot().findGroups(recursive=True)
+        if group.customProperty(_OWNER_PROPERTY, '')
+    ]
+    if len(groups) < 2:
+        return 0
+    latest = groups[-1]
+    ids = {node.layerId() for node in latest.findLayers()}
+    return retire_other_course_groups(
+        project, keep_group=latest, keep_layer_ids=ids)
+
+
 class CourseLayers:
     """Keep two owned, durable memory layers without changing the map view.
 
@@ -108,6 +291,7 @@ class CourseLayers:
         self._group = None
         self._visibility = dict(_DEFAULT_VISIBILITY)
         self.note = ''
+        _CONTROLLERS.add(self)
 
     def visibility(self):
         project = QgsProject.instance()
@@ -204,6 +388,13 @@ class CourseLayers:
                 node = self._group.insertLayer(0, layer)
             node.setItemVisibilityChecked(flags[kind])
         self._visibility = flags
+        # Never leave previous Curso principal groups hidden in the tree.
+        # The newest successfully published calculation replaces every older
+        # course result, independently of whether it originated in rational
+        # or maximum-flow CAUMAX tools.
+        retire_other_course_groups(project, keep_group=self._group,
+                                   keep_layer_ids=(layer.id() for layer in self.layers.values()),
+                                   iface=self.iface)
         activate_result_group(project, self._group, _OWNER_PROPERTY)
         ensure_results_above_official(project)
         self.note = ('La cuenca no contiene un curso principal de longitud positiva; '
