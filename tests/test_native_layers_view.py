@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from qgis.PyQt import sip
 from qgis.PyQt.QtCore import Qt
+from qgis.PyQt.QtGui import QColor
 from qgis.PyQt.QtWidgets import QAction
 from qgis.core import (QgsApplication, QgsCoordinateReferenceSystem, QgsCoordinateTransform,
                        QgsProject, QgsRectangle, QgsVectorLayer, QgsUnitTypes)
@@ -179,3 +180,25 @@ class NativeLayersViewTests(unittest.TestCase):
         self.assertAlmostEqual(pink.renderer().symbol().width(), 1.30)
         style_query_network(self.project)
         self.assertAlmostEqual(pink.renderer().symbol().width(), 1.30)
+        # Native CAUMAX/QLR loading can overwrite a layer's renderer while its
+        # HidroCAUMAX customProperty marker remains intact.
+        renderer = pink.renderer().clone()
+        renderer.symbol().setColor(QColor('#377eb8'))
+        renderer.symbol().setWidth(0.25)
+        pink.setRenderer(renderer)
+        style_query_network(self.project)
+        self.assertEqual(pink.renderer().symbol().color().name(), NETWORK_PINK)
+        self.assertAlmostEqual(pink.renderer().symbol().width(), 1.30)
+
+    def test_network_added_after_plugin_start_gets_pink_and_1_30_mm(self):
+        self.bridge.start()
+        network = QgsVectorLayer('LineString?crs=EPSG:25830',
+                                 'Red > 50 km2', 'memory')
+        self.project.addMapLayer(network)
+        self.app.processEvents()
+        self.assertEqual(network.renderer().symbol().color().name(), NETWORK_PINK)
+        self.assertAlmostEqual(network.renderer().symbol().width(), 1.30)
+        self.assertEqual(network.renderer().symbol().symbolLayer(0).widthUnit(),
+                         QgsUnitTypes.RenderMillimeters)
+        self.assertEqual(network.customProperty('HidroCAUMAX/query_network_style'),
+                         NETWORK_STYLE_REVISION)
