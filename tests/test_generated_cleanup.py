@@ -52,6 +52,61 @@ class GeneratedCleanupTests(unittest.TestCase):
         self.assertIsNotNone(self.project.mapLayer(other_id))
         self.assertFalse(result['failed'])
 
+    def test_strict_cleanup_removes_exports_backups_all_cache_files_and_registry(self):
+        from caumax_consulta import improved_storage as storage
+        exported = self.root / 'plugin' / 'ResolucionMejorada'
+        backups = self.root / 'profile' / 'HidroCAUMAX' / 'ResolucionMejorada'
+        temp_cache = self.root / 'private-cache'
+        for root in (exported, backups, temp_cache / 'nested'):
+            root.mkdir(parents=True)
+        po = exported / storage.PO_FILENAME
+        po.write_bytes(b'Original included P0: never delete')
+        auxiliary = Path(str(po) + '.aux.xml')
+        auxiliary.write_bytes(b'Original P0 auxiliary')
+        (exported / storage.PAIR_INDEX).write_text('[]')
+        (exported / storage.GENERATED_INDEX).write_text('{}')
+        (backups / storage.BACKUP_INDEX).write_text('[]')
+        (backups / 'MDT_25m.tif').write_bytes(b'old preserved copy')
+        (backups / 'extra.tmp').write_bytes(b'stale temporary')
+        (temp_cache / 'nested' / 'directions.dat').write_bytes(b'worker data')
+        (temp_cache / 'nested' / 'worker.part').write_bytes(b'unfinished')
+        result_tif = exported / 'MDT_25m.tif'
+        ds = gdal.GetDriverByName('GTiff').Create(str(result_tif), 4, 4, 1, gdal.GDT_Float32)
+        ds.GetRasterBand(1).Fill(42)
+        ds = None
+        layer = QgsRasterLayer(str(result_tif), 'MDT mejorado')
+        layer.setCustomProperty('HidroCAUMAX/drainage_owner', 'test')
+        self.project.addMapLayer(layer)
+        manually_loaded = exported / 'unknown-old-file.txt'
+        manually_loaded.write_text('also from dedicated output store')
+        foreign = self.root / 'user-owned-original.tif'
+        foreign.write_bytes(b'unrelated file outside private stores')
+        with patch.object(storage, 'po_path', return_value=po), \
+             patch.object(storage, 'backup_directory', return_value=backups), \
+             patch.object(cleanup, 'cache_roots', return_value=(temp_cache,)):
+            plan = cleanup.deletion_plan(self.project)
+            self.assertIn(str(result_tif.resolve()), plan['files'])
+            self.assertIn(str((temp_cache / 'nested' / 'worker.part').resolve()), plan['files'])
+            self.assertNotIn(str(po.resolve()), plan['files'])
+            self.assertNotIn(str(auxiliary.resolve()), plan['files'])
+            outcome = cleanup.delete_generated(plan, self.project)
+            self.assertFalse(outcome['failed'], outcome['failed'])
+            self.assertEqual(self.project.mapLayers(), {})
+            self.assertFalse(result_tif.exists())
+            self.assertFalse((exported / storage.PAIR_INDEX).exists())
+            self.assertFalse((exported / storage.GENERATED_INDEX).exists())
+            self.assertFalse(manually_loaded.exists())
+            self.assertFalse(backups.exists())
+            self.assertFalse(temp_cache.exists())
+            self.assertTrue(po.exists())
+            self.assertTrue(auxiliary.exists())
+            self.assertTrue(foreign.exists())
+            self.assertNotIn(cleanup.REGISTRY, self.project.customVariables())
+            # Repeated cleanup cannot resurrect any preserved export.
+            again = cleanup.deletion_plan(self.project)
+            self.assertFalse(again['files'])
+            self.assertFalse(again['layers'])
+
     def test_registered_shapefile_family_and_unloaded_exports_are_included(self):
         target = self.root / 'network.shp'
         for suffix in ('.shp', '.shx', '.dbf', '.prj'):
