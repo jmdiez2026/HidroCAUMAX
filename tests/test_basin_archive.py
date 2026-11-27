@@ -128,6 +128,38 @@ class BasinArchiveTests(unittest.TestCase):
         self.assertTrue(restored_group.customProperty(PIN_PROPERTY, False))
         self.assertEqual(archive._digest(target), archive._digest(path))
 
+    def test_green_blue_cross_export_is_included_in_complete_basin(self):
+        """The green exported outlet must survive Guardar CUENCA and Abrir cuenca."""
+        from caumax_consulta.closure_layers import (
+            GREEN_CLOSURE_ROLE, green_closure_symbol)
+        green = QgsVectorLayer('Point?crs=EPSG:25830',
+                               'Cierre del curso principal · cruz azul', 'memory')
+        feature = QgsFeature()
+        feature.setGeometry(QgsGeometry.fromPointXY(
+            QgsPointXY(353387.14, 4725249.11)))
+        self.assertTrue(green.dataProvider().addFeatures([feature])[0])
+        green.renderer().setSymbol(green_closure_symbol())
+        green.setCustomProperty(GREEN_CLOSURE_ROLE, True)
+        self.project.addMapLayer(green)
+        destination = self.folder / 'con_cierre_verde.hidrocuenca'
+        _, manifest = archive.save_complete_basin(
+            destination, project=self.project)
+        self.assertTrue(any(item['name'] == green.name()
+                            for item in manifest['layers']))
+        self.project.removeMapLayer(green.id())
+        restored, _ = archive.open_complete_basin(
+            destination, project=self.project)
+        self.assertTrue(any(item['name'] == green.name()
+                            for item in restored['layers']))
+        actual = [layer for layer in self.project.mapLayers().values()
+                  if layer.customProperty(GREEN_CLOSURE_ROLE, False)]
+        self.assertEqual(len(actual), 1)
+        self.assertEqual(actual[0].featureCount(), 1)
+        self.assertEqual(actual[0].renderer().symbol().color().name(), '#23e733')
+        point = next(actual[0].getFeatures()).geometry().asPoint()
+        self.assertAlmostEqual(point.x(), 353387.14, 5)
+        self.assertAlmostEqual(point.y(), 4725249.11, 5)
+
     def test_native_maximum_flow_section_is_recorded_without_open_basin_dialog(self):
         section = QgsVectorLayer('Point?crs=EPSG:25830',
                                  'Seccion de cierre Ej II Arroyo del Corco', 'memory')
