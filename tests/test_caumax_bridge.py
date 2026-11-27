@@ -263,8 +263,8 @@ class BridgeTests(unittest.TestCase):
         for cell in (25, 5):
             with self.subTest(cell=cell):
                 fine = (
-                    self._reference_grid(f'fine_dem_{cell}.tif', cell, 341800, 4646750),
-                    self._reference_grid(f'fine_d8_{cell}.tif', cell, 341800, 4646750),
+                    self._reference_grid(f'fine_dem_{cell}.tif', cell, 341825 - cell * 5, 4646700 + cell * 5),
+                    self._reference_grid(f'fine_d8_{cell}.tif', cell, 341825 - cell * 5, 4646700 + cell * 5),
                 )
                 self.paths.update(MDT=fine[0], FLOWDIRS=fine[1])
                 query = bridge_module.make_native_query(self.dialog, self.native_module)
