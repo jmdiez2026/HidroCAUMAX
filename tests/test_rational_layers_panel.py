@@ -268,6 +268,24 @@ class RationalLayersPanelTests(unittest.TestCase):
         panel._controller.drainage.complete()
         self.assertIsNotNone(panel._state)
 
+    def test_close_keeps_saved_25m_outline_and_no_new_layer_is_inserted(self):
+        self.prepared()
+        from caumax_consulta.boundary_layers import OWNER_PROPERTY
+        project = QgsProject.instance()
+        outlines = [layer for layer in project.mapLayers().values()
+                    if layer.customProperty(OWNER_PROPERTY)]
+        self.assertEqual(len(outlines), 1)
+        layer = outlines[0]
+        gpkg = Path(layer.source().split('|', 1)[0])
+        self.assertTrue(gpkg.is_file())
+        initial_id = layer.id()
+        self.panel.dispose()
+        self.app.processEvents()
+        self.assertIs(project.mapLayer(initial_id), layer)
+        self.assertTrue(gpkg.is_file())
+        self.assertEqual(len([item for item in project.mapLayers().values()
+                              if item.customProperty(OWNER_PROPERTY)]), 1)
+
     def test_threshold_debounce_blocks_export_and_changed_context_cancels_it(self):
         self.prepared()
         panel = self.panel
