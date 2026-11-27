@@ -81,7 +81,7 @@ def style_query_network(project):
                 if label != 'red>50km2' or str(category.value()) != '2':
                     continue
                 symbol = category.symbol()
-                if symbol is None or symbol.type() != symbol.Line:
+                if symbol is None:
                     break
                 if _network_symbol_matches(symbol):
                     layer.setCustomProperty('HidroCAUMAX/query_network_style',
