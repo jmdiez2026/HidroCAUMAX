@@ -502,7 +502,11 @@ class BasinDialog(QDialog):
         fit_morphology_rows(self.table)
 
     def _fit_smoothing_controls(self):
-        """Keep the complete controls together, including export beside the degree."""
+        """Fit both export buttons without truncating them on narrow dialogs."""
+        # The full source label is restored as space becomes available. At
+        # narrow widths the same meaning stays in its tooltip.
+        self.original_check.setText('Original · contorno de celdas')
+        self.original_check.setToolTip('Divisoria original · contorno de celdas')
         group = self.export_button.parentWidget()
         margins = (self.body_scroll.widget().layout().contentsMargins(),
                    group.contentsMargins(),group.layout().contentsMargins())
