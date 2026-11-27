@@ -213,6 +213,34 @@ def generated_files():
             yield path
 
 
+def exported_pairs():
+    """Enumerate all intact, registered MDT/ESRI-D8 exports, newest first.
+
+    Matching a point must not assume that the most recent export belongs to
+    its geographical region. Names and stamps come only from the export index.
+    """
+    folder = export_directory()
+    records = _read(folder / PAIR_INDEX, [])
+    if not isinstance(records, list):
+        return
+    for record in reversed(records):
+        if not isinstance(record, dict):
+            continue
+        names = [record.get(k) for k in ('dem', 'directions')]
+        if any(not isinstance(n, str) or not n or ':' in n
+               or Path(n).name != n for n in names):
+            continue
+        dem, directions = (folder / n for n in names)
+        try:
+            if (_stamp(dem) == record.get('dem_stamp')
+                    and _stamp(directions) == record.get('directions_stamp')
+                    and _compatible(dem, directions)):
+                yield dem, directions
+        except OSError:
+            continue
+
+
+
 def latest_pair():
     folder = export_directory()
     records = _read(folder / PAIR_INDEX, [])
