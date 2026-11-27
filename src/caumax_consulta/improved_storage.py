@@ -18,23 +18,6 @@ BACKUP_INDEX = '.hidrocaumax-preserved-files.json'
 GENERATED_INDEX = '.hidrocaumax-generated-files.json'
 
 
-def suggested_export_names(analysis):
-    """Stable names per basin outlet, avoiding cross-area 25/5 m collisions.
-
-    These are suggestions for save dialogs, not automatic changes to a user's
-    configured CAUMAX files. A re-export for another closure gets another name.
-    """
-    import math
-    resolution = float(analysis.cell_width)
-    x, y = float(analysis.outlet_x), float(analysis.outlet_y)
-    if not all(math.isfinite(value) for value in (resolution, x, y)) or resolution <= 0:
-        raise ValueError('La resolución o las coordenadas del cierre son inválidas.')
-    suffix = f'{resolution:g}m_X{round(x):d}_Y{round(y):d}'
-    return {'dem': f'MDT_{suffix}.tif',
-            'directions': f'Direccion_D8_caumax_{suffix}.tif',
-            'network': f'Red_drenaje_{suffix}.shp'}
-
-
 
 def export_directory():
     folder = PLUGIN_ROOT / FOLDER_NAME
