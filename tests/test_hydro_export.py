@@ -129,6 +129,22 @@ class HydroExportTests(unittest.TestCase):
                 self.assertEqual(band_metadata['SOURCE_NOTE'],'preserved band metadata')
         self.assertEqual(self.hashes(),self.before)
 
+    def test_default_plugin_directory_contains_a_reopenable_direction_tiff(self):
+        from caumax_consulta import improved_storage
+        with patch.object(improved_storage, 'PLUGIN_ROOT', self.folder / 'plugin'):
+            folder = improved_storage.export_directory()
+            target = folder / 'Direccion_D8_caumax_25m.tif'
+            saved = export.export_directions(self.products, target)
+            self.assertEqual(saved, target)
+            self.assertTrue(target.is_file())
+            self.assertGreater(target.stat().st_size, 0)
+            raster = gdal.Open(str(target), gdal.GA_ReadOnly)
+            self.assertIsNotNone(raster)
+            self.assertEqual(raster.GetDriver().ShortName, 'GTiff')
+            self.assertEqual(raster.GetMetadataItem('FLOW_DIRECTION_ENCODING'),
+                             'ESRI_D8')
+            raster = None
+
     def test_original_dem_nodata_outside_native_tau_d8_does_not_block_export(self):
         # PitRemove may assign a direction to an edge cell which was NoData
         # in the *original* elevation raster. The CAUMAX recode correctly
