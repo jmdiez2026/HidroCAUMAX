@@ -212,6 +212,80 @@ class BridgeTests(unittest.TestCase):
         self.dialog.txtX.setText('123')
         self.assertEqual(query.x, 341825)
 
+    def _reference_grid(self, name, cell, x0, y0, *, nodata=None):
+        """Create official and fine grid fixtures without CAUMAX settings."""
+        path = self.folder / name
+        ds = gdal.GetDriverByName('GTiff').Create(str(path), 10, 10, 1,
+                                                 gdal.GDT_Float32)
+        srs = osr.SpatialReference()
+        srs.ImportFromEPSG(25830)
+        ds.SetProjection(srs.ExportToWkt())
+        ds.SetGeoTransform((x0, cell, 0, y0, 0, -cell))
+        band = ds.GetRasterBand(1)
+        if nodata is not None:
+            band.SetNoDataValue(nodata)
+        band.Fill(128 if 'd8' in name else 250)
+        ds = None
+        return str(path)
+
+    def test_native_map_query_recovers_official_500m_when_fine_grid_outside(self):
+        """Regression: 25/5 m rational custom settings must not strand Q(T)."""
+        self.valid_query(period=5, flow='18')
+        module = sys.modules['_caumax_bridge_fixture.layers']
+        original = dict(self.paths)
+        dem500 = self._reference_grid('official_dem_500.tif', 500, 340000, 4648000)
+        d8500 = self._reference_grid('official_d8_500.tif', 500, 340000, 4648000)
+        module._defaultLayerPaths = {'MDT': dem500, 'FLOWDIRS': d8500}
+        for resolution in (25, 5):
+            with self.subTest(resolution=resolution):
+                custom_dem = self._reference_grid(
+                    f'user_dem_{resolution}.tif', resolution, 500000, 4800000)
+                custom_d8 = self._reference_grid(
+                    f'user_d8_{resolution}.tif', resolution, 500000, 4800000)
+                self.paths.update(MDT=custom_dem, FLOWDIRS=custom_d8)
+                query = bridge_module.make_native_query(self.dialog, self.native_module)
+                self.assertEqual((query.dem_path, query.directions_path),
+                                 (dem500, d8500))
+                self.assertEqual((query.x, query.y, query.flow, query.period),
+                                 (341825, 4646700, 18, 5))
+                self.assertEqual((self.paths['MDT'], self.paths['FLOWDIRS']),
+                                 (custom_dem, custom_d8))
+        self.paths.update(original)
+
+    def test_fine_grid_is_kept_when_it_covers_the_selected_river_point(self):
+        """Keep a valid custom grid; fallback only for missing coverage."""
+        self.valid_query(period=5, flow='29')
+        module = sys.modules['_caumax_bridge_fixture.layers']
+        module._defaultLayerPaths = {
+            'MDT': self._reference_grid('orig_dem.tif', 500, 340000, 4648000),
+            'FLOWDIRS': self._reference_grid('orig_d8.tif', 500, 340000, 4648000),
+        }
+        for cell in (25, 5):
+            with self.subTest(cell=cell):
+                fine = (
+                    self._reference_grid(f'fine_dem_{cell}.tif', cell, 341800, 4646750),
+                    self._reference_grid(f'fine_d8_{cell}.tif', cell, 341800, 4646750),
+                )
+                self.paths.update(MDT=fine[0], FLOWDIRS=fine[1])
+                query = bridge_module.make_native_query(self.dialog, self.native_module)
+                self.assertEqual((query.dem_path, query.directions_path), fine)
+                self.assertEqual((query.x, query.y), (341825, 4646700))
+
+    def test_invalid_custom_and_official_grids_give_explicit_error(self):
+        self.valid_query()
+        module = sys.modules['_caumax_bridge_fixture.layers']
+        module._defaultLayerPaths = {
+            'MDT': self._reference_grid('other_500_dem.tif', 500, 100000, 4400000),
+            'FLOWDIRS': self._reference_grid('other_500_d8.tif', 500, 100000, 4400000),
+        }
+        self.paths.update(
+            MDT=self._reference_grid('other_25_dem.tif', 25, 100000, 4400000),
+            FLOWDIRS=self._reference_grid('other_25_d8.tif', 25, 100000, 4400000),
+        )
+        with self.assertRaisesRegex(ValueError, 'fuera de la cobertura válida'):
+            bridge_module.make_native_query(self.dialog, self.native_module)
+
+
     def test_enabled_change_and_changed_inputs_require_a_fresh_native_query(self):
         self.bridge.start()
         button = self.basin_button()
