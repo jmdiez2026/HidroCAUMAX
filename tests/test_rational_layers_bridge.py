@@ -163,6 +163,7 @@ class RationalLayersBridgeTests(unittest.TestCase):
         self.assertEqual(clean.text(), 'Limpiar capas')
         self.assertFalse(clean.icon().isNull())
         self.assertIn('#FADBD8', clean.styleSheet())
+        self.assertIn('padding: 5px 9px', clean.styleSheet())
         self.assertLess(binding.button.geometry().right(), clean.x())
         with patch('caumax_consulta.clean_layers_ui.confirm_cleanup', return_value='Limpieza terminada') as cleanup:
             clean.click()
