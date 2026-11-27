@@ -4,7 +4,8 @@ from qgis.PyQt.QtCore import QObject, QTimer
 from qgis.PyQt.QtGui import QColor
 from qgis.core import (QgsCoordinateReferenceSystem, QgsCoordinateTransform,
                        QgsCsException, QgsProject, QgsRectangle, QgsRasterLayer,
-                       QgsDataSourceUri, QgsVectorLayer, QgsRenderContext, QgsWkbTypes,
+                       QgsCategorizedSymbolRenderer, QgsDataSourceUri, QgsVectorLayer,
+                       QgsRenderContext, QgsWkbTypes,
                        QgsUnitTypes)
 import qgis.utils
 
@@ -14,9 +15,14 @@ import qgis.utils
 IBERIA_BOUNDS = (-11.0, 35.6, 5.5, 44.2)
 TERRAIN_URL = 'https://mt1.google.com/vt/lyrs=p&x={x}&y={y}&z={z}'
 TERRAIN_PROPERTY = 'HidroCAUMAX/startup_terrain'
-NETWORK_PINK = '#ff1493'
-NETWORK_LINE_WIDTH_MM = 1.30
-NETWORK_STYLE_REVISION = 'red50-pink-1.30mm-v1'
+# The stock CAUMAX red10km.qml classifies "sup" = 1 (10–50 km²) and
+# "sup" = 2 (>50 km²). The second category's original width is 0.50 mm.
+# Change ONLY that category: 150 % × 0.50 = 0.75 mm.
+NETWORK_PINK = '#e000d4'  # vivid violet-pink
+NETWORK_ORIGINAL_WIDTH_MM = 0.50
+NETWORK_WIDTH_FACTOR = 1.50
+NETWORK_LINE_WIDTH_MM = NETWORK_ORIGINAL_WIDTH_MM * NETWORK_WIDTH_FACTOR
+NETWORK_STYLE_REVISION = 'caumax-red10-sup2-violetpink-150pct-v2'
 
 
 def place_satellite_below_terrain(project):
@@ -43,44 +49,81 @@ def place_satellite_below_terrain(project):
         root.setCustomLayerOrder(order[:position]+[satellite]+order[position:])
 
 
+def _normal_name(label):
+    """Match QGIS' superscript ², ordinary 2 and spaces without locale bias."""
+    return ''.join(str(label).casefold().split()).replace('²', '2').replace('^2', '2')
+
+
+def _correct_network_symbol(symbol):
+    """Compare the *actual* renderer; native CAUMAX may reset it at any time."""
+    return (symbol is not None
+            and symbol.color().name().lower() == NETWORK_PINK
+            and abs(symbol.width() - NETWORK_LINE_WIDTH_MM) < 1e-6
+            and symbol.symbolLayerCount() > 0
+            and symbol.symbolLayer(0).widthUnit() == QgsUnitTypes.RenderMillimeters)
+
+
+def _styled_network_symbol(symbol):
+    symbol = symbol.clone()
+    symbol.setColor(QColor(NETWORK_PINK))
+    symbol.setWidth(NETWORK_LINE_WIDTH_MM)
+    symbol.setWidthUnit(QgsUnitTypes.RenderMillimeters)
+    return symbol
+
+
 def style_query_network(project):
-    """Set the pickable >50 km2 network to pink, 1.30 mm, without changing data."""
+    """Style only CAUMAX's "Red > 50 km²" category in "Red 10 km²".
+
+    The CAUMAX QLR/QML does not register a separate layer named Red > 50 km²:
+    the target is category value 2 of its "sup" classified vector layer.
+    Keep the distinct 10–50 km² category, geometries, legend and attributes.
+    Older standalone layers are supported for existing projects.
+    """
     for layer in project.mapLayers().values():
-        name = ''.join(layer.name().lower().split()).replace('²', '2').replace('^2', '2')
-        if (name != 'red>50km2' or not isinstance(layer, QgsVectorLayer)
-                or layer.geometryType() != QgsWkbTypes.LineGeometry):
+        if not isinstance(layer, QgsVectorLayer) or layer.geometryType() != QgsWkbTypes.LineGeometry:
             continue
+        name = _normal_name(layer.name())
         renderer = layer.renderer()
         if renderer is None:
             continue
-        symbols = list(renderer.symbols(QgsRenderContext()))
-        if not symbols:
+        if name == 'red10km2' and isinstance(renderer, QgsCategorizedSymbolRenderer):
+            if renderer.classAttribute().strip().casefold() != 'sup':
+                continue
+            targets = [
+                i for i, category in enumerate(renderer.categories())
+                if (str(category.value()) == '2'
+                    and _normal_name(category.label()) == 'red>50km2'
+                    and category.symbol() is not None)
+            ]
+            if not targets:
+                continue
+            if any(not _correct_network_symbol(renderer.categories()[i].symbol())
+                   for i in targets):
+                modified = renderer.clone()
+                for i in targets:
+                    modified.updateCategorySymbol(
+                        i, _styled_network_symbol(modified.categories()[i].symbol()))
+                layer.setRenderer(modified)
+                layer.triggerRepaint()
+        elif name == 'red>50km2':
+            # Compatibility with older imported projects where this category
+            # was saved as its own line layer.
+            symbols = list(renderer.symbols(QgsRenderContext()))
+            if not symbols:
+                continue
+            if any(not _correct_network_symbol(symbol) for symbol in symbols):
+                modified = renderer.clone()
+                for symbol in modified.symbols(QgsRenderContext()):
+                    symbol.setColor(QColor(NETWORK_PINK))
+                    symbol.setWidth(NETWORK_LINE_WIDTH_MM)
+                    symbol.setWidthUnit(QgsUnitTypes.RenderMillimeters)
+                layer.setRenderer(modified)
+                layer.triggerRepaint()
+        else:
             continue
-        # The native CAUMAX layer loader and QGIS project restore may replace
-        # a renderer without removing our customProperty. Check the actual
-        # current symbol instead of trusting the old "already styled" marker.
-        def is_pink(symbol):
-            if (symbol.color().name().lower() != NETWORK_PINK
-                    or abs(symbol.width() - NETWORK_LINE_WIDTH_MM) > 1e-6):
-                return False
-            return (symbol.symbolLayerCount() > 0
-                    and symbol.symbolLayer(0).widthUnit()
-                       == QgsUnitTypes.RenderMillimeters)
-        if all(is_pink(symbol) for symbol in symbols):
-            if layer.customProperty('HidroCAUMAX/query_network_style', '') != NETWORK_STYLE_REVISION:
-                layer.setCustomProperty('HidroCAUMAX/query_network_style', NETWORK_STYLE_REVISION)
-            continue
-        renderer = renderer.clone()
-        for symbol in renderer.symbols(QgsRenderContext()):
-            symbol.setColor(QColor(NETWORK_PINK))
-            symbol.setWidth(NETWORK_LINE_WIDTH_MM)
-            symbol.setWidthUnit(QgsUnitTypes.RenderMillimeters)
-        layer.setRenderer(renderer)
+        if layer.customProperty('HidroCAUMAX/query_network_style', '') != NETWORK_STYLE_REVISION:
+            layer.setCustomProperty('HidroCAUMAX/query_network_style', NETWORK_STYLE_REVISION)
         layer.setCustomProperty('HidroCAUMAX/query_network_pink', True)
-        layer.setCustomProperty('HidroCAUMAX/query_network_style',
-                                NETWORK_STYLE_REVISION)
-        layer.triggerRepaint()
-
 
 def terrain_background(project, native_group):
     """Switch the native overview background without changing extent or CRS."""
