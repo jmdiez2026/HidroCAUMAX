@@ -239,7 +239,9 @@ class NativeCaumaxPlugin(QObject):
         contexts = [getattr(dialog, 'query', None)
                     for dialog in list(self._dialogs.values()) + self._saved_dialogs]
         saved, manifest = save_complete_basin(
-            path, iface=self.iface, native_dialog=native_dialog, queries=contexts)
+            path, iface=self.iface, native_dialog=native_dialog,
+            queries=contexts,
+            sessions=list(self._dialogs.values()) + self._saved_dialogs)
         QMessageBox.information(
             native_dialog, 'Guardar CUENCA',
             'Cuenca completa guardada en:\n' + str(saved) +
