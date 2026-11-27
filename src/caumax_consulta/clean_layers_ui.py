@@ -12,12 +12,12 @@ def clean_button(parent):
     button.setStyleSheet('QPushButton { background-color: #FADBD8; border: 1px solid #CF8D89; '
         'border-radius: 3px; padding: 2px 4px; } QPushButton:hover { background-color: #F5B7B1; } '
         'QPushButton:disabled { background-color: #F3E8E7; color: #888888; }')
-    button.setToolTip('Retirar resultados y referencias de HidroCAUMAX; revisar el borrado de archivos generados. '
-                      'Los archivos de referencia se conservan.')
+    button.setToolTip('Eliminar capas y resultados HidroCAUMAX de QGIS, disco, copias de seguridad y cachés '
+                      'temporales. Conserva los archivos oficiales de referencia y el P0 incluido.')
     return button
 
 
-def confirm_cleanup(parent):
+def confirm_cleanup(parent, iface=None):
     from .generated_cleanup import deletion_plan, delete_generated
     plan = deletion_plan()
     if not (plan['layers'] or plan['files'] or plan.get('reference_groups') or plan.get('references_loading')):
@@ -27,11 +27,14 @@ def confirm_cleanup(parent):
     prompt.setIcon(QMessageBox.Warning if plan['files'] else QMessageBox.Question)
     prompt.setText(f"Se retirarán {len(plan['layers'])} capas de QGIS y se eliminarán "
                    f"{len(plan['files'])} archivos del disco duro.")
-    text = ('Se retirarán también las referencias de HidroCAUMAX y sus grupos vacíos; '
-        'se cancelará su carga si está pendiente. Los archivos de referencia, incluido P0, se conservan.')
+    text = ('Se eliminarán los resultados de HidroCAUMAX de QGIS, las exportaciones '
+        'generadas, las copias conservadas y las cachés temporales. También se cancelarán '
+        'las tareas activas. Solo se conservarán las fuentes originales de CAUMAX, '
+        'los archivos oficiales de referencia y el P0 incluido.')
     if plan['files']:
-        text += (' Se incluyen archivos generados registrados y temporales de sesiones anteriores. '
-                 'El borrado de esos archivos no se puede deshacer.')
+        text += (' Se incluyen archivos generados de sesiones anteriores y sus auxiliares. '
+                 'El borrado no se puede deshacer. Si Windows bloquea algún archivo, '
+                 'se mostrará una incidencia específica.')
     prompt.setInformativeText(text)
     prompt.setDetailedText('Capas:\n' + '\n'.join(plan['layers'].values()) +
         '\n\nArchivos:\n' + '\n'.join(sorted(plan['files'])) +
@@ -42,16 +45,14 @@ def confirm_cleanup(parent):
     prompt.exec()
     if prompt.clickedButton() is not remove:
         return None
-    result = delete_generated(plan)
-    from .improved_storage import preserve_exports
-    try:
-        preserve_exports()
-    except OSError as error:
-        # No modal dialogue after clearing. The status stays readable and the
-        # full failure is available under QGIS -> Log Messages.
-        QgsMessageLog.logMessage('No se han podido conservar las exportaciones: '
-                                 + str(error), 'HidroCAUMAX', Qgis.Warning)
-    message = f"Se han retirado {result['layers']} capas y eliminado {len(result['removed'])} archivos."
+    canvas = None
+    if iface is not None:
+        getter = getattr(iface, 'mapCanvas', None)
+        if callable(getter):
+            canvas = getter()
+    result = delete_generated(plan, canvas=canvas)
+    message = (f"Se han retirado {result['layers']} capas y eliminado "
+               f"{len(result['removed'])} archivos generados, incluidos los temporales y respaldos.")
     if result['failed']:
         message += f" No se han podido eliminar {len(result['failed'])} archivos."
         QgsMessageLog.logMessage('No se pudieron eliminar estos archivos:\n'
