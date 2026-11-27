@@ -144,6 +144,55 @@ class BoundaryLayersTests(unittest.TestCase):
                          {current_25.id(), current_5.id()})
         self.assertEqual(deduplicate_boundaries(self.project), 0)
 
+    def test_only_latest_500m_divisoria_remains_loaded_and_old_gpkg_is_deleted(self):
+        self.analysis.cell_width = self.analysis.cell_height = 500.
+        old = self.update(smooth=False)['original']
+        old_id = old.id()
+        old_file = Path(old.source().split('|', 1)[0])
+        self.assertTrue(old_file.is_file())
+        self.query.x += 500.
+        latest = self.update(smooth=False)['original']
+        self.assertIsNone(self.project.mapLayer(old_id))
+        self.assertIs(self.project.mapLayer(latest.id()), latest)
+        self.assertNotEqual(old_file, Path(latest.source().split('|', 1)[0]))
+        self.app.processEvents()
+        self.assertFalse(old_file.exists(),
+                         'El GeoPackage gestionado antiguo de 500 m debe eliminarse')
+        self.assertEqual(len([g for g in self.project.layerTreeRoot().findGroups()
+                              if g.customProperty(OWNER_PROPERTY)]), 1)
+
+    def test_latest_500_25_and_5m_divisorias_can_coexist(self):
+        identifiers = {}
+        for size in (500., 25., 5.):
+            self.analysis.cell_width = self.analysis.cell_height = size
+            self.query.x += size
+            layer = self.update(smooth=False)['original']
+            identifiers[size] = layer.id()
+        self.assertEqual(len(set(identifiers.values())), 3)
+        self.assertTrue(all(self.project.mapLayer(identifier) is not None
+                            for identifier in identifiers.values()))
+        self.assertEqual(deduplicate_boundaries(self.project), 0)
+
+    def test_restored_500m_duplicate_is_cleaned_without_deleting_user_reference(self):
+        self.analysis.cell_width = self.analysis.cell_height = 500.
+        with patch('caumax_consulta.boundary_layers.deduplicate_boundaries'):
+            previous = self.update(smooth=False)['original']
+            previous_id = previous.id()
+            previous_file = Path(previous.source().split('|', 1)[0])
+            self.query.x += 500.
+            latest = self.update(smooth=False)['original']
+        foreign = QgsVectorLayer(previous.source(), 'Copia ajena 500 m', 'ogr')
+        self.project.addMapLayer(foreign)
+        latest_id = latest.id()
+        self.assertEqual(deduplicate_boundaries(
+            self.project, storage_roots=(self.controller.directory,)), 1)
+        self.app.processEvents()
+        self.assertIsNone(self.project.mapLayer(previous_id))
+        self.assertIsNotNone(self.project.mapLayer(latest_id))
+        self.assertIs(self.project.mapLayer(foreign.id()), foreign)
+        self.assertTrue(previous_file.exists(),
+                        'No borrar un GeoPackage al que aún apunta una capa ajena')
+
     def test_new_cache_path_and_reopened_controller_reuse_the_same_result(self):
         first = self.update()
         ids = {kind: layer.id() for kind, layer in first.items()}
