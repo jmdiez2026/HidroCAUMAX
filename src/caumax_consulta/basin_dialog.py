@@ -10,7 +10,7 @@ from qgis.PyQt.QtCore import Qt, QTimer, QSettings, QEvent
 from qgis.PyQt.QtGui import QColor, QFont, QFontMetrics
 from qgis.PyQt.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QDialog, QDialogButtonBox,
-    QDoubleSpinBox, QSpinBox, QFileDialog, QFrame, QGridLayout, QGroupBox, QHBoxLayout, QMessageBox,
+    QDoubleSpinBox, QSpinBox, QComboBox, QFileDialog, QFrame, QGridLayout, QGroupBox, QHBoxLayout, QMessageBox,
     QHeaderView, QLabel, QPlainTextEdit, QProgressBar, QPushButton, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QScrollArea, QSizePolicy, QWidget,
 )
@@ -290,6 +290,28 @@ class BasinDialog(QDialog):
         resolution_group = QGroupBox('Resolución MDT', self)
         self.resolution_group = resolution_group
         resolution_layout = QVBoxLayout(resolution_group)
+        # Restore the visible top selector from the original resolution
+        # generation workflow. Show the three requested choices from the
+        # first frame, including while the initial D8 basin is still loading.
+        resolution_selector_row = QWidget(resolution_group)
+        selector_layout = QHBoxLayout(resolution_selector_row)
+        selector_layout.setContentsMargins(0, 0, 0, 0)
+        selector_layout.setSpacing(8)
+        selector_layout.addWidget(QLabel('Resolución MDT:', resolution_selector_row))
+        self.resolution_combo = QComboBox(resolution_selector_row)
+        self.resolution_combo.setObjectName('hidrocaumax_basin_mdt_resolution')
+        self.resolution_combo.setMinimumContentsLength(9)
+        self.resolution_combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.resolution_combo.setMinimumWidth(
+            self.fontMetrics().horizontalAdvance('500×500 m') + 48)
+        for size in ('500', '25', '5'):
+            self.resolution_combo.addItem(f'{size}×{size} m', size)
+            self.resolution_combo.model().item(self.resolution_combo.count()-1).setEnabled(False)
+        self.resolution_combo.setEnabled(False)
+        self.resolution_combo.currentIndexChanged.connect(self._resolution_combo_changed)
+        selector_layout.addWidget(self.resolution_combo)
+        selector_layout.addStretch(1)
+        resolution_layout.addWidget(resolution_selector_row)
         resolution_help = QLabel('La aplicación CAUMAX original utiliza MDT de tamaño de celda 500mx500m. Aquí puede seleccionar una resolución mejorada con MDT oficiales (www.cnig.es). Todos los cálculos se actualizarán automáticamente', resolution_group)
         self.resolution_help = resolution_help
         self._update_context()
@@ -302,6 +324,9 @@ class BasinDialog(QDialog):
         self._resolution_layout_columns = None
         self._resolution_checks_widget.installEventFilter(self)
         resolution_layout.addWidget(self._resolution_checks_widget)
+        # Keep existing checkbox objects as compatibility adapters for older
+        # tests/controllers, but do not show a second resolution selector.
+        self._resolution_checks_widget.hide()
         self.cell_grid_check = QCheckBox('Malla de celdas', resolution_group)
         self.cell_grid_check.setChecked(True)
         self.cell_grid_check.toggled.connect(self._grid_visibility_changed)
@@ -1090,6 +1115,47 @@ class BasinDialog(QDialog):
         except Exception as error:
             QMessageBox.critical(self,'Exportar capa hidrológica',str(error))
 
+    def _resolution_combo_changed(self, index):
+        """A real user selection must invoke the existing resolution worker."""
+        if (index < 0 or self._disposed or self.analysis is None
+                or self._resolution_controller is None or self._saving_project
+                or self._resolution_pending):
+            return
+        item = self.resolution_combo.model().item(index)
+        if item is None or not item.isEnabled():
+            return
+        key = str(self.resolution_combo.itemData(index))
+        if key != self._active_resolution_key:
+            self._select_resolution(key)
+
+    def _update_resolution_combo(self, options):
+        """Preserve 500/25/5 choices, with availability from the controller."""
+        by_key = {str(option['key']): option for option in options}
+        was_blocked = self.resolution_combo.blockSignals(True)
+        try:
+            for index, key in enumerate(('500', '25', '5')):
+                option = by_key.get(key)
+                enabled = bool(option and option.get('available'))
+                item = self.resolution_combo.model().item(index)
+                item.setEnabled(enabled)
+                tooltip = ((option.get('label', '') + '\\n' +
+                            option.get('status', '')).strip()
+                           if option is not None else
+                           'No disponible para esta cuenca')
+                self.resolution_combo.setItemData(index, tooltip, Qt.ToolTipRole)
+            index = self.resolution_combo.findData(
+                str(self._active_resolution_key or '500'))
+            if index >= 0:
+                self.resolution_combo.setCurrentIndex(index)
+            self.resolution_combo.setEnabled(
+                self.analysis is not None and self._resolution_controller is not None
+                and not self._disposed and not self._saving_project
+                and not self._resolution_pending
+                and any(self.resolution_combo.model().item(i).isEnabled()
+                        for i in range(self.resolution_combo.count())))
+        finally:
+            self.resolution_combo.blockSignals(was_blocked)
+
     def _resolution_options(self, options):
         if self._resolution_discovering:
             self._resolution_discovering = False
@@ -1115,6 +1181,7 @@ class BasinDialog(QDialog):
             box.clicked.connect(lambda checked=False, key=key: self._select_resolution(key))
             self.resolution_checkboxes[key] = box
         self._layout_resolution_options()
+        self._update_resolution_combo(options)
         self._refresh_outlet_button()
 
     def _layout_resolution_options(self):
@@ -1356,6 +1423,7 @@ class BasinDialog(QDialog):
             return
         self._clear_interpretations()
         self._resolution_pending = True
+        self.resolution_combo.setEnabled(False)
         self._render_interpretations()
         self.basin_hydrology_widget.setEnabled(False)
         self.report_button.setEnabled(False)
