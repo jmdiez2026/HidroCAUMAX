@@ -17,7 +17,7 @@ import weakref
 import numpy as np
 from osgeo import gdal, osr
 from qgis.PyQt.QtCore import QObject, QTimer, pyqtSignal
-from qgis.PyQt.QtWidgets import QApplication, QDialog
+from qgis.PyQt.QtWidgets import QApplication, QDialog, QPushButton
 from qgis.core import Qgis, QgsMessageLog
 
 from .rational_grid_validation import verify_fine_rational_pair
@@ -462,6 +462,7 @@ class _DialogBinding:
     flow_replacement: object = None
     source_identity: object = None
     checked_sample: object = None
+    routed_signals: list = field(default_factory=list)
 
 
 class RationalInputsBridge(QObject):
@@ -700,6 +701,35 @@ class RationalInputsBridge(QObject):
 
         return types.MethodType(observed, binding.dialog)
 
+    @staticmethod
+    def _route_native_button(binding, method_name, original):
+        """Route existing Qt connections through the instance-local observer.
+
+        Qt stores the callable connected at dialog construction. Assigning an
+        adapted method afterward does not change clicked connections, so a
+        user click otherwise bypasses the fine-grid checks and event capture.
+        Disconnect only matching original slots; keep all other handlers.
+        """
+        dialog = binding.dialog
+        if not callable(original):
+            return
+        for button in dialog.findChildren(QPushButton):
+            signal = button.clicked
+            try:
+                signal.disconnect(original)
+            except (TypeError, RuntimeError):
+                continue
+            # Resolve the current instance attribute on every click, instead
+            # of retaining an obsolete bound wrapper after an update.
+            def invoke(checked=False, owner=dialog, name=method_name):
+                return getattr(owner, name)()
+            try:
+                signal.connect(invoke)
+            except Exception:
+                signal.connect(original)
+                raise
+            binding.routed_signals.append((signal, original, invoke))
+
     def scan(self):
         if not self._running:
             return
@@ -736,6 +766,11 @@ class RationalInputsBridge(QObject):
                             native, mdt, binding))
                     binding.flow_replacement = self._observe(binding, 'flow', adapted_flow)
                     dialog.calculate = binding.flow_replacement
+                # The native buttons were connected before the reversible
+                # instance methods were installed. Rewire those exact slots.
+                self._route_native_button(binding, 'calculateParameters', previous)
+                if binding.flow_replacement is not None:
+                    self._route_native_button(binding, 'calculate', original_flow)
                 key = id(dialog)
                 closed = lambda *args, current=key: self._detach(current)
                 for signal in (dialog.finished, dialog.destroyed):
@@ -749,6 +784,13 @@ class RationalInputsBridge(QObject):
         binding = self._bindings.pop(key, None)
         if binding is None:
             return
+        for signal, original, proxy in reversed(binding.routed_signals):
+            try:
+                signal.disconnect(proxy)
+                signal.connect(original)
+            except (RuntimeError, TypeError):
+                pass
+        binding.routed_signals.clear()
         for signal, callback in binding.connections:
             try:
                 signal.disconnect(callback)
