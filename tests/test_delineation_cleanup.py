@@ -239,6 +239,26 @@ class DelineationCleanupTests(unittest.TestCase):
         self.assertFalse(active._disposed)
         self.assertEqual(active.close_calls, 0)
 
+    def test_automatic_query_cleanup_preserves_published_d8_but_manual_clean_removes_it(self):
+        from caumax_consulta.drainage_layers import OWNER_PROPERTY, PIN_PROPERTY
+        from caumax_consulta.layer_order import create_result_group
+        layer = QgsVectorLayer('LineString?crs=EPSG:25830', 'D8 network fixture', 'memory')
+        layer.setCustomProperty(OWNER_PROPERTY, 'persist-through-rational')
+        layer.setCustomProperty(PIN_PROPERTY, True)
+        self.project.addMapLayer(layer, False)
+        group = create_result_group(self.project, 'HidroCAUMAX · Drenaje Esri-D8 [25×25 m]', 10)
+        group.setCustomProperty(OWNER_PROPERTY, 'persist-through-rational')
+        group.setCustomProperty(PIN_PROPERTY, True)
+        group.addLayer(layer)
+        key = layer.id()
+        cleanup.clear_delineations(close_dialogs=True, preserve_published_drainage=True)
+        self.assertIs(self.project.mapLayer(key), layer)
+        self.assertIsNotNone(self.project.layerTreeRoot().findLayer(key))
+        cleanup.clear_delineations()
+        self.assertIsNone(self.project.mapLayer(key))
+        self.assertFalse(any(g.customProperty(OWNER_PROPERTY, '')
+                             for g in self.project.layerTreeRoot().findGroups(recursive=True)))
+
     def test_registered_windows_are_disposed_before_global_layer_removal(self):
         first, second = self.registered(), self.registered()
         layer = QgsVectorLayer('Point?crs=EPSG:25830', 'Old result', 'memory')
