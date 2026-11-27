@@ -140,7 +140,8 @@ def _private_course_files(layer):
                for part in (source, *source.parents)):
             return ()
         from .generated_cleanup import _family
-        return tuple(path for path in _family(source) if path.is_file())
+        return tuple(member for member in _family(source)
+                     if member.is_file() and not member.is_symlink())
     except (OSError, ValueError):
         return ()
 
@@ -197,7 +198,11 @@ def retire_other_course_groups(project=None, *, keep_group=None,
     for layer in project.mapLayers().values():
         if layer.id() not in ids and layer.providerType() in ('ogr', 'gdal'):
             try:
-                surviving_paths.add(Path(layer.source().split('|', 1)[0]).resolve())
+                source = Path(layer.source().split('|', 1)[0]).resolve()
+                surviving_paths.add(source)
+                if source.is_file():
+                    from .generated_cleanup import _family
+                    surviving_paths.update(member.resolve() for member in _family(source))
             except (OSError, ValueError):
                 pass
     if ids:
@@ -218,7 +223,7 @@ def retire_other_course_groups(project=None, *, keep_group=None,
         parent.removeChildNode(group)
 
     for controller in tuple(_CONTROLLERS):
-        if controller.owner_key in old_owners:
+        if controller.owner_key in old_owners and controller._group is not keep_group:
             controller.layers = {}
             controller._group = None
             controller._visibility = dict(_DEFAULT_VISIBILITY)
@@ -243,6 +248,18 @@ def retire_other_course_groups(project=None, *, keep_group=None,
         for path in removed_files:
             registry.pop(path, None)
         _save_registry(project, registry)
+    # A fully retired private course store must not leave an empty directory
+    # behind. Never touch shared dem_variants, Esri-D8 or CAUMAX source roots.
+    private_roots = (
+        Path(QgsApplication.qgisSettingsDirPath()) / 'HidroCAUMAX' / 'courses',
+        Path(tempfile.gettempdir()) / 'HidroCAUMAX' / 'courses',
+    ) if disk else ()
+    for root_dir in private_roots:
+        try:
+            if root_dir.is_dir() and not root_dir.is_symlink():
+                root_dir.rmdir()
+        except OSError:
+            pass
     if iface is not None:
         try:
             canvas = iface.mapCanvas()
