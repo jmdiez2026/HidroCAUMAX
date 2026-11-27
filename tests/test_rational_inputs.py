@@ -295,6 +295,37 @@ class BridgeTests(unittest.TestCase):
         self.assertNotIn('_processCell',vars(calc))
         self.assertEqual(calc._processCell(),'original')
 
+    def test_native_zero_division_at_both_fine_resolutions_is_reported_not_published(self):
+        namespace = {'BasinCalculator': self.Calculator}
+        exec(
+            'def calculateParameters(self):\n'
+            '    self.basinCalc = BasinCalculator()\n'
+            '    self.basinCalc.cellsize = requested_size\n'
+            '    self.basinCalc.maxDistance = 0.\n'
+            '    self.basinCalc.maxH = 300.\n'
+            '    self.basinCalc.minH = 300.\n'
+            '    raise ZeroDivisionError("float division by zero")\n',
+            namespace,
+        )
+        self.dialog.__class__.calculateParameters = namespace['calculateParameters']
+        finished = []
+        self.bridge.calculation_finished.connect(
+            lambda _owner, stage, event: finished.append((stage, event)))
+        # The synthetic calculator has no DEM: this test isolates the native
+        # zero-division error path while a separate suite validates D8 grids.
+        from unittest.mock import patch
+        with patch('caumax_consulta.rational_inputs._fine_grid_issue', return_value=None):
+            self.bridge.start()
+            for size in (25, 5):
+                namespace['requested_size'] = size
+                self.dialog.basinCalc = None
+                self.assertIsNone(self.dialog.calculateParameters())
+                stage, event = finished[-1]
+                self.assertEqual(stage, 'parameters')
+                self.assertFalse(event['completed'])
+                self.assertIn('L=0', event['failure_reason'])
+                self.assertIn(f'{size:g} m', event['failure_reason'])
+
     def test_unmarked_foreign_taudem_and_other_products_remain_unmodified(self):
         self.bridge.start()
         for product,encoding in ((None,'ESRI_D8'),('FLOW_DIRECTION','TAUDEM_D8'),
