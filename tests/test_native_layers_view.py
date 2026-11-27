@@ -173,35 +173,40 @@ class NativeLayersViewTests(unittest.TestCase):
         ]))
         return layer
 
+    @staticmethod
+    def _category_style(layer):
+        """Read only primitives while C++ QgsRendererCategory wrappers live."""
+        renderer = layer.renderer()
+        categories = renderer.categories()
+        return [
+            (str(c.value()), c.label(), c.symbol().color().name(),
+             c.symbol().width(), c.symbol().symbolLayer(0).widthUnit())
+            for c in categories
+        ]
+
     def test_real_caumax_categorized_red50_is_only_one_styled_at_150_percent(self):
         official = self._categorized_native_network()
         other = QgsVectorLayer('LineString?crs=EPSG:25830', 'Ríos', 'memory')
         self.project.addMapLayer(official)
         self.project.addMapLayer(other)
-        untouched = official.renderer().categories()[0].symbol()
-        original_color = untouched.color().name()
-        original_width = untouched.width()
+        original = self._category_style(official)
         original_other_color = other.renderer().symbol().color().name()
-        target_width = official.renderer().categories()[1].symbol().width()
-        self.assertAlmostEqual(target_width, 0.50)
+        self.assertAlmostEqual(original[1][3], 0.50)
         style_query_network(self.project)
         renderer = official.renderer()
         self.assertIsInstance(renderer, QgsCategorizedSymbolRenderer)
         self.assertEqual(renderer.classAttribute(), 'sup')
-        self.assertEqual(len(renderer.categories()), 2)
-        first, second = [entry.symbol() for entry in renderer.categories()]
-        self.assertEqual(first.color().name(), original_color)
-        self.assertAlmostEqual(first.width(), original_width)
-        self.assertEqual(second.color().name(), NETWORK_PINK)
-        self.assertAlmostEqual(second.width(), target_width * 1.5)
-        self.assertEqual(second.symbolLayer(0).widthUnit(),
-                         QgsUnitTypes.RenderMillimeters)
+        styled = self._category_style(official)
+        self.assertEqual(len(styled), 2)
+        self.assertEqual(styled[0], original[0])
+        self.assertEqual(styled[1][2], NETWORK_PINK)
+        self.assertAlmostEqual(styled[1][3], original[1][3] * 1.5)
+        self.assertEqual(styled[1][4], QgsUnitTypes.RenderMillimeters)
         self.assertEqual(other.renderer().symbol().color().name(), original_other_color)
         self.assertEqual(official.customProperty('HidroCAUMAX/query_network_style'),
                          NETWORK_STYLE_REVISION)
         style_query_network(self.project)
-        self.assertAlmostEqual(official.renderer().categories()[1].symbol().width(),
-                               target_width * 1.5)
+        self.assertEqual(self._category_style(official), styled)
         # Native loader may replace renderer while leaving customProperties.
         reset = official.renderer().clone()
         reset.updateCategorySymbol(1, QgsLineSymbol.createSimple({
@@ -209,11 +214,10 @@ class NativeLayersViewTests(unittest.TestCase):
             'line_width_unit':'MM'}))
         official.setRenderer(reset)
         style_query_network(self.project)
-        first, second = [entry.symbol() for entry in official.renderer().categories()]
-        self.assertEqual(first.color().name(), original_color)
-        self.assertAlmostEqual(first.width(), original_width)
-        self.assertEqual(second.color().name(), NETWORK_PINK)
-        self.assertAlmostEqual(second.width(), target_width * 1.5)
+        styled_after_reload = self._category_style(official)
+        self.assertEqual(styled_after_reload[0], original[0])
+        self.assertEqual(styled_after_reload[1][2], NETWORK_PINK)
+        self.assertAlmostEqual(styled_after_reload[1][3], original[1][3] * 1.5)
 
     def test_caumax_red50_category_is_styled_on_layer_load(self):
         self.bridge.start()
@@ -221,11 +225,11 @@ class NativeLayersViewTests(unittest.TestCase):
         self.app.processEvents()
         actual = next(layer for layer in self.project.mapLayers().values()
                       if layer.name() == 'Red 10 km2')
-        first, second = [item.symbol() for item in actual.renderer().categories()]
-        self.assertAlmostEqual(first.width(), 0.5)
-        self.assertEqual(first.color().name(), '#232323')
-        self.assertEqual(second.color().name(), NETWORK_PINK)
-        self.assertAlmostEqual(second.width(), 0.75)
+        first, second = self._category_style(actual)
+        self.assertAlmostEqual(first[3], 0.5)
+        self.assertEqual(first[2], '#232323')
+        self.assertEqual(second[2], NETWORK_PINK)
+        self.assertAlmostEqual(second[3], 0.75)
         self.assertEqual(actual.customProperty('HidroCAUMAX/query_network_style'),
                          NETWORK_STYLE_REVISION)
 
