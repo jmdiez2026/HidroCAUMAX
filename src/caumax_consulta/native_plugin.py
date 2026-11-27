@@ -54,6 +54,7 @@ class NativeCaumaxPlugin(QObject):
         self.iface = iface
         self._dialogs = {}
         self._saved_dialogs = []
+        self._query_history = []  # Preserve earlier maximum-flow and rational closure points.
         self._manual = None
         self._enabled = False
         self._bridge = CaumaxBridge(iface, self._open_basin, self._new_query_started)
@@ -236,8 +237,9 @@ class NativeCaumaxPlugin(QObject):
             QMessageBox.warning(native_dialog, 'Guardar CUENCA',
                                 'Ya existe ese archivo. Elige otro nombre para no sobrescribir la cuenca guardada.')
             return
-        contexts = [getattr(dialog, 'query', None)
-                    for dialog in list(self._dialogs.values()) + self._saved_dialogs]
+        contexts = list(getattr(self, '_query_history', ()))
+        contexts.extend(getattr(dialog, 'query', None)
+                        for dialog in list(self._dialogs.values()) + self._saved_dialogs)
         saved, manifest = save_complete_basin(
             path, iface=self.iface, native_dialog=native_dialog,
             queries=contexts,
@@ -324,6 +326,11 @@ class NativeCaumaxPlugin(QObject):
     def _open_basin(self, native_dialog, query):
         if not self._enabled:
             return
+        history = getattr(self, '_query_history', None)
+        if isinstance(history, list):
+            history.append(query)
+            if len(history) > 40:
+                del history[:-40]
         self._updates.check()
         previous = self._dialogs.get(native_dialog)
         if previous is not None:
