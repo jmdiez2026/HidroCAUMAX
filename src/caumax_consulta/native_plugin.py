@@ -1,6 +1,6 @@
 """Plugin entry point: extend CAUMAX's own dialog, not QGIS identify."""
 from qgis.PyQt.QtCore import QObject, Qt
-from qgis.PyQt.QtGui import QIcon
+from qgis.PyQt.QtGui import QIcon, QImage, QPixmap
 from qgis.PyQt.QtWidgets import QAction, QFileDialog, QMessageBox
 from qgis.core import Qgis, QgsApplication
 from pathlib import Path
@@ -16,6 +16,33 @@ from .update_ui import UpdateNotifier
 from .delineation_cleanup import clear_delineations
 from .map_services import ReferenceLayerLoader
 from .native_layers_view import NativeLayersView
+
+
+def _hidrocaumax_icons(path):
+    """Retain the original logo and provide a deliberately subdued variant."""
+    logo = QPixmap(str(path))
+    if logo.isNull():
+        return QIcon(str(path)), QIcon(str(path))
+    image = logo.toImage().convertToFormat(QImage.Format_ARGB32)
+    for y in range(image.height()):
+        for x in range(image.width()):
+            color = image.pixelColor(x, y)
+            if color.alpha() == 0:
+                continue
+            luminance = round(0.2126 * color.red() + 0.7152 * color.green()
+                              + 0.0722 * color.blue())
+            grey = round(0.42 * luminance + 0.58 * 180)
+            color.setRed(max(0, grey - 8))
+            color.setGreen(grey)
+            color.setBlue(min(255, grey + 12))
+            color.setAlpha(round(color.alpha() * 0.60))
+            image.setPixelColor(x, y, color)
+    normal, muted = QIcon(logo), QIcon(QPixmap.fromImage(image))
+    # QAction remains clickable for 'Restore tools' even when the plugin's
+    # tools are stopped. Use an explicit muted icon in that state, and also
+    # honor genuine QWidget disabled rendering when Qt requests it.
+    normal.addPixmap(QPixmap.fromImage(image), QIcon.Disabled)
+    return normal, muted
 
 
 class NativeCaumaxPlugin(QObject):
@@ -107,7 +134,9 @@ class NativeCaumaxPlugin(QObject):
                          else self.iface.mainWindow().addToolBar(self.MENU))
         self._toolbar.setObjectName('HidroCAUMAXToolbar')
         self._toolbar.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        self.action.setIcon(QIcon(str(Path(__file__).parent / 'assets' / 'hidrocaumax.png')))
+        self._active_icon, self._inactive_icon = _hidrocaumax_icons(
+            Path(__file__).parent / 'assets' / 'hidrocaumax.png')
+        self.action.setIcon(self._active_icon if self._enabled else self._inactive_icon)
         self.open_action.setIcon(QgsApplication.getThemeIcon('/mActionFileOpen.svg'))
         self.reference_action.setIcon(QIcon(str(Path(__file__).parent / 'assets' / 'load_reference_layers.svg')))
         self.clear_layers_action.setIcon(QIcon(str(Path(__file__).parent / 'assets' / 'clear_generated_layers.svg')))
@@ -208,6 +237,10 @@ class NativeCaumaxPlugin(QObject):
     def set_enabled(self, enabled):
         enabled = bool(enabled)
         self._enabled = enabled
+        # Keep the restore action enabled; the icon communicates whether the
+        # tools are currently active instead of disabling their restore button.
+        if hasattr(self, 'action') and self._active_icon is not None:
+            self.action.setIcon(self._active_icon if enabled else self._inactive_icon)
         if enabled:
             self._bridge.start()
             self._rational.start()
