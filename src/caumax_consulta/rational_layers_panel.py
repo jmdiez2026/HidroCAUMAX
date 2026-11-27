@@ -97,7 +97,7 @@ class RationalLayersPanel(DrainageControls):
         self.smoothing_degree.setValue(3)
         self.smoothing_degree.setToolTip('Suavizado gaussiano de la divisoria; conserva el cierre y la topología.')
         outline_layout.addWidget(self.smoothing_degree)
-        self.export_boundary_button = QPushButton('Exportar shape', self)
+        self.export_boundary_button = QPushButton('Guardar Divisoria', self)
         outline_layout.addWidget(self.export_boundary_button)
         outline_layout.addStretch(1)
         self.layout().insertWidget(3, outline_row)
