@@ -884,7 +884,8 @@ class BasinDialog(QDialog):
         published = self._drainage_layers.update(
             self.analysis, self._drainage_state, visible=visible)
         if (self._drainage_state is not None and
-                all(kind in published for kind in ('network', 'directions', 'dem'))):
+                all(published.get(kind) is not None
+                    for kind in ('network', 'directions', 'dem'))):
             self._drainage_layers.publish()
         if self._drainage_state is not None:
             # Publication is complete: purge every earlier course group (also
