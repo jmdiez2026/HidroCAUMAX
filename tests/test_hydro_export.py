@@ -190,7 +190,7 @@ class HydroExportTests(unittest.TestCase):
         invalid[0,0] = 128
         dataset.GetRasterBand(1).WriteArray(invalid)
         dataset = None
-        with self.assertRaisesRegex(ValueError,'ocho direcciones'):
+        with self.assertRaisesRegex(ValueError,'ocho códigos'):
             export.export_directions(self.products,target)
         self.products.metadata = {'engine':'GRASS'}
         with self.assertRaisesRegex(ValueError,'procedencia'):
