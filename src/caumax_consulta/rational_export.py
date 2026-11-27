@@ -32,7 +32,7 @@ QPushButton:disabled { background-color: #EAF3F8; color: #7A8790; }'''
 ACTION_FRAME_NAME = 'HidroCAUMAXRationalActionFrame'
 ACTION_BUTTON_STYLE = BUTTON_STYLE.replace('padding: 5px 9px', 'padding: 3px 6px')
 EXPORT_OWNER_PROPERTY = 'HidroCAUMAX/rational_export_owned'
-_TITLE = 'HidroCAUMAX v.1.0 · Guardar cuenca'
+_TITLE = 'HidroCAUMAX v.1.0 · Guardar Divisoria'
 
 
 def _place_export_button(dialog, button, grouped=True):
@@ -226,7 +226,7 @@ class RationalExportBridge(QObject):
             # connect, restyle, delete, stop or otherwise adopt its button.
             if legacy_active or dialog.findChild(QPushButton, BUTTON_NAME) is not None:
                 continue
-            button = QPushButton('Guardar cuenca…', dialog)
+            button = QPushButton('Guardar Divisoria', dialog)
             button.setObjectName(BUTTON_NAME)
             button.setProperty(EXPORT_OWNER_PROPERTY, True)
             button.setToolTip('Guardar los polígonos rojos y el cierre calculados por CAUMAX')
@@ -267,7 +267,8 @@ class RationalExportBridge(QObject):
         except (ValueError, TypeError, AttributeError, RuntimeError) as error:
             QMessageBox.warning(dialog, _TITLE, str(error))
             return None
-        directory = QStandardPaths.writableLocation(QStandardPaths.DocumentsLocation) or os.path.expanduser('~')
+        from .improved_storage import export_directory
+        directory = str(export_directory())
         suggested = str(Path(directory) / f'Cuenca_CAUMAX_{round(snapshot.x)}_{round(snapshot.y)}.shp')
         destination, selected_filter = QFileDialog.getSaveFileName(
             dialog, _TITLE, suggested, 'ESRI Shapefile (*.shp);;GeoPackage (*.gpkg)',
