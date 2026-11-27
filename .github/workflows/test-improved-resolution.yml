@@ -6,6 +6,7 @@ on:
       - fix/1.0.17-retencion-d8-export
       - fix/1.0.18-fine-rational-and-pink-network
       - fix/1.0.19-restore-basin-selector-outlet
+      - fix/1.0.20-basin-resolution-dropdown
   workflow_dispatch:
 
 permissions:
