@@ -361,6 +361,22 @@ def delete_generated(plan, project=None, canvas=None):
             removed.append(name)
         except OSError as error:
             failed.append(name + ': ' + str(error))
+    # GDAL/OGR can create an .aux.xml, WAL or staging file while releasing
+    # a raster provider. Sweep newly materialized files once more, but only
+    # under the exact private directories approved for this cleanup. Never
+    # override a changed-file warning for paths in the reviewed snapshot.
+    attempted = set(files)
+    for root in plan.get('owned_roots', ()):
+        for path in _private_files(root):
+            name = str(path.resolve())
+            if name in attempted or name in protected:
+                continue
+            attempted.add(name)
+            try:
+                path.unlink()
+                removed.append(name)
+            except OSError as error:
+                failed.append(name + ': ' + str(error))
     records = _registry(project)
     for name in set(removed) | protected:
         records.pop(name, None)
