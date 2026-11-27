@@ -287,7 +287,8 @@ class RationalLayersPanelTests(unittest.TestCase):
         dem = panel._layers.layers['dem']
         self.assertEqual(dem.name(), 'MDT 25x25m')
         group = QgsProject.instance().layerTreeRoot().findLayer(dem.id()).parent()
-        self.assertEqual([node.layer().id() for node in group.children()][2], dem.id())
+        self.assertEqual([node.layer().id() for node in group.children()][3], dem.id())
+        self.assertEqual(group.children()[0].layer().customProperty('HidroCAUMAX/closure_point'), True)
         self.assertFalse(QgsProject.instance().layerTreeRoot()
                         .findLayer(dem.id()).itemVisibilityChecked())
         self.assertEqual(panel._layers.visibility(),
