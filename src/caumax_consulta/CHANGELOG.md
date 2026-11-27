@@ -1,3 +1,17 @@
+# HidroCAUMAX v.1.0 - cuencas con capas propias y divisoria única (revisión 1.0.16, 2026-11-27)
+
+- Cuenca hidrográfica abre la cuenca del método racional con MDT y direcciones configurados por el usuario, incluidos archivos de distinta extensión con idénticos origen, resolución y CRS. Se exige cobertura de toda la cuenca, sin remuestreo ni recorte del resultado nativo.
+- Se conservan exactamente la máscara, geometría, área, punto y caudal aceptados por CAUMAX. Se verifican completos los dos archivos, cada uno con sus dimensiones; también se admite el suavizado y el retorno al contorno original.
+- Regresión reproducible a 5, 25, 100 y 500 m, con distinta extensión en ambos sentidos, y rechazo de mallas desplazadas, CRS incompatibles, cobertura insuficiente y fuentes modificadas. La configuración de capas sigue siendo manual.
+
+- La divisoria original de 25 × 25 m de la última consulta sustituye a la anterior en QGIS, incluso al cambiar el punto, el cierre o el polígono. Repetir la misma consulta reutiliza su capa.
+- Se retiran las copias gestionadas antiguas al activar el plugin y abrir proyectos. También se corrigen entradas duplicadas del mismo identificador en la lista de capas.
+- La divisoria suavizada opcional corresponde a la misma consulta actual. Se conservan los GeoPackages anteriores, las capas ajenas y las otras resoluciones.
+- Una sustitución fallida conserva las capas anteriores. Una divisoria en edición impide sustituirla hasta terminar la edición.
+- Pruebas reproducibles con cambios de cierre, proyectos antiguos, nuevas instancias, visibilidad, errores de escritura y conservación de archivos. Manual actualizado.
+
+---
+
 # HidroCAUMAX v.1.0 - carpeta inicial sin recuperación automática (revisión 1.0.15, 2026-11-26)
 
 - Se elimina la recuperación automática de exportaciones al iniciar QGIS. Un MDT y su registro de una copia anterior ya no reaparecen en ResolucionMejorada al activar el plugin.

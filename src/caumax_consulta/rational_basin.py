@@ -228,6 +228,10 @@ def _verified_source(path, array, nodata, transform, reference, shape):
     before = Path(path).stat()
     dataset = _basin._open_raster(path, 'cálculo racional')
     try:
+        if shape is None:
+            # Revalidation hashes the source's own dimensions. The stored hash
+            # still rejects any change, including outside the basin window.
+            shape = (dataset.RasterYSize, dataset.RasterXSize)
         if (dataset.RasterYSize, dataset.RasterXSize) != tuple(shape):
             raise ValueError('Las dimensiones de las capas han cambiado; vuelve a calcular las variables intermedias.')
         if not np.allclose(dataset.GetGeoTransform(), transform, rtol=0, atol=1e-9):
@@ -299,7 +303,8 @@ def capture_rational_query(dialog, *, flow_result=None, parameters_validated=Fal
             raise ValueError('Las coordenadas han cambiado; vuelve a calcular las variables intermedias.')
     dem, directions = np.asarray(calculator.mdt), np.asarray(calculator.dirs)
     mask = np.asarray(calculator.basinCells)
-    if dem.ndim != 2 or dem.size == 0 or directions.shape != dem.shape or mask.shape != dem.shape:
+    if (dem.ndim != 2 or dem.size == 0 or directions.ndim != 2
+            or directions.size == 0 or mask.shape != dem.shape):
         raise ValueError('La máscara racional no corresponde a las capas cargadas.')
     if mask.dtype.kind not in 'biuf' or not np.all((mask == 0) | (mask == 1)):
         raise ValueError('La máscara racional debe contener exclusivamente celdas 0 y 1.')
@@ -309,6 +314,8 @@ def capture_rational_query(dialog, *, flow_result=None, parameters_validated=Fal
         raise ValueError('La cuenca racional no contiene celdas.')
     yoff, last_row = int(row_indices[0]), int(row_indices[-1])
     xoff, last_col = int(col_indices[0]), int(col_indices[-1])
+    if last_row >= directions.shape[0] or last_col >= directions.shape[1]:
+        raise ValueError('Las direcciones de drenaje no cubren toda la cuenca racional calculada.')
     window = [xoff, yoff, last_col - xoff + 1, last_row - yoff + 1]
     crop = np.asarray(mask[yoff:last_row + 1, xoff:last_col + 1], dtype=np.uint8)
     count = int(np.count_nonzero(crop))
@@ -335,7 +342,7 @@ def capture_rational_query(dialog, *, flow_result=None, parameters_validated=Fal
     try:
         sources = {
             'dem': _verified_source(provider.getLayerPath(provider.MDT), dem, getattr(calculator, 'nodataMdt', None), transform, reference, dem.shape),
-            'directions': _verified_source(provider.getLayerPath(provider.FLOWDIRS), directions, getattr(calculator, 'nodataDirs', None), transform, reference, dem.shape),
+            'directions': _verified_source(provider.getLayerPath(provider.FLOWDIRS), directions, getattr(calculator, 'nodataDirs', None), transform, reference, directions.shape),
         }
     except (OSError, RuntimeError) as error:
         raise ValueError('No se pudieron verificar las capas originales de la cuenca racional.') from error
@@ -385,7 +392,7 @@ def validate_rational_analysis(analysis, query):
         try:
             stat = Path(path).stat()
             if (stat.st_size, stat.st_mtime_ns) != (source['size_bytes'], source['mtime_ns']):
-                current = _verified_source(path, None, None, context['geotransform'], reference, context['raster_shape'])
+                current = _verified_source(path, None, None, context['geotransform'], reference, None)
                 if current['sha256'] != source['sha256']:
                     raise ValueError('Las capas han cambiado desde la captura de la cuenca racional.')
         except OSError as error:

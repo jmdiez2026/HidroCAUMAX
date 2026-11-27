@@ -11,7 +11,7 @@ from qgis.PyQt.QtCore import Qt
 from qgis.core import QgsApplication, QgsCoordinateReferenceSystem, QgsGeometry, QgsProject, QgsVectorLayer
 
 from caumax_consulta.boundary_layers import (BoundaryLayers, OWNER_PROPERTY, KIND_PROPERTY,
-                                           deduplicate_boundaries)
+                                           UPDATED_PROPERTY, deduplicate_boundaries)
 import test_drainage_dialog as fixture
 
 
@@ -165,16 +165,100 @@ class BoundaryLayersTests(unittest.TestCase):
         finally:
             foreign.rollBack()
 
-    def test_distinct_query_points_are_not_merged_even_with_the_same_polygon(self):
+    def test_new_25m_query_replaces_loaded_outline_but_keeps_its_file(self):
         first = self.update(smooth=False)['original']
+        first_id = first.id()
+        path = Path(first.source().split('|')[0]); before = path.read_bytes()
         self.query.x += 1.
         second = self.update(smooth=False)['original']
-        self.assertNotEqual(first.id(), second.id())
-        self.assertTrue(next(first.getFeatures()).geometry().isGeosEqual(
-            next(second.getFeatures()).geometry()))
+        self.assertNotEqual(first_id, second.id())
+        self.assertTrue(next(second.getFeatures()).geometry().isGeosEqual(self.original))
         self.assertEqual(deduplicate_boundaries(self.project), 0)
-        self.assertIs(self.project.mapLayer(first.id()), first)
+        self.assertIsNone(self.project.mapLayer(first_id))
         self.assertIs(self.project.mapLayer(second.id()), second)
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_changed_outlet_and_polygon_replace_old_original_and_smooth_pair(self):
+        previous = self.update()
+        old_ids = {layer.id() for layer in previous.values()}
+        paths = {Path(layer.source().split('|')[0]) for layer in previous.values()}
+        saved = {path: path.read_bytes() for path in paths}
+        self.query.x += 25.; self.analysis.outlet_x += 25.
+        self.original = QgsGeometry.fromWkt('POLYGON ((0 0,150 0,150 150,0 150,0 0))')
+        current = BoundaryLayers(self.folder/'stored').update(
+            self.analysis, self.query, self.original, self.smooth, degree=4)
+        self.assertTrue(all(self.project.mapLayer(key) is None for key in old_ids))
+        owned = [layer for layer in self.project.mapLayers().values() if layer.customProperty(OWNER_PROPERTY)]
+        self.assertEqual({layer.id() for layer in owned}, {layer.id() for layer in current.values()})
+        self.assertEqual(len([layer for layer in owned if layer.customProperty(KIND_PROPERTY) == 'original']), 1)
+        self.assertAlmostEqual(next(current['original'].getFeatures()).geometry().area(), 22500.)
+        self.assertTrue(all(path.read_bytes() == saved[path] for path in paths))
+
+    def test_old_project_keeps_latest_25m_query_even_when_hidden_and_preserves_5m_and_foreign(self):
+        # Reproduce a project saved before the one-current-result policy.
+        with patch('caumax_consulta.boundary_layers.deduplicate_boundaries'):
+            old = self.update(smooth=False)['original']
+            self.query.x += 1.
+            latest = self.update(smooth=False, visibility={'original': False})['original']
+        old_id, latest_id = old.id(), latest.id()
+        old.setCustomProperty(UPDATED_PROPERTY, '1')
+        latest.setCustomProperty(UPDATED_PROPERTY, '2')
+        root = self.project.layerTreeRoot()
+        root.findLayer(old_id).parent().setItemVisibilityChecked(True)
+        root.findLayer(old_id).setItemVisibilityChecked(True)
+        foreign = QgsVectorLayer(old.source(), old.name(), 'ogr')
+        self.project.addMapLayer(foreign)
+        self.analysis.cell_width = self.analysis.cell_height = 5.
+        fine = self.update(smooth=False)['original']
+        self.assertIsNone(self.project.mapLayer(old_id))
+        self.assertIs(self.project.mapLayer(latest_id), latest)
+        self.assertIs(self.project.mapLayer(foreign.id()), foreign)
+        self.assertIs(self.project.mapLayer(fine.id()), fine)
+        self.assertFalse(root.findLayer(latest_id).itemVisibilityChecked())
+        self.assertEqual(deduplicate_boundaries(self.project), 0)
+
+    def test_existing_legacy_queries_without_timestamp_keep_the_visible_one(self):
+        with patch('caumax_consulta.boundary_layers.deduplicate_boundaries'):
+            old = self.update(smooth=False)['original']
+            self.query.x += 1.
+            current = self.update(smooth=False)['original']
+        old_id = old.id()
+        for layer in (old, current): layer.removeCustomProperty(UPDATED_PROPERTY)
+        self.assertEqual(deduplicate_boundaries(self.project), 1)
+        self.assertIsNone(self.project.mapLayer(old_id))
+        self.assertIs(self.project.mapLayer(current.id()), current)
+
+    def test_duplicate_tree_entries_of_one_25m_layer_are_removed(self):
+        original = self.update(smooth=False)['original']
+        root = self.project.layerTreeRoot()
+        group = root.addGroup(original.name())
+        group.setCustomProperty(OWNER_PROPERTY, original.customProperty(OWNER_PROPERTY))
+        group.addLayer(original)
+        self.assertEqual(len([node for node in root.findLayers() if node.layerId() == original.id()]), 2)
+        deduplicate_boundaries(self.project, [original.id()])
+        self.assertEqual(len([node for node in root.findLayers() if node.layerId() == original.id()]), 1)
+        self.assertIs(self.project.mapLayer(original.id()), original)
+
+    def test_failed_replacement_and_active_edit_do_not_add_a_second_25m_outline(self):
+        old = self.update()
+        initial = set(self.project.mapLayers())
+        self.query.x += 25.; self.analysis.outlet_x += 25.
+        controller = BoundaryLayers(self.folder/'stored')
+        create = controller._open_or_create
+        def fail_smooth(key, kind, *args):
+            if kind == 'suavizada': raise ValueError('Fallo de escritura simulado')
+            return create(key, kind, *args)
+        with patch.object(controller, '_open_or_create', side_effect=fail_smooth):
+            with self.assertRaisesRegex(ValueError, 'Fallo de escritura'):
+                controller.update(self.analysis, self.query, self.original, self.smooth)
+        self.assertEqual(set(self.project.mapLayers()), initial)
+        self.assertTrue(old['original'].startEditing())
+        try:
+            with self.assertRaisesRegex(ValueError, 'Finaliza la edición'):
+                controller.update(self.analysis, self.query, self.original)
+            self.assertEqual(set(self.project.mapLayers()), initial)
+        finally:
+            old['original'].rollBack()
 
     def test_qgis_project_round_trip_keeps_geometries_styles_and_visibility(self):
         layers = self.update(visibility={'original': False, 'suavizada': True})

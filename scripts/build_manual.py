@@ -64,7 +64,7 @@ def build():
     story.append(Spacer(1,24))
     p('HidroCAUMAX v.1.0','title')
     p('Manual de usuario','h1')
-    p('Edición para el paquete 1.0.15 · 26 de noviembre de 2026','small')
+    p('Edición para el paquete 1.0.16 · 27 de noviembre de 2026','small')
     p('Herramientas de cuencas, cartografía y caudales máximos para QGIS y CAUMAX 3.0. Este manual acompaña al complemento y se puede consultar sin conexión.')
     p('Primeros pasos','h2')
     for text in ['1. Instala y habilita CAUMAX y, después, HidroCAUMAX.',
@@ -73,7 +73,7 @@ def build():
                  '4. Usa Calcular del recuadro GEA para consultar la tabla y el gráfico de caudales.',
                  '5. Abre Generar capas resolución mejorada si necesitas MDT, direcciones y red con mayor detalle.']:
         p(text)
-    p('El nombre visible es HidroCAUMAX v.1.0. El número técnico 1.0.15 identifica esta entrega y permite ordenar las actualizaciones.','small')
+    p('El nombre visible es HidroCAUMAX v.1.0. El número técnico 1.0.16 identifica esta entrega y permite ordenar las actualizaciones.','small')
 
     heading(2)
     p('Requisitos e instalación','h2')
@@ -106,6 +106,7 @@ def build():
     p('<b>Calcular original</b>, en la fila superior, obtiene el caudal individual del recuadro Resultado. No abre la tabla T/Q.')
     p('<b>Calcular del recuadro GEA</b> introduce primero el valor medio regional del coeficiente corrector de P0, obtenido de las mismas fuentes que Valores recomendados. Después calcula y abre la tabla y el gráfico. Si no puede obtener ese valor, informa del problema y no lo inventa.')
     p('La fila GEA reúne Calcular, Guardar cuenca…, Cuenca hidrográfica, Generar capas resolución mejorada y Limpiar capas. El botón original de CAUMAX conserva su función y su formato.')
+    p('<b>Cuenca hidrográfica</b> también funciona con las capas que has configurado manualmente, por ejemplo de 25 m. MDT y direcciones deben compartir origen de malla, resolución y CRS y cubrir toda la cuenca; pueden tener distinta extensión. Se conservan la divisoria y el resultado racional, sin modificar los archivos.','small')
 
     heading(5)
     p('La tabla incluye <b>T=2, 5, 10, 25, 100 y 500 años</b> y el periodo indicado por el usuario, sin duplicados. T se expresa en años y Q en m³/s. Los caudales se presentan centrados, con dos decimales y coma; el cálculo conserva su precisión interna.')
@@ -135,7 +136,7 @@ def build():
     p('Para calcular con capas mejoradas, exporta el MDT y las direcciones de la misma generación y selecciónalos manualmente en <b>Configurar capas de cálculo</b>. Deben tener una malla compatible. <b>Valores por defecto</b> recupera los archivos originales, incluido <b>p0.tif</b> de CAUMAX.')
     p('Archivos guardados y resultados del cálculo','h2')
     p('Abrir el diálogo ya no carga los archivos de ResolucionMejorada ni crea el grupo <b>HidroCAUMAX mejoradas</b>. Al actualizar se retira el grupo antiguo gestionado, conservando sus archivos y las capas ajenas que hayas añadido.')
-    p('Los resultados aparecen en <b>HidroCAUMAX · Drenaje TauDEM</b>. Las divisorias del mismo punto y resolución se reutilizan aunque cambie la ruta temporal del MDT. Las copias idénticas creadas por la aplicación se retiran del mapa; sus archivos permanecen en disco.')
+    p('Los resultados aparecen en <b>HidroCAUMAX · Drenaje TauDEM</b>. Las divisorias del mismo punto y resolución se reutilizan aunque cambie la ruta temporal del MDT. A <b>25 × 25 m</b> queda una sola divisoria original: la de la última consulta. Al cambiar el cierre se sustituye la anterior en QGIS. Su variante suavizada es opcional. Los archivos anteriores permanecen en disco.')
     p('Relieve y datos originales','h2')
     p('La referencia de <b>500 × 500 m</b> ya no crea ni carga un grupo adicional de relieve. El MDT original de CAUMAX permanece disponible para sus cálculos.','small')
     p('La rampa de elevación y el sombreado ayudan a leer el relieve. Cambiar la simbología no modifica las cotas del MDT ni los valores de dirección de flujo.')
@@ -182,7 +183,7 @@ def build():
         canvas.setStrokeColor(blue); canvas.setLineWidth(1); canvas.line(42,806,553,806)
         canvas.setFont('Manual',8); canvas.setFillColor(navy)
         canvas.drawString(42,818,'HidroCAUMAX v.1.0 | Manual de usuario')
-        canvas.drawString(42,25,'Paquete 1.0.15 · Edición 26/11/2026')
+        canvas.drawString(42,25,'Paquete 1.0.16 · Edición 27/11/2026')
         canvas.drawRightString(553,25,f'{doc.page} / {len(TITLES)}')
         canvas.restoreState()
     pdf=OUT/'Manual_HidroCAUMAX_v1.0.pdf'

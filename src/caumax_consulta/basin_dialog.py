@@ -71,6 +71,7 @@ class AnalysisTask(QgsTask):
             self.result = analyze_basin(
                 self.query.directions_path, self.query.dem_path,
                 *self.outlet, cancelled=self.isCanceled, upstream_only=False,
+                allow_different_extents=is_rational_query(self.query),
             )
             if is_rational_query(self.query):
                 from .rational_basin import validate_rational_analysis

@@ -288,7 +288,7 @@ def _grid_lines(mask, transform, cancelled):
 
 def analyze_basin(directions_path, dem_path, outlet_x, outlet_y,
                   cancelled=lambda: False, progress=lambda n: None, surface_wkb=None,
-                  *, upstream_only=False):
+                  *, upstream_only=False, allow_different_extents=False):
     """Return one delineation with its original-grid terrain characteristics.
 
     Riley TRI and local maximum-descent D8 slope use complete valid 3x3 DEM
@@ -306,7 +306,8 @@ def analyze_basin(directions_path, dem_path, outlet_x, outlet_y,
         progress(0)
         directions_ds = _b._open_raster(directions_path, "direcciones")
         dem_ds = _b._open_raster(dem_path, "MDT")
-        transform, reference = _b._aligned(directions_ds, dem_ds)
+        transform, reference = _b._aligned(
+            directions_ds, dem_ds, same_dimensions=not allow_different_extents)
         cols, rows = directions_ds.RasterXSize, directions_ds.RasterYSize
         selected = cell_at_point(
             outlet_x, outlet_y, transform[0], transform[3] + rows * transform[5],
@@ -341,6 +342,13 @@ def analyze_basin(directions_path, dem_path, outlet_x, outlet_y,
             from .terrain_surface import surface_window
             mask, window, count, touches_boundary, weights, area, perimeter = surface_window(
                 dem_ds, surface_wkb, (selected.x, selected.y), cancelled, progress)
+        # Custom rational rasters may end at different rows/columns, while
+        # retaining the same origin, CRS and cell size. Never resample them or
+        # silently clip the native basin to their overlap.
+        for dataset, label in ((dem_ds, 'MDT'), (directions_ds, 'direcciones de drenaje')):
+            if (window[0] + window[2] > dataset.RasterXSize
+                    or window[1] + window[3] > dataset.RasterYSize):
+                raise ValueError(f'El ráster de {label} no cubre toda la cuenca calculada.')
         local_transform = (transform[0] + window[0] * transform[1], transform[1], 0.0,
                            transform[3] + window[1] * transform[5], 0.0, transform[5])
         if surface_wkb is None:
@@ -349,7 +357,8 @@ def analyze_basin(directions_path, dem_path, outlet_x, outlet_y,
             area = count * abs(transform[1] * transform[5] - transform[2] * transform[4])
         else:
             geometry_wkb = bytes(surface_wkb)
-        halo = _dem_halo(dem_ds.GetRasterBand(1), window, cols, rows, cancelled)
+        halo = _dem_halo(dem_ds.GetRasterBand(1), window,
+                         dem_ds.RasterXSize, dem_ds.RasterYSize, cancelled)
         elevations = halo[1:-1, 1:-1]
         valid_mask = (mask != 0) & np.isfinite(elevations)
         valid_elevations = elevations[valid_mask]

@@ -1,5 +1,7 @@
 """One active course/outline across resolution changes and fresh dialogs."""
 from dataclasses import replace
+from pathlib import Path
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -18,6 +20,12 @@ class ActiveBasinLayersTests(unittest.TestCase):
         fixture.DrainageDialogTests.setUpClass()
 
     def setUp(self):
+        self.storage = tempfile.TemporaryDirectory(prefix='hidrocaumax_active_', ignore_cleanup_errors=True)
+        self.addCleanup(self.storage.cleanup)
+        storage_patch = patch('caumax_consulta.boundary_layers.storage_directory',
+                              return_value=Path(self.storage.name)/'boundaries')
+        storage_patch.start()
+        self.addCleanup(storage_patch.stop)
         self.fixture = fixture.DrainageDialogTests()
         self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)

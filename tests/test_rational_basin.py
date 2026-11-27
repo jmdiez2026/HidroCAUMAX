@@ -67,7 +67,9 @@ def rational_fixture():
     by this context and removed on exit. No native settings are modified.
     """
     app = _app()
-    with tempfile.TemporaryDirectory(prefix='rational_basin_') as temporary:
+    # QGIS's OGR connection pool can retain a Windows GeoPackage handle until
+    # process exit, even after the test has removed/deleted its map layer.
+    with tempfile.TemporaryDirectory(prefix='rational_basin_', ignore_cleanup_errors=True) as temporary:
         folder = Path(temporary)
         paths = {'MDT': folder / 'mdt.tif', 'FLOWDIRS': folder / 'dir.tif'}
         transform = (0, 500, 0, 4500, 0, -500)
@@ -291,8 +293,9 @@ class RationalBasinTests(unittest.TestCase):
     def test_context_validation_is_offline_and_flow_must_match_query(self):
         fixture = self.fixture
         context = copy.deepcopy(fixture.query.rational_context)
-        context['sources']['dem']['path'] = '/offline/not-installed/mdt.tif'
-        self.assertEqual(rational.validate_rational_context(context)['sources']['dem']['path'], '/offline/not-installed/mdt.tif')
+        offline = str(fixture.folder / 'not-installed' / 'mdt.tif')
+        context['sources']['dem']['path'] = offline
+        self.assertEqual(rational.validate_rational_context(context)['sources']['dem']['path'], offline)
         with self.assertRaisesRegex(ValueError, 'caudal'):
             rational.validate_rational_analysis(fixture.analysis, replace(fixture.query, flow=10))
 

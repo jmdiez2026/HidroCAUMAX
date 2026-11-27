@@ -52,7 +52,8 @@ def _analyze_base(arguments, cancelled, publish):
     target_x, target_y = _dem_point(directions, source_wkt, x, y)
     from .terrain import analyze_basin
     analysis = analyze_basin(directions, dem, target_x, target_y,
-                             cancelled=cancelled, upstream_only=False)
+                             cancelled=cancelled, upstream_only=False,
+                             allow_different_extents=True)
     if cancelled():
         raise InterruptedError('Preparación de la cuenca de referencia cancelada.')
     publish('Cuenca de referencia preparada.', 100.)

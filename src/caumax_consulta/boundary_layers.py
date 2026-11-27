@@ -1,7 +1,9 @@
 """Durable, reusable watershed outlines backed by profile-local GeoPackages."""
 import hashlib
 import json
+import math
 from pathlib import Path
+import time
 
 from qgis.PyQt import sip
 from qgis.PyQt.QtCore import QVariant
@@ -14,6 +16,7 @@ from .layer_order import activate_result_group, create_result_group, ensure_resu
 OWNER_PROPERTY = 'HidroCAUMAX/boundary_owner'
 KIND_PROPERTY = 'HidroCAUMAX/boundary_kind'
 QUERY_PROPERTY = 'HidroCAUMAX/boundary_query'
+UPDATED_PROPERTY = 'HidroCAUMAX/boundary_updated_ns'
 _NAMES = {'original': 'Divisoria original', 'suavizada': 'Divisoria suavizada'}
 
 
@@ -39,8 +42,65 @@ def boundary_key(analysis, query):
     return hashlib.sha256(json.dumps(identity, ensure_ascii=True).encode('utf-8')).hexdigest()[:32]
 
 
+def _is_25m(width, height):
+    try:
+        return math.isclose(abs(float(width)), 25.) and math.isclose(abs(float(height)), 25.)
+    except (TypeError, ValueError):
+        return False
+
+
+def _managed_25m(project):
+    for layer in project.mapLayers().values():
+        if (not isinstance(layer, QgsVectorLayer) or not layer.isValid()
+                or not layer.customProperty(OWNER_PROPERTY, '')
+                or layer.customProperty(KIND_PROPERTY) not in _NAMES
+                or any(layer.fields().indexFromName(name) < 0 for name in ('RES_X_M', 'RES_Y_M'))
+                or layer.featureCount() != 1):
+            continue
+        feature = next(layer.getFeatures(), None)
+        if feature is not None and _is_25m(feature['RES_X_M'], feature['RES_Y_M']):
+            yield layer
+
+
+def _keep_current_25m(project, preferred):
+    """Keep the last 25 m result, including only its optional smoothed outline."""
+    root = project.layerTreeRoot()
+    candidates = list(_managed_25m(project))
+    if any(layer.isEditable() for layer in candidates):
+        return 0
+    def priority(layer):
+        try:
+            updated = int(layer.customProperty(UPDATED_PROPERTY, '0'))
+        except (TypeError, ValueError):
+            updated = 0
+        node = root.findLayer(layer.id())
+        return (layer.id() not in preferred, -updated,
+                not bool(node and node.isVisible()), layer.customProperty(KIND_PROPERTY) != 'original')
+    candidates.sort(key=priority)
+    if not candidates:
+        return 0
+    current = candidates[0].customProperty(OWNER_PROPERTY)
+    kept, removed = {}, []
+    for layer in candidates:
+        kind = layer.customProperty(KIND_PROPERTY)
+        if layer.customProperty(OWNER_PROPERTY) != current or kind in kept:
+            removed.append(layer.id())
+        else:
+            kept[kind] = layer
+    project.removeMapLayers(removed)
+    # A saved project can contain multiple legend nodes for the same layer ID.
+    for layer in kept.values():
+        nodes = root.findLayers()
+        nodes = [node for node in nodes if node.layerId() == layer.id()]
+        nodes.sort(key=lambda node: (node.parent().customProperty(OWNER_PROPERTY) != current,
+                                    not node.isVisible()))
+        for node in nodes[1:]:
+            node.parent().removeChildNode(node)
+    return len(removed)
+
+
 def deduplicate_boundaries(project=None, preferred_ids=()):
-    """Retire exact owned copies from QGIS, keeping their GeoPackages on disk."""
+    """Retire owned copies and older 25 m results, keeping all GeoPackages."""
     project = project or QgsProject.instance()
     root = project.layerTreeRoot()
     preferred = set(preferred_ids)
@@ -62,6 +122,8 @@ def deduplicate_boundaries(project=None, preferred_ids=()):
         if len(records) != 1:
             continue
         feature = records[0]
+        if _is_25m(feature['RES_X_M'], feature['RES_Y_M']):
+            continue  # The current 25 m query is selected below, even if its geometry differs.
         geometry = QgsGeometry(feature.geometry())
         if geometry.isNull() or geometry.isEmpty():
             continue
@@ -80,10 +142,11 @@ def deduplicate_boundaries(project=None, preferred_ids=()):
             kept.setdefault(signature, []).append(layer)
     if duplicates:
         project.removeMapLayers(duplicates)
+    removed_25m = _keep_current_25m(project, preferred)
     for group in reversed(root.findGroups()):
         if group.customProperty(OWNER_PROPERTY, '') and not group.children():
             group.parent().removeChildNode(group)
-    return len(duplicates)
+    return len(duplicates) + removed_25m
 
 
 def boundary_symbol(kind):
@@ -105,7 +168,7 @@ def _polygon(geometry):
 
 
 class BoundaryLayers:
-    """One pair per query/resolution; closing a dialog keeps project layers."""
+    """Durable results; only the current 25 m query stays loaded in QGIS."""
     def __init__(self, directory=None):
         self.directory = Path(directory) if directory is not None else storage_directory()
         self.layers = {}
@@ -218,12 +281,14 @@ class BoundaryLayers:
             geometries['suavizada'] = _polygon(smooth)
         self._result_keys.add(key)
         layers = self._existing(key)
+        if _is_25m(analysis.cell_width, analysis.cell_height):
+            if any(layer.isEditable() and layer not in layers.values()
+                   for layer in _managed_25m(project)):
+                raise ValueError('Finaliza la edición de la divisoria de 25 m antes de sustituirla.')
         root = project.layerTreeRoot()
         group = next((node for node in root.children() if node.customProperty(OWNER_PROPERTY) == key), None)
         title = boundary_display_name(analysis)
-        if group is not None:
-            # Reuse persistent layers while migrating older coordinate-heavy labels.
-            group.setName(title)
+        updated = str(time.time_ns())
         for kind, geometry in geometries.items():
             attributes = [kind, int(degree) if kind == 'suavizada' else 0,
                           analysis.cell_width, analysis.cell_height, analysis.outlet_x, analysis.outlet_y]
@@ -232,12 +297,18 @@ class BoundaryLayers:
                 layer = self._open_or_create(key, kind, crs, geometry, attributes)
             self._populate(layer, geometry, attributes)
             layer.setCustomProperty(QUERY_PROPERTY, key)
+            layer.setCustomProperty(UPDATED_PROPERTY, updated)
             layer.setName(title + (f' · suavizada (grado {int(degree)})'
                                    if kind == 'suavizada' else ''))
             layers[kind] = layer
-            if group is None:
-                group = create_result_group(project, title, 20)
-                group.setCustomProperty(OWNER_PROPERTY, key)
+        # Prepare every geometry before publishing a replacement in the tree.
+        # A failed new result must leave the previous loaded result intact.
+        if group is None:
+            group = create_result_group(project, title, 20)
+            group.setCustomProperty(OWNER_PROPERTY, key)
+        else:
+            group.setName(title)
+        for layer in layers.values():
             if project.mapLayer(layer.id()) is None:
                 project.addMapLayer(layer, False)
             if root.findLayer(layer.id()) is None:

@@ -45,6 +45,8 @@ class RationalBasinDialogTests(unittest.TestCase):
         self.manager = SimpleNamespace(tasks=[])
         self.manager.addTask = lambda task: self.manager.tasks.append(task)
         self.patchers = [
+            patch('caumax_consulta.boundary_layers.storage_directory',
+                  return_value=f.folder / 'boundaries'),
             patch('caumax_consulta.basin_dialog.QgsApplication.taskManager', return_value=self.manager),
             patch('caumax_consulta.flow_quantiles.sample_quantiles',
                   side_effect=AssertionError('Rational work must never sample Q rasters')),
@@ -152,6 +154,29 @@ class RationalBasinDialogTests(unittest.TestCase):
         self.assertAlmostEqual(hydrology['basin_area_m2'], dialog.analysis.area_m2)
         self.assertNotIn('flow_quantiles', dialog.get_smoothing_state())
         self.assertTrue(dialog.report_button.isEnabled())
+
+    def test_custom_extents_open_smooth_and_return_to_original_native_surface(self):
+        f = self.fixture
+        f.calc.mdt = np.pad(f.calc.mdt, ((0, 2), (0, 1)), constant_values=180)
+        f.calc.basinCells = np.pad(f.calc.basinCells, ((0, 2), (0, 1)))
+        f.paths['MDT'] = f.folder / 'custom_mdt.tif'
+        _write(f.paths['MDT'], f.calc.mdt, f.transform, f.reference)
+        query = rational_basin.capture_rational_query(f.dialog)
+        task = AnalysisTask(query, lambda *_: None)
+        self.assertTrue(task.run(), task.error)
+        dialog = self.dialog
+        dialog.query, dialog.analysis = query, task.result
+        dialog._display_analysis()
+        original = task.result.geometry_wkb
+        dialog.smooth_check.setChecked(True); dialog.smoothing_degree.setValue(21)
+        dialog._smoothing_timer.stop(); dialog._update_smoothing()
+        self.publish(self.manager.tasks[-1])
+        self.assertLess(dialog.analysis.area_m2, query.rational_context['area_m2'])
+        dialog.smooth_check.setChecked(False)
+        dialog._smoothing_timer.stop(); dialog._update_smoothing()
+        self.publish(self.manager.tasks[-1])
+        self.assertEqual(dialog.analysis.geometry_wkb, original)
+        self.assertIs(rational_basin.validate_rational_analysis(dialog.analysis, query), dialog.analysis)
 
     def test_smoothed_pending_project_round_trips_without_flow_or_raster_reads(self):
         dialog = self.dialog

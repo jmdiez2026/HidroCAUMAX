@@ -60,6 +60,7 @@ class SurfaceTask(QgsTask):
             analysis = analyze_basin(self.query.directions_path, self.query.dem_path,
                 self.base.outlet_x, self.base.outlet_y, surface_wkb=self.surface_wkb,
                 cancelled=self.isCanceled,
+                allow_different_extents=getattr(self.query, 'source_kind', '') == 'rational',
                 progress=self._publish_terrain_progress)
             diagnostics = dict(self.base.diagnostics)
             for key in ('analysis_surface', 'terrain_valid_area_m2', 'terrain_weighting'):

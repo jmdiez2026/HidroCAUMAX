@@ -80,14 +80,14 @@ def _geotransform(dataset, label):
     return transform
 
 
-def _aligned(directions_ds, dem_ds):
+def _aligned(directions_ds, dem_ds, *, same_dimensions=True):
     directions_srs = _spatial_reference(directions_ds, "direcciones")
     dem_srs = _spatial_reference(dem_ds, "MDT")
     if not directions_srs.IsSame(dem_srs):
         raise ValueError("Los CRS del MDT y de las direcciones no son equivalentes.")
     transform = _geotransform(directions_ds, "direcciones")
     dem_transform = _geotransform(dem_ds, "MDT")
-    if (directions_ds.RasterXSize, directions_ds.RasterYSize) != (
+    if same_dimensions and (directions_ds.RasterXSize, directions_ds.RasterYSize) != (
         dem_ds.RasterXSize, dem_ds.RasterYSize
     ):
         raise ValueError("El MDT y las direcciones deben tener la misma malla y dimensiones.")
