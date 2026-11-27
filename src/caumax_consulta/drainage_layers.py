@@ -18,20 +18,25 @@ from qgis.core import (QgsCoordinateReferenceSystem,QgsFeature,QgsField,QgsGeome
 OWNER_PROPERTY='HidroCAUMAX/drainage_owner'
 ROLE_PROPERTY='HidroCAUMAX/drainage_role'
 
-def _private_taudem_directory(source):
-    """Recognize *only* a query-owned TauDEM temp directory, never exports."""
+def _private_generated_directory(source):
+    """Identify only one resolution/TauDEM temp subtree, never an export."""
     try:
         root = (Path(tempfile.gettempdir()).resolve() / 'HidroCAUMAX' / 'dem_variants')
         source = Path(str(source).split('|', 1)[0]).resolve()
         parts = source.relative_to(root).parts
-        if (len(parts) < 5 or not re.fullmatch(r'[a-f0-9]{20}', parts[0])
-                or parts[1] != 'taudem'
-                or not re.fullmatch(r'[0-9]+(?:[.][0-9]+)?', parts[2])):
+        if len(parts) < 3 or not re.fullmatch(r'[a-f0-9]{20}', parts[0]):
             return None
-        candidate = root / parts[0] / 'taudem' / parts[2]
-        if candidate.is_symlink():
+        if (re.fullmatch(r'resolution_[0-9]+(?:_[0-9]+)?', parts[1])
+                and len(parts) >= 3):
+            directory = root / parts[0] / parts[1]
+        elif (parts[1] == 'taudem' and len(parts) >= 5
+              and re.fullmatch(r'[0-9]+(?:[.][0-9]+)?', parts[2])):
+            directory = root / parts[0] / 'taudem' / parts[2]
+        else:
             return None
-        return candidate
+        if directory.is_symlink():
+            return None
+        return directory
     except (OSError, ValueError, TypeError):
         return None
 
@@ -39,8 +44,8 @@ def _private_taudem_directory(source):
 def _remove_unused_taudem_caches(candidates, project, protected_paths):
     if not candidates:
         return
-    protected = {_private_taudem_directory(path) for path in protected_paths}
-    protected.update(_private_taudem_directory(layer.source())
+    protected = {_private_generated_directory(path) for path in protected_paths}
+    protected.update(_private_generated_directory(layer.source())
                      for layer in project.mapLayers().values()
                      if layer.providerType() in ('gdal', 'ogr'))
     for cache in candidates - protected:
@@ -71,7 +76,7 @@ def _remove_unused_taudem_caches(candidates, project, protected_paths):
 def prune_managed_drainage(project=None, *, keep_owner=None, protected_paths=(), retire_paths=()):
     """Only the currently selected TauDEM generation may remain in QGIS.
 
-    Remove older managed QGIS layers and unreferenced temporary D8 outputs.
+    Remove older managed layers and private MDT/D8 processing caches.
     Explicit TIFF/SHP exports and user-created layers are never removed.
     """
     project = project or QgsProject.instance()
@@ -83,9 +88,9 @@ def prune_managed_drainage(project=None, *, keep_owner=None, protected_paths=(),
                for layer in obsolete if isinstance(layer, QgsVectorLayer) and layer.isEditable()}
     obsolete = [layer for layer in obsolete
                 if layer.customProperty(OWNER_PROPERTY) not in editing]
-    candidates = {_private_taudem_directory(layer.source()) for layer in obsolete
+    candidates = {_private_generated_directory(layer.source()) for layer in obsolete
                   if layer.providerType() == 'gdal'}
-    candidates.update(_private_taudem_directory(path) for path in retire_paths)
+    candidates.update(_private_generated_directory(path) for path in retire_paths)
     candidates.discard(None)
     if obsolete:
         project.removeMapLayers([layer.id() for layer in obsolete])
