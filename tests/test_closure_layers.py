@@ -88,8 +88,8 @@ class ClosureLayersTests(unittest.TestCase):
                             for s in ('.shp', '.shx', '.dbf', '.prj')))
         from qgis.core import QgsVectorLayer
         reloaded = QgsVectorLayer(str(target), 'Cierre reabierto', 'ogr')
-        success, reason = reloaded.loadNamedStyle(str(target.with_suffix('.qml')))
-        self.assertTrue(success, reason)
+        message, success = reloaded.loadNamedStyle(str(target.with_suffix('.qml')))
+        self.assertTrue(success, message)
         self.assertEqual(reloaded.renderer().symbol().color().name(), '#23e733')
         self.assertAlmostEqual(reloaded.renderer().symbol().size(), 5.)
         with self.assertRaisesRegex(ValueError, 'existe'):
