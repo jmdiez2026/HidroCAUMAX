@@ -392,7 +392,7 @@ class RationalInputsBridge(QObject):
             try:
                 try:
                     result = original(*args, **kwargs)
-                except (FineGridError, ZeroDivisionError, ValueError) as error:
+                except (FineGridError, ZeroDivisionError) as error:
                     calculator = getattr(owner, 'basinCalc', None)
                     message = (str(error) if isinstance(error, FineGridError)
                                else _fine_failure_message(calculator, error)
