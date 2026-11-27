@@ -90,9 +90,20 @@ def plan(root: Path, target: str) -> dict[Path, bytes]:
                        "b'HidroCAUMAX/" + next_tag[1:] + "'", str(path))
 
     path, content = source('README.md')
-    content = _one(content,
-        f'Versión pública actual: **{old_tag}** (versión técnica del paquete: **{existing}**)',
-        f'Versión pública actual: **{next_tag}** (versión técnica del paquete: **{target}**)', str(path))
+    # Both original release notes and the current concise introductory line
+    # are valid README layouts. The current repository uses the latter.
+    historic = (f'Versión pública actual: **{old_tag}** '
+                f'(versión técnica del paquete: **{existing}**)')
+    if historic in content:
+        content = _one(content, historic,
+            f'Versión pública actual: **{next_tag}** '
+            f'(versión técnica del paquete: **{target}**)', str(path))
+    else:
+        introduction = (f'Nombre visible: **{current_name}**; '
+                        f'revisión técnica del paquete: **{existing}**')
+        content = _one(content, introduction,
+            f'Nombre visible: **{next_name}**; '
+            f'revisión técnica del paquete: **{target}**', str(path))
     content = _one(content, f'Descargas de la versión **{old_tag}**:',
                    f'Descargas de la versión **{next_tag}**:', str(path))
     content = _one(content, f'La versión {old_tag} se distribuye',
