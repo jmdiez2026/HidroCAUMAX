@@ -288,6 +288,31 @@ class DrainageLayersTests(unittest.TestCase):
         self.assertIs(self.project.mapLayer(user.id()), user)
         self.assertEqual(first.layers, {})
 
+    def test_selected_5m_keeps_only_its_taudem_group_in_qgis(self):
+        old_25 = self.controller('old_25')
+        duplicate_25 = self.controller('duplicate_25')
+        current_5 = self.controller('current_5')
+        state = self.snapshot()
+        first = old_25.update(self.analysis, state)['network']
+        second = duplicate_25.update(self.analysis, state)['network']
+        fine = SimpleNamespace(cell_width=5., cell_height=5.)
+        current = current_5.update(fine, state)['network']
+        user = QgsVectorLayer('LineString?crs=EPSG:25830', 'Red propia', 'memory')
+        self.project.addMapLayer(user)
+        removed = drainage.prune_managed_drainage(
+            self.project, keep_owner=current_5.owner_key)
+        self.assertGreaterEqual(removed, 2)
+        self.assertIsNone(self.project.mapLayer(first.id()))
+        self.assertIsNone(self.project.mapLayer(second.id()))
+        self.assertIs(self.project.mapLayer(current.id()), current)
+        self.assertIs(self.project.mapLayer(user.id()), user)
+        groups = [g for g in self.project.layerTreeRoot().findGroups()
+                  if g.customProperty(drainage.OWNER_PROPERTY)]
+        self.assertEqual(len(groups), 1)
+        self.assertIn('5×5 m', groups[0].name())
+        self.assertEqual(drainage.prune_managed_drainage(
+            self.project, keep_owner=current_5.owner_key), 0)
+
     def test_drainage_group_is_below_courses_above_terrain_and_persists_on_close(self):
         tree = self.project.layerTreeRoot()
         terrain = tree.insertGroup(0,'Terrain');course = tree.insertGroup(0,'Course')
