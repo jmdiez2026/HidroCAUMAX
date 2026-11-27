@@ -83,6 +83,7 @@ def style_query_network(project):
                     break
             if selected_index is None:
                 continue
+            del category
             # QgsRendererCategory/QgsSymbol Python wrappers refer to C++ data
             # owned by the renderer. Replacing the whole renderer while those
             # wrappers still exist can invalidate their pointers in PyQGIS.
