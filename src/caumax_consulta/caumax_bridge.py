@@ -343,6 +343,7 @@ class _Binding:
     query: object = None
     query_dirty: bool = False
     settle_pending: bool = False
+    observed_signature: object = None
 
 
 class CaumaxBridge(QObject):
@@ -480,10 +481,31 @@ class CaumaxBridge(QObject):
                     break
         return False
 
+    @staticmethod
+    def _quick_signature(dialog):
+        """Observe changes without opening a raster four times per second."""
+        point = getattr(dialog, 'lastValidPoint', None)
+        coordinates = (float(point.x()), float(point.y())) if point is not None else None
+        return (
+            bool(dialog.btnReport.isEnabled()),
+            dialog.txtX.text(), dialog.txtY.text(),
+            dialog.txtResultFlow.text(), dialog.txtResultReturnPeriod.text(),
+            coordinates,
+            tuple((id(button), bool(button.isChecked()))
+                  for button in dialog.buttonsAndLayers),
+        )
+
     def _sync(self, key):
         binding = self._bindings.get(key)
         if binding is None or not self._running:
             return
+        # CAUMAX's own calculation remains authoritative. Polling should not
+        # repeatedly open its huge official Q(T) raster while Qt is rendering
+        # or processing a query that has not changed.
+        signature = self._quick_signature(binding.dialog)
+        if signature == binding.observed_signature:
+            return
+        binding.observed_signature = signature
         try:
             binding.query = make_native_query(binding.dialog, binding.module)
         except (AttributeError, TypeError, ValueError, RuntimeError, OSError):
@@ -503,6 +525,9 @@ class CaumaxBridge(QObject):
             binding.query_dirty = True
             if self.on_query_started is not None:
                 self.on_query_started(binding.dialog)
+        # Re-query was explicitly requested, even when the native result text
+        # happens to be unchanged from the previous calculation.
+        binding.observed_signature = None
         self._sync(key)
 
     def _settle_query(self, key):
