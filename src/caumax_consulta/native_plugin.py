@@ -49,10 +49,12 @@ class NativeCaumaxPlugin(QObject):
         from .improved_layers import remove_improved_folder_group
         from .boundary_layers import deduplicate_boundaries
         from .drainage_layers import migrate_drainage_display_names
+        from .course_layers import migrate_course_display_names
         from .terrain_layers import remove_native_terrain
         remove_improved_folder_group()
         deduplicate_boundaries()
         migrate_drainage_display_names()
+        migrate_course_display_names()
         remove_native_terrain()
 
     def initGui(self):
