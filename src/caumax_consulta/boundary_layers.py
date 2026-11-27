@@ -95,6 +95,9 @@ def _prune_obsolete_files(paths, directories, project):
     for raw in sorted(set(paths)):
         path = Path(raw)
         try:
+            # A symlink must never bypass the profile-store allowlist.
+            if path.is_symlink():
+                continue
             actual = path.resolve()
             if (actual.parent not in roots or not re.fullmatch(
                     r'[0-9a-f]{32}_(original|suavizada)\.gpkg', actual.name)
