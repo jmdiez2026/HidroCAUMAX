@@ -292,7 +292,7 @@ class RationalLayersPanelTests(unittest.TestCase):
         self.assertFalse(QgsProject.instance().layerTreeRoot()
                         .findLayer(dem.id()).itemVisibilityChecked())
         self.assertEqual(panel._layers.visibility(),
-                         dict(network=True, directions=False, dem=False, hillshade=True))
+                         dict(network=True, directions=False, closure=True, dem=False, hillshade=True))
         self.assertTrue(group.isExpanded())
         self.assertTrue(all(not node.isExpanded() for node in group.children()))
         # A new Generate click restores the requested presentation even when
@@ -306,7 +306,7 @@ class RationalLayersPanelTests(unittest.TestCase):
         products, state = panel._controller.drainage.complete()
         group = panel._layers._group
         self.assertEqual(panel._layers.visibility(),
-                         dict(network=True, directions=False, dem=False, hillshade=True))
+                         dict(network=True, directions=False, closure=True, dem=False, hillshade=True))
         self.assertTrue(group.itemVisibilityChecked())
         self.assertTrue(group.isExpanded())
         self.assertTrue(all(not node.isExpanded() for node in group.children()))
