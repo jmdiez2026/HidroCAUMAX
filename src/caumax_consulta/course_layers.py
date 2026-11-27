@@ -2,7 +2,6 @@
 
 from bisect import bisect_right
 import math
-import re
 from uuid import uuid4
 
 from qgis.PyQt import sip
@@ -66,10 +65,20 @@ def migrate_course_display_names(project=None):
             except (TypeError, ValueError):
                 continue
         if wanted is None:
-            # Empty legacy memory layers may be restored with no features.
-            # The old generated title ends with '; 500×500 m]' (etc.).
-            match = re.search(r';\s*([0-9]+(?:\.[0-9]+)?)\s*[x×]\s*'
-                              r'([0-9]+(?:\.[0-9]+)?)\s*m\]
+            # Empty memory layers restored from QGIS can still have an old
+            # generated title such as '[X=...; Y=...; celda Q ...; 500×500 m]'.
+            # Only plugin-owned groups are eligible for this fallback.
+            suffix = group.name().rsplit(';', 1)[-1].strip()
+            if suffix.endswith(' m]'):
+                dimensions = suffix[:-3].replace('×', 'x').split('x')
+                if len(dimensions) == 2:
+                    try:
+                        wanted = _course_group_name(*map(float, dimensions))
+                    except (TypeError, ValueError):
+                        pass
+        if wanted is not None and group.name() != wanted:
+            group.setName(wanted)
+            changed += 1
     return changed
 
 
