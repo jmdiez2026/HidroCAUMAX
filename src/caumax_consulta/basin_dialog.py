@@ -614,6 +614,15 @@ class BasinDialog(QDialog):
         self.reject()
 
     def _start(self):
+        # Yesterday's resolution choices are populated only after a valid
+        # initial basin; keep the controls visible while it is being computed.
+        if not self.resolution_checkboxes:
+            self._resolution_options([
+                {'key': key, 'resolution': float(key), 'available': False,
+                 'label': 'MDT ' + key + ' m',
+                 'status': 'Preparando cuenca de referencia'}
+                for key in ('500', '25', '5')
+            ])
         try:
             directions = QgsRasterLayer(str(self.query.directions_path), 'Direcciones de drenaje', 'gdal')
             if not directions.isValid() or not directions.crs().isValid():
@@ -629,6 +638,7 @@ class BasinDialog(QDialog):
     def _failed(self, message):
         self._clear_interpretations()
         self.progress.hide()
+        self.context_mdt.setText('MDT activo: cálculo no disponible')
         for row, metric in enumerate(METRICS):
             self.table.item(row, 1).setText(format_value(metric.key, None))
         self.status.setText(message)
