@@ -144,6 +144,9 @@ class BasinDialog(QDialog):
         self._quantiles_loading = False
         self._basin_hydrology_controller = None
         self._basin_hydrology_loading = False
+        self._auto_hydrology_timer = QTimer(self)
+        self._auto_hydrology_timer.setSingleShot(True)
+        self._auto_hydrology_timer.timeout.connect(self._auto_calculate_basin_hydrology)
         self._drainage_timer = QTimer(self)
         self._drainage_timer.setSingleShot(True)
         self._drainage_timer.setInterval(500)
@@ -674,6 +677,9 @@ class BasinDialog(QDialog):
         if self._pending_external_basin is not None:
             pending, self._pending_external_basin = self._pending_external_basin, None
             self.adopt_refined_basin(*pending)
+        # Defer until the initial basin and its resolution widgets have been
+        # published. Never calculate on a partially delineated surface.
+        self._auto_hydrology_timer.start(0)
 
     def _display_analysis(self, quantile_snapshot=None):
         self._interpretations_valid = True
@@ -787,7 +793,26 @@ class BasinDialog(QDialog):
         return bool(self._surface_pending or
                     (self._basin_hydrology_controller and self._basin_hydrology_controller.busy))
 
+    def _auto_calculate_basin_hydrology(self):
+        """One background pass for P₀ and all six Pd(T) means, no button press.
+
+        The surface recalculation worker already recomputes both quantities on
+        subsequent smoothing/resolution changes; do not duplicate that worker.
+        """
+        if (self._disposed or self.analysis is None
+                or self._surface_pending or not self._surface_valid
+                or self._resolution_pending or self._saving_project):
+            return
+        if self._basin_hydrology_busy():
+            return
+        snapshot = self.basin_hydrology_widget.snapshot()
+        if snapshot is None or (snapshot['p0_result'] is not None
+                and len(snapshot['rainfall_results']) == 6):
+            return
+        self._calculate_basin_hydrology('both')
+
     def _calculate_basin_hydrology(self, kind):
+        self._auto_hydrology_timer.stop()
         if (self._disposed or self.analysis is None or self._saving_project
                 or self._resolution_pending or self._surface_pending or not self._surface_valid):
             return
@@ -835,7 +860,10 @@ class BasinDialog(QDialog):
         from .basin_hydrology import basin_fingerprint
         if fingerprint == basin_fingerprint(self.analysis):
             try:
-                self.basin_hydrology_widget.set_result(kind, result)
+                if kind == 'both':
+                    self.basin_hydrology_widget.set_results(result['p0'], result['rainfall'])
+                else:
+                    self.basin_hydrology_widget.set_result(kind, result)
                 self._cache_variant_state()
             except Exception as error:
                 self._basin_hydrology_failed(str(error))
@@ -848,6 +876,7 @@ class BasinDialog(QDialog):
             self.basin_hydrology_widget.set_busy(False, text)
 
     def _cancel_basin_hydrology(self):
+        self._auto_hydrology_timer.stop()
         if self._surface_pending:
             self._cancel_surface()
             self._surface_valid = False
