@@ -277,15 +277,16 @@ class DrainageLayersTests(unittest.TestCase):
             keep_owner=second.owner_key, preserve_published=False,
             protected_paths=(state['dem_path'], state['caumax_d8_path']))
         self.assertTrue(all(self.project.mapLayer(k) is None for k in ids))
-        self.assertTrue(all(self.project.mapLayer(layer.id()) is layer
-                            for layer in current.values()))
+        current_ids = {kind: layer.id() for kind, layer in current.items()}
+        self.assertTrue(all(self.project.mapLayer(layer_id) is current[kind]
+                            for kind, layer_id in current_ids.items()))
         self.assertFalse(sip.isdeleted(second._group))
         self.assertTrue(Path(state['dem_path']).is_file())
         self.assertTrue(Path(state['caumax_d8_path']).is_file())
         from caumax_consulta.delineation_cleanup import clear_delineation_layers
         clear_delineation_layers(self.project)
-        self.assertTrue(all(self.project.mapLayer(layer.id()) is None
-                            for layer in current.values()))
+        self.assertTrue(all(self.project.mapLayer(layer_id) is None
+                            for layer_id in current_ids.values()))
 
     def test_offline_network_survives_missing_caumax_raster_without_native_fallback(self):
         state = self.snapshot()
