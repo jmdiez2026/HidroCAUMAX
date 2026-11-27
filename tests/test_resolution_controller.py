@@ -287,6 +287,31 @@ class ResolutionControllerTests(unittest.TestCase):
         self.assertEqual(c.selection_context()['reason'],'Celda NoData')
         self.assertIn('NoData',self.errors[-1])
 
+    def test_missing_previously_verified_d8_cache_forces_rebuild(self):
+        # Only a grid that physically existed when generated may later be
+        # invalidated. Restored/manual fixtures without such files survive.
+        c = self.controller()
+        self.discover(c)
+        def generated_with_d8(path, x, y, cache_dir, cancelled, progress, **kwargs):
+            payload = self.fake_analyze(path, x, y, cache_dir,
+                                        cancelled, progress, **kwargs)
+            directions = Path(payload.directions_path)
+            directions.parent.mkdir(parents=True, exist_ok=True)
+            directions.write_bytes(b'synthetic D8 fixture')
+            return payload
+        with patch.object(rc, '_analyze_dem', side_effect=generated_with_d8):
+            self.assertTrue(c.select('25'))
+            self.wait(lambda: not c.busy)
+            self.assertIn('25', c._verified_cache_sources)
+            old_analysis = c.variants['25']['analysis']
+            source = Path(c.variants['25']['query'].directions_path)
+            source.unlink()
+            self.assertTrue(c.select('25'))
+            self.wait(lambda: not c.busy)
+            self.assertIsNot(c.variants['25']['analysis'], old_analysis)
+            self.assertTrue(source.is_file())
+            self.assertIn('25', c._verified_cache_sources)
+
     def test_selection_keeps_native_point_flow_period_and_uses_cache(self):
         c=self.controller()
         self.discover(c)
