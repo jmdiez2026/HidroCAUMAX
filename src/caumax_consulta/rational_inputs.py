@@ -7,6 +7,9 @@ D8 product receive an iterative equivalent of its recursive upstream walk.
 from dataclasses import dataclass, field
 import functools
 import math
+import os
+import re
+import statistics
 import sys
 import types
 import weakref
@@ -16,6 +19,8 @@ from osgeo import gdal, osr
 from qgis.PyQt.QtCore import QObject, QTimer, pyqtSignal
 from qgis.PyQt.QtWidgets import QApplication, QDialog
 from qgis.core import Qgis, QgsMessageLog
+
+from .rational_grid_validation import verify_fine_rational_pair
 
 
 _MISSING = object()
@@ -159,17 +164,85 @@ def _fine_failure_message(calculator, error):
     return None
 
 
-def _report_fine_failure(iface, message):
+def _report_fine_failure(iface, message, dialog=None):
     QgsMessageLog.logMessage(str(message), 'HidroCAUMAX', Qgis.Warning)
+    # CAUMAX embeds its own QgsMessageBar in Método racional. Use that first
+    # so the explanation is visible next to the disabled calculation buttons.
+    bars = [getattr(dialog, 'bar', None)] if dialog is not None else []
     bar_method = getattr(iface, 'messageBar', None)
     if callable(bar_method):
         try:
-            bar = bar_method()
-            if bar is not None:
-                bar.pushMessage('HidroCAUMAX', str(message),
-                                level=Qgis.Warning, duration=12)
+            bars.append(bar_method())
         except (AttributeError, RuntimeError, TypeError):
             pass
+    for bar in bars:
+        if bar is not None:
+            try:
+                bar.pushMessage('HidroCAUMAX', str(message),
+                                level=Qgis.Warning, duration=15)
+            except (AttributeError, RuntimeError, TypeError):
+                pass
+
+
+def _configured_rational_paths(dialog):
+    """Resolve only the actual rational settings, never original Q(T) paths."""
+    for cls in type(dialog).__mro__:
+        if not cls.__module__.endswith('.rationalmethoddialog'):
+            continue
+        module = sys.modules.get(cls.__module__.rsplit('.', 1)[0] + '.layers')
+        if module is None or not all(hasattr(module, key) for key in ('MDT', 'FLOWDIRS')):
+            return None
+        reader = getattr(module, 'getLayerPath', None)
+        if not callable(reader):
+            return None
+        try:
+            return (os.fspath(reader(module.MDT)), os.fspath(reader(module.FLOWDIRS)))
+        except (OSError, KeyError, AttributeError, ValueError, TypeError):
+            return None
+    return None
+
+
+def _rational_source_identity(paths):
+    if not paths:
+        return None
+    result = []
+    for path in paths:
+        try:
+            full = os.path.normcase(os.path.abspath(path))
+            stat = os.stat(full)
+            result.append((full, stat.st_size, stat.st_mtime_ns))
+        except (OSError, ValueError, TypeError):
+            result.append((str(path), None, None))
+    return tuple(result)
+
+
+def _fine_preflight(dialog, paths):
+    """Check configured 25/5 m TIFFs *before* native CAUMAX tests the MDT."""
+    if not paths:
+        return None
+    # Avoid changing behaviour or required data in the original 500 m method.
+    filenames = ' '.join(os.path.basename(str(path)).lower() for path in paths)
+    named_fine = bool(re.search(r'(?:^|[_-])(?:25|5)(?:m|x25|x5|[_.-])', filenames))
+    dem = None
+    try:
+        dem = gdal.Open(str(paths[0]), gdal.GA_ReadOnly)
+        resolution = abs(float(dem.GetGeoTransform()[1])) if dem else None
+    except (RuntimeError, TypeError, ValueError):
+        resolution = None
+    finally:
+        dem = None
+    if (not named_fine and resolution is not None
+            and not any(math.isclose(resolution, r, abs_tol=1e-7, rel_tol=0)
+                        for r in _FINE_RESOLUTIONS)):
+        return None
+    if resolution is None and not named_fine:
+        return None
+    try:
+        x = float(dialog.txtX.text())
+        y = float(dialog.txtY.text())
+    except (AttributeError, TypeError, ValueError):
+        return None  # Let CAUMAX report an invalid native point.
+    return verify_fine_rational_pair(paths[0], paths[1], x, y)
 
 
 def _is_owned_directions(path):
@@ -324,6 +397,7 @@ class _DialogBinding:
     calculators: list = field(default_factory=list)
     flow_previous: object = _MISSING
     flow_replacement: object = None
+    source_identity: object = None
 
 
 class RationalInputsBridge(QObject):
@@ -440,6 +514,29 @@ class RationalInputsBridge(QObject):
 
             self.calculation_started.emit(owner, stage)
             if stage == 'parameters':
+                paths = _configured_rational_paths(owner)
+                try:
+                    _fine_preflight(owner, paths)
+                except ValueError as error:
+                    message = str(error)
+                    event['failure_reason'] = message
+                    owner.btnCalculate.setEnabled(False)
+                    _report_fine_failure(self.iface, message, owner)
+                    self.calculation_finished.emit(owner, stage, event)
+                    return None
+                current_identity = _rational_source_identity(paths)
+                # CAUMAX only creates BasinCalculator if basinCalc is None.
+                # A changed 25/5 m TIFF pair must never reuse stale arrays
+                # from the previous configuration. Do not reset it merely
+                # because the user clicked elsewhere on the same raster.
+                if (current_identity is not None
+                        and binding.source_identity is not None
+                        and current_identity != binding.source_identity
+                        and getattr(owner, 'basinCalc', None) is not None):
+                    owner.basinCalc = None
+                if current_identity is not None:
+                    binding.source_identity = current_identity
+            if stage == 'parameters':
                 record('btnCalculate', 'setEnabled', 'ready_writes')
             else:
                 record('txtResultFlow', 'setText', 'flow_writes')
@@ -459,7 +556,7 @@ class RationalInputsBridge(QObject):
                     if not message:
                         raise
                     event['failure_reason'] = message
-                    _report_fine_failure(self.iface, message)
+                    _report_fine_failure(self.iface, message, owner)
                     # CAUMAX has disabled Calcular while the basin is invalid.
                     # Do not publish a stale basin or an invented Tc.
                     return None
@@ -515,6 +612,8 @@ class RationalInputsBridge(QObject):
                     continue
                 previous = dialog.calculateParameters
                 binding = _DialogBinding(dialog, _MISSING, None)
+                binding.source_identity = _rational_source_identity(
+                    _configured_rational_paths(dialog))
                 try:
                     adapted = _clone_calculation(previous, lambda cls: self._factory(cls, binding))
                 except ValueError:
