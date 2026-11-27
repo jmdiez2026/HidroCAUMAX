@@ -1138,7 +1138,7 @@ class BasinDialog(QDialog):
                 enabled = bool(option and option.get('available'))
                 item = self.resolution_combo.model().item(index)
                 item.setEnabled(enabled)
-                tooltip = ((option.get('label', '') + '\\n' +
+                tooltip = ((option.get('label', '') + '\n' +
                             option.get('status', '')).strip()
                            if option is not None else
                            'No disponible para esta cuenca')
