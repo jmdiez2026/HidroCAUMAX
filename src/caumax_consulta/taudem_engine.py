@@ -67,7 +67,7 @@ def probe_taudem(bin_dir=None, *, required_tools=None):
     """Find the real tools and MPI without changing environment or settings."""
     required_tools = _TOOLS if required_tools is None else tuple(required_tools)
     if not required_tools or any(tool not in _TOOLS for tool in required_tools):
-        raise ValueError('Herramientas TauDEM solicitadas no válidas.')
+        raise ValueError('Herramientas Esri-D8 solicitadas no válidas.')
     if bin_dir is None:
         try:
             bundled = _runtime.discover_bundled_runtime()
@@ -604,7 +604,7 @@ def prepare_taudem(dem_path, outlet_x, outlet_y, cache_dir, *, reference_area_m2
         diagnostic.update(taudem_pipeline_executed=True, dem_hydrology=metadata)
         if snap is not None:
             diagnostic['outlet_snap'] = snap
-        notes = tuple(note for note in analysis.notes if "No se ejecuta Esri-D8" not in note)
+        notes = tuple(note for note in analysis.notes if "No se ejecuta TauDEM" not in note and "No se ejecuta Esri-D8" not in note)
         notes += ("Direcciones y red Esri-D8 calculadas con: PitRemove, D8FlowDir, AreaD8, Threshold y StreamNet. "
                   "Las cotas, TRI y pendiente local siguen usando el MDT original, no el MDT rellenado.",)
         analysis = replace(analysis, selected_x=selection['original_x'], selected_y=selection['original_y'],

@@ -86,7 +86,7 @@ def _inventory(archive):
             continue
         total += item.file_size
         if total > _MAX_BYTES or item.file_size > 512*1024**2 or item.flag_bits & 1:
-            raise ValueError('Tamaño o cifrado no admitido en el runtime TauDEM.')
+            raise ValueError('Tamaño o cifrado no admitido en el motor Esri-D8.')
         members[name] = item
     if 'manifest.json' not in members or members['manifest.json'].file_size > 4*1024**2:
         raise ValueError('Falta el manifiesto del motor Esri-D8.')
@@ -194,7 +194,7 @@ def _validate_cache(root, manifest, manifest_bytes, checksum, vc_hashes, cancell
         raise ValueError('La caché Esri-D8 no corresponde al paquete integrado.')
     for name, expected_hash in verified_files.items():
         if _digest(_child(root, name), cancelled).lower() != expected_hash.lower():
-            raise ValueError('Archivo de caché TauDEM dañado: ' + name)
+            raise ValueError('Archivo de caché Esri-D8 dañado: ' + name)
 
 
 def ensure_runtime(engine, cancelled=lambda: False):

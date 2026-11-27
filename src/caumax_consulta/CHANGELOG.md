@@ -1,3 +1,11 @@
+# HidroCAUMAX v.1.0 — denominación visible Esri-D8 (preparación 1.0.18)
+
+- Los grupos y las capas de red calculadas se muestran como **HidroCAUMAX · Drenaje Esri-D8** y **Red de drenaje Esri-D8**. Las etiquetas de diálogos, estados, mensajes y manual adoptan la misma denominación.
+- Los proyectos antiguos migran los nombres gestionados sin tocar las capas ajenas ni los datos o los identificadores de QGIS.
+- Esta actualización es de presentación. El motor real sigue siendo TauDEM, la procedencia sigue registrada como `HIDROCAUMAX_ENGINE=TauDEM` y la codificación final permanece `FLOW_DIRECTION_ENCODING=ESRI_D8`.
+
+---
+
 # HidroCAUMAX v.1.0 — corrección exportación D8, divisorias y TauDEM (revisión 1.0.17, 2026-11-27)
 
 - Se corrige la comprobación de máscara al exportar direcciones D8 CAUMAX/ESRI cuando TauDEM asigna direcciones fuera del MDT válido. Se verifica el GeoTIFF completo en el destino elegido, incluida la carpeta predeterminada ResolucionMejorada.
