@@ -212,7 +212,8 @@ class BasinHydrologyTests(unittest.TestCase):
         module = SimpleNamespace(P0="P0", RAIN_2="RAIN_2",
                                  getLayerPath=lambda key: {"P0": "/configured/missing-p0.tif", "RAIN_2": ""}[key],
                                  getLayer=Mock(side_effect=AssertionError("No project/layer access")))
-        query = SimpleNamespace(dem_path=str(self.folder / "cache/mdt25.tif"), flow_layer_path="")
+        query = SimpleNamespace(dem_path=str(self.folder / "cache/mdt25.tif"),
+                                flow_layer_path="", source_kind="rational")
         with patch.dict(sys.modules, {"caumax.layers": module}):
             result = hydro.source_paths(query)
             self.assertEqual(result["p0"], "/configured/missing-p0.tif")
@@ -222,6 +223,43 @@ class BasinHydrologyTests(unittest.TestCase):
             self.assertEqual(explicit["p0"], "chosen-p0.tif")
             self.assertEqual(explicit["rainfall"]["2"], "chosen-t2.tif")
             module.getLayer.assert_not_called()
+
+    def test_native_map_source_paths_ignore_rational_p0_and_rainfall_settings(self):
+        configured = {"P0": "/custom-5m/p0.tif",
+                      "RAIN_2": "/custom-5m/t2.tif"}
+        defaults = {"P0": "/caumax/data/p0.tif",
+                    "RAIN_2": "/caumax/data/t2.tif"}
+        native = SimpleNamespace(
+            P0="P0", RAIN_2="RAIN_2", _defaultLayerPaths=defaults,
+            getLayerPath=lambda key: configured[key],
+            getLayer=Mock(side_effect=AssertionError("No project/layer access")))
+        query = SimpleNamespace(
+            source_kind="caumax_raster", dem_path="/caumax/data/mdt.tif",
+            flow_layer_path="/caumax/data/q100.tif")
+        with patch.dict(sys.modules, {"caumax.layers": native}):
+            result = hydro.source_paths(query)
+            self.assertEqual(result["p0"], defaults["P0"])
+            self.assertEqual(result["rainfall"]["2"], defaults["RAIN_2"])
+            self.assertEqual(result["rainfall"]["5"], "/caumax/data/t5.tif")
+            native.getLayer.assert_not_called()
+            # The same CAUMAX installation continues to expose customized
+            # layers to Método racional without mutating either path family.
+            rational = SimpleNamespace(
+                source_kind="rational", dem_path="/custom-5m/mdt.tif",
+                flow_layer_path="")
+            configured_result = hydro.source_paths(rational)
+            self.assertEqual(configured_result["p0"], configured["P0"])
+            self.assertEqual(configured_result["rainfall"]["2"], configured["RAIN_2"])
+
+    def test_native_map_source_never_uses_configured_layers_without_defaults(self):
+        native = SimpleNamespace(P0="P0", RAIN_2="RAIN_2",
+            getLayerPath=Mock(side_effect=AssertionError("rational paths read")))
+        query = SimpleNamespace(source_kind="caumax_raster",
+            dem_path="/custom-25m/mdt.tif", flow_layer_path="")
+        with patch.dict(sys.modules, {"caumax.layers": native}):
+            result = hydro.source_paths(query)
+        self.assertEqual(result["p0"], "/custom-25m/p0.tif")
+        native.getLayerPath.assert_not_called()
 
     def test_unconfigured_sources_fall_back_to_original_flow_folder_before_cached_dem(self):
         original = self.folder / "original"
