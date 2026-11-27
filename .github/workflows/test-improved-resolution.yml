@@ -27,8 +27,17 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends python3-qgis python3-gdal
+      - name: Cotejar calculador CAUMAX original de referencia
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/caumax-original"
+          curl -fsSL --retry 2 --max-time 45 \
+            https://raw.githubusercontent.com/samuelsl27/Caumax_v30_QGIS_4/5d8e5ddd92e552d5fba627fda0836ef0255e0be7/desarrollo/caumax/basincalculator.py \
+            -o "$RUNNER_TEMP/caumax-original/basincalculator.py"
+          test "$(git hash-object "$RUNNER_TEMP/caumax-original/basincalculator.py")" = 6062039ea32f172b3f6e11818d957223edf384e9
       - name: Comprobar comportamiento en PyQGIS
         env:
+          HIDROCAUMAX_CAUMAX_SOURCE: ${{ runner.temp }}/caumax-original
           QT_QPA_PLATFORM: offscreen
         run: |
           mkdir -p "$RUNNER_TEMP/xdg-runtime"
