@@ -571,15 +571,23 @@ class CaumaxBridge(QObject):
         return False
 
     @staticmethod
-    def _quick_signature(dialog):
-        """Observe changes without opening a raster four times per second."""
+    def _quick_signature(dialog, module=None):
+        """Track native query AND configured sources without reopening rasters."""
         point = getattr(dialog, 'lastValidPoint', None)
         coordinates = (float(point.x()), float(point.y())) if point is not None else None
+        sources = ()
+        if module is not None:
+            try:
+                layers = _layers_module(module)
+                sources = (os.fspath(layers.getLayerPath(layers.MDT)),
+                           os.fspath(layers.getLayerPath(layers.FLOWDIRS)))
+            except (AttributeError, OSError, TypeError, ValueError):
+                pass
         return (
             bool(dialog.btnReport.isEnabled()),
             dialog.txtX.text(), dialog.txtY.text(),
             dialog.txtResultFlow.text(), dialog.txtResultReturnPeriod.text(),
-            coordinates,
+            coordinates, sources,
             tuple((id(button), bool(button.isChecked()))
                   for button in dialog.buttonsAndLayers),
         )
@@ -591,7 +599,7 @@ class CaumaxBridge(QObject):
         # CAUMAX's own calculation remains authoritative. Polling should not
         # repeatedly open its huge official Q(T) raster while Qt is rendering
         # or processing a query that has not changed.
-        signature = self._quick_signature(binding.dialog)
+        signature = self._quick_signature(binding.dialog, binding.module)
         if signature == binding.observed_signature:
             return
         binding.observed_signature = signature
