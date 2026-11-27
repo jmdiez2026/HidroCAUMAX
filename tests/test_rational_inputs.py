@@ -296,11 +296,11 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(calc._processCell(),'original')
 
     def test_native_zero_division_at_both_fine_resolutions_is_reported_not_published(self):
-        namespace = {'BasinCalculator': self.Calculator}
+        namespace = {'BasinCalculator': self.Calculator, 'requested_size': [25]}
         exec(
             'def calculateParameters(self):\n'
             '    self.basinCalc = BasinCalculator()\n'
-            '    self.basinCalc.cellsize = requested_size\n'
+            '    self.basinCalc.cellsize = requested_size[0]\n'
             '    self.basinCalc.maxDistance = 0.\n'
             '    self.basinCalc.maxH = 300.\n'
             '    self.basinCalc.minH = 300.\n'
@@ -317,7 +317,7 @@ class BridgeTests(unittest.TestCase):
         with patch('caumax_consulta.rational_inputs._fine_grid_issue', return_value=None):
             self.bridge.start()
             for size in (25, 5):
-                namespace['requested_size'] = size
+                namespace['requested_size'][0] = size
                 self.dialog.basinCalc = None
                 self.assertIsNone(self.dialog.calculateParameters())
                 stage, event = finished[-1]
