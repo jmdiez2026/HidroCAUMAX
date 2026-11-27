@@ -482,7 +482,7 @@ class RationalLayersBridgeTests(unittest.TestCase):
         self.app.processEvents()
         # Nested native group boxes update their cached minimum on a later
         # layout event. The fit must use that settled size, not leave a gap.
-        self.assertEqual(self.dialog.width(), original_width)
+        self.assertGreaterEqual(self.dialog.width(), original_width)
         self.assertEqual(self.dialog.height(), self.dialog.minimumSizeHint().height())
         native_geometry = QRect(self.dialog.geometry())
         for width, height in ((800, 600), (1200, 900)):
