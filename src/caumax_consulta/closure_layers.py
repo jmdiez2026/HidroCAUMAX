@@ -14,6 +14,8 @@ from qgis.core import (QgsCoordinateReferenceSystem, QgsCoordinateTransformConte
 CLOSURE_ROLE = 'HidroCAUMAX/closure_point'
 CLOSURE_LABEL = 'Punto de cierre · selección'
 SHAPE_LABEL = 'Sección de cierre · guardada'
+GREEN_CLOSURE_LABEL = 'Cierre del curso principal · cruz azul'
+GREEN_CLOSURE_ROLE = 'HidroCAUMAX/main_course_outlet'
 
 
 def closure_symbol():
@@ -21,6 +23,16 @@ def closure_symbol():
     return QgsMarkerSymbol.createSimple({
         'name': 'circle', 'color': '255,232,0,255',
         'outline_style': 'solid', 'outline_color': '23,35,49,255',
+        'outline_width': '0.65', 'outline_width_unit': 'MM',
+        'size': '5', 'size_unit': 'MM'
+    })
+
+
+def green_closure_symbol():
+    """Bright vivid green, 5 mm circle with a dark contrast outline."""
+    return QgsMarkerSymbol.createSimple({
+        'name': 'circle', 'color': '35,231,51,255',
+        'outline_style': 'solid', 'outline_color': '13,65,35,255',
         'outline_width': '0.65', 'outline_width_unit': 'MM',
         'size': '5', 'size_unit': 'MM'
     })
@@ -107,7 +119,8 @@ def persist_generated_closure(layer):
     return saved
 
 
-def export_closure(x, y, crs, destination, *, label=SHAPE_LABEL):
+def export_closure(x, y, crs, destination, *, label=SHAPE_LABEL,
+                   symbol_factory=closure_symbol, property_key=CLOSURE_ROLE):
     """Write an exact one-point SHP and register it in QGIS; no overwrite."""
     from .watershed_export import _check_new_destination
     from .layer_order import add_result_layer
@@ -127,11 +140,25 @@ def export_closure(x, y, crs, destination, *, label=SHAPE_LABEL):
     saved = QgsVectorLayer(str(target), label, 'ogr')
     if not saved.isValid() or saved.featureCount() != 1:
         raise ValueError('El shapefile no contiene el punto de cierre esperado.')
-    saved.renderer().setSymbol(closure_symbol())
-    saved.setCustomProperty(CLOSURE_ROLE, True)
+    saved.renderer().setSymbol(symbol_factory())
+    saved.setCustomProperty(property_key, True)
     saved.setCustomProperty('HidroCAUMAX/selected_point_x', float(x))
     saved.setCustomProperty('HidroCAUMAX/selected_point_y', float(y))
     if add_result_layer(saved) is None:
         raise ValueError('El punto se guardó, pero QGIS no pudo cargarlo.')
+    # SHP carries no native QGIS renderer. A sibling .qml preserves the green
+    # cartography when added again from QGIS (and when archiving the project).
+    if property_key == GREEN_CLOSURE_ROLE:
+        style_path = target.with_suffix('.qml')
+        saved.saveNamedStyle(str(style_path))
     register_dataset(target)
     return target, saved
+
+
+def export_green_course_closure(analysis, destination):
+    """Export exactly the blue cross of BasinDialog: accepted basin outlet."""
+    crs = QgsCoordinateReferenceSystem.fromWkt(analysis.crs_wkt)
+    return export_closure(
+        analysis.outlet_x, analysis.outlet_y, crs, destination,
+        label=GREEN_CLOSURE_LABEL, symbol_factory=green_closure_symbol,
+        property_key=GREEN_CLOSURE_ROLE)
