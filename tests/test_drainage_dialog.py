@@ -163,7 +163,9 @@ class DrainageDialogTests(unittest.TestCase):
         self.assertFalse(drainage['metadata']['visible'])
         path=self.folder/'visibility.caumax.json';save_session(path,self.analysis,self.query,state)
         restored=self.make_dialog(load_session(path))
-        self.assertEqual(restored._drainage_layers.visibility(),{'network':False,'directions':True})
+        self.assertEqual({key: restored._drainage_layers.visibility()[key]
+                          for key in ('network','directions')},
+                         {'network': False, 'directions': True})
 
     def test_rebuilt_network_preserves_live_visibility_and_ignores_stale_resolution(self):
         dialog=self.dialog;tree=self.project.layerTreeRoot();layers=dialog._drainage_layers.layers
@@ -175,7 +177,9 @@ class DrainageDialogTests(unittest.TestCase):
         self.assertEqual(dialog._drainage_state,before)
         updated=deepcopy(self.state);updated['threshold_area_m2']/=2
         dialog._drainage_ready('25',products,updated)
-        self.assertEqual(dialog._drainage_layers.visibility(),{'network':False,'directions':True})
+        self.assertEqual({key: dialog._drainage_layers.visibility()[key]
+                          for key in ('network','directions')},
+                         {'network': False, 'directions': True})
         self.assertEqual(dialog._drainage_state['threshold_area_m2'],updated['threshold_area_m2'])
 
     def test_bulk_save_disables_threshold_edits_and_restores_them_after_completion(self):

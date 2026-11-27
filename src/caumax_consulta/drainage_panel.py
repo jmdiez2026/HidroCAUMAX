@@ -110,7 +110,10 @@ class DrainageControls(QGroupBox):
             label = QLabel(title, self)
             label.setAlignment(Qt.AlignCenter)
             label.setWordWrap(True)
-            exports.addWidget(label, 0, column)
+            # Centre the heading within its column like the export button.
+            # Without explicit alignment Qt may stretch the header and shift
+            # its visual midpoint at narrow widths on Windows/Qt 5.
+            exports.addWidget(label, 0, column, Qt.AlignHCenter)
             button.setStyleSheet(BUTTON_STYLE + '\nQPushButton { padding: 2px 1px; }')
             button.clicked.connect(lambda checked=False, kind=kind: self.export_requested.emit(kind))
             exports.addWidget(button, 1, column, Qt.AlignHCenter)
