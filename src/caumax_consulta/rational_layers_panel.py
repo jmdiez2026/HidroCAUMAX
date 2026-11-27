@@ -655,9 +655,12 @@ class RationalLayersPanel(DrainageControls):
                 or self.refresh_context() or self._state is None or self._products is None):
             return
         products, state = self._products, self._state
-        from .improved_storage import export_directory, record_exports, suggested_export_names
-        names = suggested_export_names(products.analysis)
+        size = f'{products.analysis.cell_width:g}m'
+        names = {'dem': f'MDT_{size}.tif',
+                 'directions': f'Direccion_D8_caumax_{size}.tif',
+                 'network': f'Red_drenaje_{size}.shp'}
         filters = 'Shapefile (*.shp)' if kind == 'network' else 'GeoTIFF (*.tif *.tiff)'
+        from .improved_storage import export_directory, record_exports
         destination, _ = QFileDialog.getSaveFileName(self, 'Exportar capa hidrológica',
             str(export_directory() / names[kind]), filters)
         if not destination:
