@@ -17,6 +17,7 @@ from qgis.core import (QgsCoordinateReferenceSystem,QgsFeature,QgsField,QgsGeome
 
 OWNER_PROPERTY='HidroCAUMAX/drainage_owner'
 ROLE_PROPERTY='HidroCAUMAX/drainage_role'
+PIN_PROPERTY='HidroCAUMAX/drainage_published'
 DRAINAGE_GROUP_LABEL='HidroCAUMAX · Drenaje Esri-D8'
 DRAINAGE_NETWORK_LABEL='Red de drenaje Esri-D8'
 
@@ -92,7 +93,8 @@ def _remove_unused_taudem_caches(candidates, project, protected_paths):
                 'HidroCAUMAX', Qgis.Warning)
 
 
-def prune_managed_drainage(project=None, *, keep_owner=None, protected_paths=(), retire_paths=()):
+def prune_managed_drainage(project=None, *, keep_owner=None, protected_paths=(),
+                          retire_paths=(), preserve_published=True):
     """Only the currently selected TauDEM generation may remain in QGIS.
 
     Remove older managed layers and private MDT/D8 processing caches.
@@ -101,8 +103,10 @@ def prune_managed_drainage(project=None, *, keep_owner=None, protected_paths=(),
     project = project or QgsProject.instance()
     root = project.layerTreeRoot()
     obsolete = [layer for layer in project.mapLayers().values()
-                if layer.customProperty(OWNER_PROPERTY, '') and
-                layer.customProperty(OWNER_PROPERTY) != keep_owner]
+                if (layer.customProperty(OWNER_PROPERTY, '')
+                    and layer.customProperty(OWNER_PROPERTY) != keep_owner
+                    and not (preserve_published and
+                             layer.customProperty(PIN_PROPERTY, False)))]
     editing = {layer.customProperty(OWNER_PROPERTY)
                for layer in obsolete if isinstance(layer, QgsVectorLayer) and layer.isEditable()}
     obsolete = [layer for layer in obsolete
@@ -477,8 +481,37 @@ class DrainageLayers:
                 if node is not None:result[kind]=node.itemVisibilityChecked()
         return result
 
-    def remove(self):
+    def publish(self):
+        """Keep a completed ESRI-D8 result through later rational calculations.
+
+        Publishing happens only after QGIS successfully registers the D8,
+        network and MDT. In-progress DEM previews are never persistent.
+        """
+        project = QgsProject.instance()
+        if (self._group is None or sip.isdeleted(self._group)
+                or not all(kind in self.layers for kind in ('network', 'directions', 'dem'))
+                or any(project.mapLayer(self.layers[kind].id()) is not self.layers[kind]
+                       for kind in ('network', 'directions', 'dem'))):
+            raise ValueError('No se puede conservar una red D8 incompleta.')
+        self._group.setCustomProperty(PIN_PROPERTY, True)
+        for layer in self.layers.values():
+            if layer is not None and not sip.isdeleted(layer):
+                layer.setCustomProperty(PIN_PROPERTY, True)
+
+    def remove(self, *, force=False):
         project=QgsProject.instance()
+        if (not force and self._group is not None and not sip.isdeleted(self._group)
+                and self._group.customProperty(PIN_PROPERTY, False)
+                and any(project.mapLayer(layer.id()) is layer
+                        for layer in self.layers.values()
+                        if layer is not None and not sip.isdeleted(layer))):
+            # Leave QGIS's published layers and their backing DEM/D8 intact.
+            # Detach the former panel, so future generation gets a new owner
+            # and can replace this group after successful publication.
+            self.layers = {}
+            self._group = None
+            self.owner_key = uuid4().hex
+            return
         for layer in self.layers.values():
             if (layer is not None and not sip.isdeleted(layer)
                     and layer.customProperty(OWNER_PROPERTY)==self.owner_key
