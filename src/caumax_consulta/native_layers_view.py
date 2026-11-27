@@ -4,7 +4,8 @@ from qgis.PyQt.QtCore import QObject, QTimer
 from qgis.PyQt.QtGui import QColor
 from qgis.core import (QgsCoordinateReferenceSystem, QgsCoordinateTransform,
                        QgsCsException, QgsProject, QgsRectangle, QgsRasterLayer,
-                       QgsDataSourceUri, QgsVectorLayer, QgsRenderContext, QgsWkbTypes)
+                       QgsDataSourceUri, QgsVectorLayer, QgsRenderContext, QgsWkbTypes,
+                       QgsUnitTypes)
 import qgis.utils
 
 
@@ -14,6 +15,8 @@ IBERIA_BOUNDS = (-11.0, 35.6, 5.5, 44.2)
 TERRAIN_URL = 'https://mt1.google.com/vt/lyrs=p&x={x}&y={y}&z={z}'
 TERRAIN_PROPERTY = 'HidroCAUMAX/startup_terrain'
 NETWORK_PINK = '#ff1493'
+NETWORK_LINE_WIDTH_MM = 1.30
+NETWORK_STYLE_REVISION = 'red50-pink-1.30mm-v1'
 
 
 def place_satellite_below_terrain(project):
@@ -41,12 +44,13 @@ def place_satellite_below_terrain(project):
 
 
 def style_query_network(project):
-    """Highlight only the named >50 km2 pickable network, once per layer."""
+    """Set the pickable >50 km2 network to pink, 1.30 mm, without changing data."""
     for layer in project.mapLayers().values():
         name = ''.join(layer.name().lower().split()).replace('²', '2').replace('^2', '2')
         if (name != 'red>50km2' or not isinstance(layer, QgsVectorLayer)
                 or layer.geometryType() != QgsWkbTypes.LineGeometry
-                or layer.customProperty('HidroCAUMAX/query_network_pink', False)):
+                or layer.customProperty('HidroCAUMAX/query_network_style', '')
+                   == NETWORK_STYLE_REVISION):
             continue
         renderer = layer.renderer()
         if renderer is None:
@@ -54,8 +58,12 @@ def style_query_network(project):
         renderer = renderer.clone()
         for symbol in renderer.symbols(QgsRenderContext()):
             symbol.setColor(QColor(NETWORK_PINK))
+            symbol.setWidth(NETWORK_LINE_WIDTH_MM)
+            symbol.setWidthUnit(QgsUnitTypes.RenderMillimeters)
         layer.setRenderer(renderer)
         layer.setCustomProperty('HidroCAUMAX/query_network_pink', True)
+        layer.setCustomProperty('HidroCAUMAX/query_network_style',
+                                NETWORK_STYLE_REVISION)
         layer.triggerRepaint()
 
 
