@@ -258,6 +258,36 @@ def _is_owned_directions(path):
         return False
 
 
+def _safe_secondary_sample(self, x, y, layer):
+    """Read only existing climatic cells; never wrap negative NumPy indices.
+
+    CAUMAX's original getValueAtCoordinate uses int() on coordinates, which
+    wraps negative indices in Python. This can silently take values from the
+    opposite side of a 25/5 m basin with a reduced or shifted coverage.
+    Return no observation beyond a climate raster rather than invent one.
+    """
+    layers = getattr(self, 'secondaryLayers', None)
+    transforms = getattr(self, 'secondaryTransforms', None)
+    nodatas = getattr(self, 'secondaryNodata', None)
+    if (not isinstance(layers, dict) or not isinstance(transforms, dict)
+            or layer not in layers or layer not in transforms):
+        return self.getValueAtCoordinate(x, y, layer)
+    raw = np.asarray(layers[layer])
+    transform = transforms[layer]
+    if (raw.ndim != 2 or len(transform) != 6 or
+            transform[1] == 0 or transform[5] == 0):
+        return None
+    col = math.floor((x - transform[0]) / transform[1])
+    row = math.floor((y - transform[3]) / transform[5])
+    if not (0 <= col < raw.shape[1] and 0 <= row < raw.shape[0]):
+        return None
+    value = raw[row, col]
+    if not np.isfinite(value):
+        return None
+    nodata = nodatas.get(layer) if isinstance(nodatas, dict) else None
+    return None if nodata is not None and value == nodata else value
+
+
 def _process_cell_iterative(self, x, y, distance=0):
     """Preserve CAUMAX's preorder and arithmetic, adding bounds and cycle guards."""
     rows, cols = self.mdt.shape
@@ -275,14 +305,14 @@ def _process_cell_iterative(self, x, y, distance=0):
             continue
         coordx, coordy = gdal.ApplyGeoTransform(self.geoTransform, cx + .5, cy + .5)
         self.basinCells[cy, cx] = 1
-        p0 = self.getValueAtCoordinate(coordx, coordy, 'P0')
+        p0 = _safe_secondary_sample(self, coordx, coordy, 'P0')
         if p0 is not None and p0 > 0:
             self.p0Values.append(p0)
-        i1id = self.getValueAtCoordinate(coordx, coordy, 'i1id')
+        i1id = _safe_secondary_sample(self, coordx, coordy, 'i1id')
         if i1id is not None and i1id > 0:
             self.i1idValues.append(i1id)
         for return_period in self.rainFiles:
-            rain = self.getValueAtCoordinate(coordx, coordy, return_period)
+            rain = _safe_secondary_sample(self, coordx, coordy, return_period)
             if rain is not None and rain > 0:
                 self.rainValues[return_period].append(rain)
         height = self.mdt[cy, cx]
@@ -547,12 +577,21 @@ class RationalInputsBridge(QObject):
             try:
                 try:
                     result = original(*args, **kwargs)
-                except (FineGridError, ZeroDivisionError) as error:
+                except (FineGridError, ZeroDivisionError, statistics.StatisticsError) as error:
                     calculator = getattr(owner, 'basinCalc', None)
-                    message = (str(error) if isinstance(error, FineGridError)
-                               else _fine_failure_message(calculator, error)
-                               if stage == 'parameters' and calculator is not None
-                               else None)
+                    if isinstance(error, FineGridError):
+                        message = str(error)
+                    elif (isinstance(error, statistics.StatisticsError)
+                            and stage == 'parameters' and calculator is not None
+                            and _fine_resolution(calculator) is not None):
+                        message = ('La cuenca no contiene muestras válidas de P0, '
+                                   'I1/Id o precipitación en las capas climáticas '
+                                   'configuradas. Comprueba su cobertura y NoData; '
+                                   'no se calculan medias ficticias.')
+                    else:
+                        message = (_fine_failure_message(calculator, error)
+                                   if stage == 'parameters' and calculator is not None
+                                   else None)
                     if not message:
                         raise
                     event['failure_reason'] = message
