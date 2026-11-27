@@ -466,8 +466,8 @@ class RationalLayersBridge(QObject):
         frame.setStyleSheet(f'QFrame#{ACTION_FRAME_NAME} {{ border: 1px solid #7EB4D0; '
                            'border-radius: 3px; background-color: #F2F9FD; }}')
         row = QHBoxLayout(frame)
-        row.setContentsMargins(5, 4, 5, 4)
-        row.setSpacing(4)
+        row.setContentsMargins(2, 3, 2, 3)
+        row.setSpacing(2)
         logo = QLabel(frame)
         logo.setObjectName('HidroCAUMAXSharedGEALogo')
         logo.setToolTip('GEA · Universidad de Valladolid')
@@ -627,7 +627,8 @@ class RationalLayersBridge(QObject):
             # Native expanding spacers have a large preferred height; their
             # minimum excludes that empty space without changing any widget.
             height = max(1, dialog.minimumSizeHint().height())
-            dialog.resize(binding.native_width, height)
+            needed = binding.container.minimumSizeHint().width() + 16
+            dialog.resize(max(binding.native_width, needed), height)
             binding.fitted_height = dialog.height()
             binding.fitted_width = dialog.width()
         except RuntimeError:
