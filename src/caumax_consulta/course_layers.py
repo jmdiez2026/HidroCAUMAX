@@ -17,10 +17,55 @@ from .layer_order import activate_result_group, create_result_group, ensure_resu
 _KINDS = ('main', 'central')
 _DEFAULT_VISIBILITY = {'main': True, 'central': False}
 _OWNER_PROPERTY = 'HidroCAUMAX/course_owner'
+_COURSE_PREFIX = 'HidroCAUMAX · Curso principal '
 _NAMES = {
     'main': 'Curso principal total (L)',
     'central': 'Tramo del curso principal 10–85 % (0,75 L)',
 }
+
+
+def _course_group_name(width, height):
+    """Short, stable legend title without point coordinates or cell indices."""
+    x, y = float(width), float(height)
+    if not all(math.isfinite(value) and value > 0 for value in (x, y)):
+        raise ValueError('La resolución del curso principal debe ser positiva.')
+    return f'{_COURSE_PREFIX}{x:g}x{y:g}'
+
+
+def migrate_course_display_names(project=None):
+    """Rename old plugin-owned groups on QGIS project load; never touch data.
+
+    Older projects embedded the outlet's X/Y and Q/MDT cell in their legend
+    group title. Read the stored grid resolution from an owned feature, not
+    by parsing an old label that may have been manually edited.
+    """
+    project = project or QgsProject.instance()
+    changed = 0
+    for group in project.layerTreeRoot().findGroups(recursive=True):
+        if sip.isdeleted(group):
+            continue
+        owner = group.customProperty(_OWNER_PROPERTY, '')
+        if not owner or not group.name().startswith('HidroCAUMAX · Curso principal'):
+            continue
+        for node in group.findLayers():
+            layer = node.layer()
+            if (layer is None or sip.isdeleted(layer)
+                    or layer.customProperty(_OWNER_PROPERTY, '') != owner
+                    or not isinstance(layer, QgsVectorLayer)
+                    or not {'RES_X_M', 'RES_Y_M'}.issubset(layer.fields().names())):
+                continue
+            feature = next(layer.getFeatures(), None)
+            if feature is None:
+                continue
+            try:
+                wanted = _course_group_name(feature['RES_X_M'], feature['RES_Y_M'])
+            except (TypeError, ValueError):
+                continue
+            if group.name() != wanted:
+                group.setName(wanted)
+                changed += 1
+            break
+    return changed
 
 
 def course_symbol(kind):
@@ -188,12 +233,7 @@ class CourseLayers:
         if self._group is None or sip.isdeleted(self._group):
             self._group = create_result_group(project, 'HidroCAUMAX · Curso principal', 0)
             self._group.setCustomProperty(_OWNER_PROPERTY, self.owner_key)
-        cell = getattr(query, 'cell', None)
-        cell_text = (f'{cell.row + 1},{cell.col + 1}' if cell is not None else '—')
-        cell_kind = 'MDT' if getattr(query, 'source_kind', 'caumax_raster') == 'rational' else 'Q'
-        self._group.setName(
-            f'HidroCAUMAX · Curso principal [X={analysis.outlet_x:g}; Y={analysis.outlet_y:g}; '
-            f'celda {cell_kind} {cell_text}; {analysis.cell_width:g}×{analysis.cell_height:g} m]')
+        self._group.setName(_course_group_name(analysis.cell_width, analysis.cell_height))
         for kind in _KINDS:
             layer = self.layers[kind]
             if kind in new_layers:
