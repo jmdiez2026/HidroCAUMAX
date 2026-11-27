@@ -587,5 +587,42 @@ class BridgeTests(unittest.TestCase):
         self.bridge.stop()
         self.assertIs(self.dialog.calculate,foreign)
 
+    def test_native_button_click_uses_verified_observer_and_restores_original_slot(self):
+        # CAUMAX connects clicked to the original bound slot during __init__.
+        # Merely assigning dialog.calculateParameters later does not replace
+        # that Qt connection; this regression exercises an actual button click.
+        button = QPushButton('Variables intermedias', self.dialog)
+        button.clicked.connect(self.dialog.calculateParameters)
+        unrelated = []
+        button.clicked.connect(lambda *_: unrelated.append('kept'))
+        finished = []
+        self.bridge.calculation_finished.connect(
+            lambda _owner, stage, event: finished.append((stage, event)))
+        self.bridge.start()
+        self.assertEqual(len(self.bridge._bindings[id(self.dialog)].routed_signals), 1)
+        button.click()
+        self.assertEqual(len(self.instances), 1)
+        self.assertEqual(len(finished), 1)
+        self.assertEqual(finished[0][0], 'parameters')
+        self.assertTrue(finished[0][1]['completed'])
+        self.assertEqual(unrelated, ['kept'])
+        self.bridge.stop()
+        self.dialog.basinCalc = None
+        button.click()
+        self.assertEqual(len(self.instances), 2)
+        self.assertEqual(len(finished), 1)
+        self.assertEqual(unrelated, ['kept', 'kept'])
+
+    def test_flow_button_click_observes_native_result_once(self):
+        button = QPushButton('Calcular', self.dialog)
+        button.clicked.connect(self.dialog.calculate)
+        stages = []
+        self.bridge.calculation_finished.connect(
+            lambda _owner, stage, _event: stages.append(stage))
+        self.bridge.start()
+        button.click()
+        self.assertEqual(stages, ['flow'])
+        self.assertEqual(self.dialog.txtResultFlow.text(), '27.00')
+
 
 if __name__=='__main__':unittest.main()
