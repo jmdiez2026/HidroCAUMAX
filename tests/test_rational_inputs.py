@@ -20,7 +20,8 @@ from qgis.core import QgsApplication, QgsGeometry, QgsPointXY
 ROOT=Path(__file__).resolve().parents[1]
 NATIVE_SOURCE=Path(os.environ.get('HIDROCAUMAX_CAUMAX_SOURCE',str(ROOT.parent/'inputs/caumax/caumax')))
 sys.path.insert(0,str(ROOT/'src'))
-from caumax_consulta.rational_inputs import RationalInputsBridge, _process_cell_iterative
+from caumax_consulta.rational_inputs import (RationalInputsBridge, _process_cell_iterative,
+    _fine_grid_issue, _fine_failure_message, FineGridError)
 
 
 def native_class():
@@ -107,6 +108,97 @@ class IterativeTests(unittest.TestCase):
         adapted.calculate(point(adapted,0,0))
         self.assertEqual(adapted.area,2*625)
         self.assertEqual(int(adapted.basinCells.sum()),2)
+
+
+class FineGridProtectionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QgsApplication.instance() or QgsApplication([], False)
+        cls.app.initQgis()
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='rational_fine_grid_')
+        self.folder = Path(self.temp.name)
+        srs = osr.SpatialReference()
+        srs.ImportFromEPSG(25830)
+        self.crs = srs.ExportToWkt()
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def d8(self, size, transform=None, shape=(5, 5), encoding='ESRI_D8'):
+        filename = self.folder / f'd8_{size}_{len(list(self.folder.iterdir()))}.tif'
+        ds = gdal.GetDriverByName('GTiff').Create(
+            str(filename), shape[1], shape[0], 1, gdal.GDT_Byte)
+        ds.SetGeoTransform(transform or (342000, size, 0, 4720000, 0, -size))
+        ds.SetProjection(self.crs)
+        ds.SetMetadataItem('FLOW_DIRECTION_ENCODING', encoding)
+        ds.GetRasterBand(1).SetNoDataValue(255)
+        ds.GetRasterBand(1).Fill(1)
+        ds = None
+        return filename
+
+    def calc(self, size, directions_shape=(5, 5)):
+        return types.SimpleNamespace(
+            cellsize=size,
+            geoTransform=(342000, size, 0, 4720000, 0, -size),
+            crs=self.crs,
+            mdt=np.full((7, 7), 300., dtype=np.float32),
+            dirs=np.full(directions_shape, 1, dtype=np.uint8),
+            maxDistance=0.,
+            maxH=300.,
+            minH=300.,
+        )
+
+    def test_both_fine_sizes_reject_zero_length_and_no_positive_relief(self):
+        for size in (25, 5):
+            with self.subTest(size=size):
+                calc = self.calc(size)
+                message = _fine_failure_message(calc, ZeroDivisionError())
+                self.assertIn('L=0', message)
+                self.assertIn(f'{size:g} m', message)
+                calc.maxDistance = size * 4.
+                self.assertIn('desnivel positivo',
+                              _fine_failure_message(calc, ZeroDivisionError()))
+        self.assertIsNone(_fine_failure_message(self.calc(500), ZeroDivisionError()))
+
+    def test_grid_origin_and_encoding_are_checked_for_5_and_25m(self):
+        for size in (25, 5):
+            with self.subTest(size=size):
+                calc = self.calc(size)
+                valid = self.d8(size)
+                self.assertIsNone(_fine_grid_issue(calc, valid))
+                shifted = self.d8(size, transform=(342000+size, size, 0,
+                                                   4720000, 0, -size))
+                self.assertIn('no comparten origen',
+                              _fine_grid_issue(calc, shifted))
+                tau = self.d8(size, encoding='TAUDEM_D8')
+                self.assertIn('sin recodificar', _fine_grid_issue(calc, tau))
+
+    def test_directions_smaller_than_mdt_do_not_read_outside_array(self):
+        # Different extents sharing a grid are supported by 1.0.16.
+        for size in (25, 5):
+            with self.subTest(size=size):
+                calc = self.calc(size, directions_shape=(5, 5))
+                calc.mdt = np.full((7, 7), 100., dtype=np.float32)
+                calc.basinCells = np.zeros((7, 7), dtype=np.uint8)
+                calc.p0Values = []
+                calc.i1idValues = []
+                calc.rainFiles = {}
+                calc.rainValues = {}
+                calc.area = 0
+                calc.cellarea = size * size
+                calc.xMaxDistance = calc.yMaxDistance = None
+                # One downstream cell and a connected neighbour in the
+                # 5x5 direction raster, with the 7x7 elevation data untouched.
+                calc.directions = [(-1, 0, 1)]
+                calc.dirs.fill(255)
+                calc.dirs[1, 1] = 1
+                calc.getValueAtCoordinate = lambda *args: None
+                _process_cell_iterative(calc, 2, 1)
+                self.assertEqual(int(calc.basinCells.sum()), 2)
+                self.assertEqual(calc.maxDistance, size)
+                self.assertEqual(calc.area, size * size * 2)
 
 
 class BridgeTests(unittest.TestCase):
