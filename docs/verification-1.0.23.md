@@ -17,6 +17,12 @@ La etiqueta «Red > 50 km²» no identifica una capa independiente. Es la catego
 - Se comprueba la simbología efectiva al cargarse la capa o cambiar el renderizador; los indicadores antiguos de estilo no impiden la corrección.
 - Para evitar punteros obsoletos SIP/C++ de QGIS, se clona el símbolo mientras su categoría Python está viva y se actualiza **la categoría in situ**, sin sustituir el renderizador.
 
+## Nombre de los grupos de Curso principal
+
+El título de grupo se reduce a `HidroCAUMAX · Curso principal {resolución X}x{resolución Y}`, sin X/Y del cierre, índice de celda ni sufijo `m` (ejemplos: `500x500`, `25x25` y `5x5`). Al actualizar el resultado se conserva el identificador de ambas capas. Al abrir proyectos QGIS previos se renombran únicamente los grupos con marca de propiedad `HidroCAUMAX/course_owner` y atributos de resolución de las capas propias; los grupos de usuario quedan intactos.
+
+Las pruebas en `tests/test_course_layers.py` verifican nombres exactos y migración segura.
+
 ## Pruebas
 
 - `tests/test_basin_hydrology_controller.py`: siete fuentes en una tarea, publicación atómica, ninguna publicación en error.
