@@ -63,6 +63,47 @@ class BasinHydrologyControllerTests(unittest.TestCase):
         self.assertEqual(list(self.results[0][2]), ['2', '5', '10', '25', '100', '500'])
         self.assertTrue(all(0 <= value <= 100 for _, value in self.statuses))
 
+    def test_automatic_combined_worker_publishes_p0_and_six_pd_in_one_result(self):
+        self.controller.calculate('both', self.analysis, self.sources)
+        self.assertTrue(self.controller.busy)
+        task = self.manager.tasks[-1]
+        self.assertEqual(task.kind, 'both')
+        called = []
+        def mean(analysis, path, **kwargs):
+            self.assertIs(analysis, self.analysis)
+            called.append(path)
+            return {'source_path': path, 'mean_mm': float(len(called))}
+        with patch('caumax_consulta.basin_hydrology.basin_raster_mean',
+                   side_effect=mean):
+            success = task.run()
+        self.assertTrue(success, task.error)
+        task.finished(success)
+        self.assertEqual(len(self.results), 1)
+        key, kind, value = self.results[0]
+        self.assertEqual(key, basin_fingerprint(self.analysis))
+        self.assertEqual(kind, 'both')
+        self.assertEqual(value['p0']['mean_mm'], 1.)
+        self.assertEqual(list(value['rainfall']), ['2','5','10','25','100','500'])
+        self.assertEqual(called, ['p0.tif'] + [f't{p}.tif' for p in (2,5,10,25,100,500)])
+        self.assertFalse(self.controller.busy)
+
+    def test_automatic_combined_worker_failure_never_publishes_half_result(self):
+        self.controller.calculate('both', self.analysis, self.sources)
+        task = self.manager.tasks[-1]
+        count = [0]
+        def fail(*args, **kwargs):
+            count[0] += 1
+            if count[0] == 3:
+                raise RuntimeError('No se puede leer Pd(5)')
+            return {'mean_mm': 20}
+        with patch('caumax_consulta.basin_hydrology.basin_raster_mean',
+                   side_effect=fail):
+            self.assertFalse(task.run())
+        task.finished(False)
+        self.assertEqual(self.results, [])
+        self.assertTrue(any('No se puede leer Pd(5)' in err for err in self.errors))
+        self.assertFalse(self.controller.busy)
+
     def test_failure_during_rainfall_does_not_publish_an_incomplete_series(self):
         self.controller.calculate('rainfall', self.analysis, self.sources)
         task = self.manager.tasks[-1]
