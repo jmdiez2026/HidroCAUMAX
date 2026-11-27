@@ -271,6 +271,33 @@ class BridgeTests(unittest.TestCase):
                 self.assertEqual((query.dem_path, query.directions_path), fine)
                 self.assertEqual((query.x, query.y), (341825, 4646700))
 
+    def test_changed_caummx_grid_paths_refresh_basin_without_new_coordinates(self):
+        self.valid_query()
+        module = sys.modules['_caumax_bridge_fixture.layers']
+        official = (
+            self._reference_grid('native_dem_same_point.tif', 500, 340000, 4648000),
+            self._reference_grid('native_d8_same_point.tif', 500, 340000, 4648000),
+        )
+        fine = (
+            self._reference_grid('fine_dem_same_point.tif', 25, 341700, 4646825),
+            self._reference_grid('fine_d8_same_point.tif', 25, 341700, 4646825),
+        )
+        module._defaultLayerPaths = {'MDT': official[0], 'FLOWDIRS': official[1]}
+        self.paths.update(MDT=official[0], FLOWDIRS=official[1])
+        self.bridge.start()
+        self.basin_button().click()
+        self.assertEqual(self.calls[-1][1].dem_path, official[0])
+        self.assertEqual(len(self.calls), 1)
+        self.paths.update(MDT=fine[0], FLOWDIRS=fine[1])
+        self.bridge.scan()
+        self.basin_button().click()
+        self.assertEqual(len(self.calls), 2)
+        self.assertEqual((self.calls[-1][1].dem_path,
+                          self.calls[-1][1].directions_path), fine)
+        self.assertEqual((self.calls[-1][1].x, self.calls[-1][1].y),
+                         (341825, 4646700))
+        self.assertFalse(self.bridge._bindings[id(self.dialog)].query_dirty)
+
     def test_invalid_custom_and_official_grids_give_explicit_error(self):
         self.valid_query()
         module = sys.modules['_caumax_bridge_fixture.layers']
