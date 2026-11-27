@@ -294,7 +294,9 @@ class DrainageLayersTests(unittest.TestCase):
         current_5 = self.controller('current_5')
         state = self.snapshot()
         first = old_25.update(self.analysis, state)['network']
+        first_id = first.id()
         second = duplicate_25.update(self.analysis, state)['network']
+        second_id = second.id()
         fine = SimpleNamespace(cell_width=5., cell_height=5.)
         current = current_5.update(fine, state)['network']
         user = QgsVectorLayer('LineString?crs=EPSG:25830', 'Red propia', 'memory')
@@ -302,8 +304,8 @@ class DrainageLayersTests(unittest.TestCase):
         removed = drainage.prune_managed_drainage(
             self.project, keep_owner=current_5.owner_key)
         self.assertGreaterEqual(removed, 2)
-        self.assertIsNone(self.project.mapLayer(first.id()))
-        self.assertIsNone(self.project.mapLayer(second.id()))
+        self.assertIsNone(self.project.mapLayer(first_id))
+        self.assertIsNone(self.project.mapLayer(second_id))
         self.assertIs(self.project.mapLayer(current.id()), current)
         self.assertIs(self.project.mapLayer(user.id()), user)
         groups = [g for g in self.project.layerTreeRoot().findGroups()
