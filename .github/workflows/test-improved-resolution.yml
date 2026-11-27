@@ -7,6 +7,7 @@ on:
       - fix/1.0.18-fine-rational-and-pink-network
       - fix/1.0.19-restore-basin-selector-outlet
       - fix/1.0.20-independent-native-map-queries
+      - fix/1.0.21-pink-network-and-500m-boundary
   workflow_dispatch:
 
 permissions:
