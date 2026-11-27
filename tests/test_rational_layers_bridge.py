@@ -531,6 +531,31 @@ class RationalLayersBridgeTests(unittest.TestCase):
         self.assertIs(self.dialog.basinCalc,calculator)
         self.assertIsNone(binding.panel)
 
+    def test_new_gea_buttons_save_rational_closure_and_complete_basin(self):
+        from caumax_consulta import rational_layers_bridge as ui
+        from caumax_consulta import closure_layers
+        current = self.attach()
+        self.dialog.txtX.setText('353387,14651812')
+        self.dialog.txtY.setText('4725249,11019012')
+        callback = Mock()
+        self.bridge.on_complete_basin_requested = callback
+        self.assertEqual(current.complete_button.text(), 'Guardar CUENCA')
+        self.assertEqual(current.closure_button.text(), 'Guardar Cierre')
+        current.complete_button.click()
+        callback.assert_called_once_with(self.dialog)
+        output = Path('/tmp/Cierre_353387_4725249.shp')
+        with patch.object(ui.QFileDialog, 'getSaveFileName',
+                          return_value=(str(output), 'Shapefile (*.shp)')), \\
+             patch.object(closure_layers, 'export_closure',
+                          return_value=(output, object())) as writer:
+            current.closure_button.click()
+        args = writer.call_args.args
+        self.assertAlmostEqual(args[0], 353387.14651812)
+        self.assertAlmostEqual(args[1], 4725249.11019012)
+        self.assertEqual(args[2].authid(), 'EPSG:25830')
+        self.assertEqual(args[3], str(output))
+        self.assertIn(str(output), current.error.text())
+
     def test_only_new_accepted_flow_with_unchanged_inputs_is_attached_to_the_basin(self):
         self.bridge.on_basin_requested=Mock()
         binding=self.attach();self.complete_parameters(binding)
