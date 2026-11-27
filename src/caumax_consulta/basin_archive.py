@@ -97,6 +97,26 @@ def _query_points(native_dialog=None, queries=()):
     return points
 
 
+def _native_values(dialog):
+    """Retain the complete visible parameter/result fields of Método racional."""
+    if dialog is None:
+        return {}
+    values = {}
+    for key in ('txtX', 'txtY', 'txtArea', 'txtConcentrationTime',
+                'txtDistance', 'txtHighest', 'txtLowest', 'txtRainfall',
+                'txtIntensityFactor', 'txtI1Id', 'txtIntensity', 'txtP0',
+                'txtP0Corrector', 'txtP0CorrectorReturnPeriod',
+                'txtP0Corrected', 'txtUniformity', 'txtResultFlow',
+                'txtResultReturnPeriod', 'txtCorrectedRainfall'):
+        try:
+            widget = getattr(dialog, key, None)
+            if widget is not None and hasattr(widget, 'text'):
+                values[key] = str(widget.text())[:2048]
+        except RuntimeError:
+            pass
+    return values
+
+
 def _selected_layers(project):
     root = project.layerTreeRoot()
     selected = []
@@ -133,7 +153,7 @@ def _add_file(archive, path, member, digests, total):
 
 
 def save_complete_basin(destination, *, project=None, iface=None,
-                        native_dialog=None, queries=()):
+                        native_dialog=None, queries=(), sessions=()):
     """Atomically save all HidroCAUMAX results plus full improved directory."""
     from .improved_storage import export_directory
     destination = Path(destination).expanduser().absolute()
@@ -155,7 +175,9 @@ def save_complete_basin(destination, *, project=None, iface=None,
         manifest = dict(schema=SCHEMA, version=1, application='HidroCAUMAX',
                         project_crs=project.crs().authid(),
                         points=_query_points(native_dialog, queries),
-                        layers=[], improved_files=[], unavailable_layers=[])
+                        rational_values=_native_values(native_dialog),
+                        layers=[], improved_files=[], native_sessions=[],
+                        unavailable_layers=[])
         if iface is not None:
             try:
                 extent = iface.mapCanvas().extent()
@@ -212,6 +234,27 @@ def save_complete_basin(destination, *, project=None, iface=None,
                         info['style'] = _add_file(
                             archive, style, 'styles/%04d.qml' % index, digests, total)
                     manifest['layers'].append(info)
+                # A session document also contains morphometry, hydrology,
+                # hypsometry, original/refined basin geometry, selected flow
+                # and return period. Keep each valid session alongside QGIS
+                # layer sources; a partially computed session is not invented.
+                from .session_store import save_session
+                for index, dialog in enumerate(sessions):
+                    analysis = getattr(dialog, 'analysis', None)
+                    query = getattr(dialog, 'query', None)
+                    if analysis is None or query is None:
+                        continue
+                    native_path = stage / ('analysis_%04d.caumax.json' % index)
+                    try:
+                        save_session(native_path, analysis, query,
+                                     dialog.get_smoothing_state())
+                        member = _add_file(
+                            archive, native_path, 'sessions/%04d.caumax.json' % index,
+                            digests, total)
+                        manifest['native_sessions'].append(member)
+                    except (ValueError, AttributeError, RuntimeError, TypeError) as error:
+                        manifest['unavailable_layers'].append(
+                            'Descripción de cuenca no serializable: ' + str(error)[:250])
                 if improved.is_dir():
                     for file in sorted(improved.rglob('*')):
                         if (not file.is_file() or file.is_symlink()
