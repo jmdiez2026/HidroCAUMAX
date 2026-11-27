@@ -36,6 +36,41 @@ def migrate_drainage_display_names(project=None):
             group.setName(group.name().replace('HidroCAUMAX · Drenaje TauDEM',
                                                DRAINAGE_GROUP_LABEL, 1))
 
+def adopt_legacy_published_drainage(project=None):
+    """Retain the latest complete D8 result from projects saved by older builds.
+
+    Old groups have no PIN_PROPERTY; without this migration simply opening
+    the rational dialog would prune the existing completed network. A preview
+    (DEM + hillshade only) or a broken/missing raster is never adopted.
+    """
+    project = project or QgsProject.instance()
+    root = project.layerTreeRoot()
+    groups = [g for g in root.findGroups(recursive=True)
+              if g.customProperty(OWNER_PROPERTY, '')
+              and g.name().startswith(DRAINAGE_GROUP_LABEL)]
+    if not groups or any(g.customProperty(PIN_PROPERTY, False) for g in groups):
+        return 0
+    for group in reversed(groups):
+        owner = group.customProperty(OWNER_PROPERTY, '')
+        roles = {}
+        for node in group.findLayers():
+            layer = node.layer()
+            if (layer is not None and not sip.isdeleted(layer)
+                    and layer.isValid()
+                    and layer.customProperty(OWNER_PROPERTY, '') == owner):
+                roles[layer.customProperty(ROLE_PROPERTY, '')] = layer
+        if not all(role in roles for role in ('network', 'directions', 'dem')):
+            continue
+        if (roles['directions'].providerType() != 'gdal'
+                or roles['dem'].providerType() != 'gdal'
+                or not all(Path(roles[role].source().split('|', 1)[0]).is_file()
+                           for role in ('directions', 'dem'))):
+            continue
+        group.setCustomProperty(PIN_PROPERTY, True)
+        for layer in roles.values():
+            layer.setCustomProperty(PIN_PROPERTY, True)
+        return 1
+    return 0
 
 
 def _private_generated_directory(source):
