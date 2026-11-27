@@ -133,7 +133,9 @@ class RationalLayersPanelTests(unittest.TestCase):
         self.assertTrue(resolution.disposed)
         resolution.selected('5')
         self.assertIsNone(panel._state)
-        self.assertFalse(QgsProject.instance().mapLayers())
+        # The last refined outline remains, but stale TauDEM products do not.
+        self.assertFalse(any(layer.customProperty('HidroCAUMAX/drainage_owner')
+                             for layer in QgsProject.instance().mapLayers().values()))
         self.assertEqual(len(self.manager.tasks), 2)
         self.assertFalse(panel.refresh_context())
         self.assertEqual(len(self.manager.tasks), 2)
@@ -298,7 +300,10 @@ class RationalLayersPanelTests(unittest.TestCase):
         self.query = replace(self.query, y=self.query.y + 500.)
         panel.refresh_context()
         self.assertFalse(panel._threshold_timer.isActive())
-        self.assertFalse(QgsProject.instance().mapLayers())
+        self.assertFalse(any(layer.customProperty('HidroCAUMAX/drainage_owner')
+                             for layer in QgsProject.instance().mapLayers().values()))
+        self.assertIsNotNone(next((layer for layer in QgsProject.instance().mapLayers().values()
+                                   if layer.customProperty('HidroCAUMAX/boundary_owner')), None))
         self.assertIsNone(panel._products)
 
     def test_manual_selector_tuple_is_applied_and_context_change_closes_stale_selector(self):
