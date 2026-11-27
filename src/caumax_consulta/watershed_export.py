@@ -18,7 +18,7 @@ from .metrics import shape_metrics
 _SHAPEFILE_SUFFIXES = frozenset((
     ".shp", ".shx", ".dbf", ".prj", ".cpg", ".qix", ".sbn", ".sbx",
     ".fbn", ".fbx", ".ain", ".aih", ".ixs", ".mxs", ".xml", ".idm",
-    ".ind", ".qpj", ".shp.xml", ".shp.aux.xml", ".dbf.aux.xml",
+    ".ind", ".qpj", ".qml", ".shp.xml", ".shp.aux.xml", ".dbf.aux.xml",
 ))
 
 
