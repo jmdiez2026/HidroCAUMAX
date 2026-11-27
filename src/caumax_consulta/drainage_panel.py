@@ -179,6 +179,13 @@ class DrainageControls(QGroupBox):
                     if needed + spacing * (len(controls)-1) <= available or points <= minimum:
                         break
                     points = max(minimum, points-.25)
+            # Keep each heading precisely centred over its export button,
+            # even when Qt 5 shrinks grid columns at narrow dialog widths.
+            export_grid = self._drainage_exports_widget.layout()
+            for column, button in enumerate(self.product_buttons):
+                heading = export_grid.itemAtPosition(0, column).widget()
+                heading.setFixedWidth(button.width())
+            export_grid.activate()
             self.setMinimumHeight(0)
             height = self.layout().heightForWidth(self.width() if width is None else width)
             if height > 0:
