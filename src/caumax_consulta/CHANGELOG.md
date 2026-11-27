@@ -1,4 +1,4 @@
-# HidroCAUMAX v.1.0 — denominación visible Esri-D8 (preparación 1.0.18)
+# HidroCAUMAX v.1.0 — denominación visible Esri-D8 (revisión 1.0.18, 2026-11-27)
 
 - Los grupos y las capas de red calculadas se muestran como **HidroCAUMAX · Drenaje Esri-D8** y **Red de drenaje Esri-D8**. Las etiquetas de diálogos, estados, mensajes y manual adoptan la misma denominación.
 - Los proyectos antiguos migran los nombres gestionados sin tocar las capas ajenas ni los datos o los identificadores de QGIS.
