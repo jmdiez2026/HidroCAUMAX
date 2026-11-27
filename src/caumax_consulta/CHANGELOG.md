@@ -1,3 +1,12 @@
+# HidroCAUMAX v.1.0 — independencia de consulta máxima y Método racional (revisión 1.0.20, 2026-11-27)
+
+- El botón «Cuenca hidrográfica» de **Consulta de capas de caudales máximos** toma siempre MDT y D8 de la configuración original que proporciona CAUMAX (`_defaultLayerPaths`). Se elimina la lógica de 1.0.19 que recurría a capas racionales personalizadas si cubrían el punto.
+- Las fuentes de P₀ y precipitaciones empleadas por ese análisis se resuelven también de los valores originales. La configuración personal del **Método racional**, incluidos MDT/D8 de 25 y 5 m, permanece independiente e intacta.
+- Se prueba la separación con cambios repetidos de resolución racional, incluso cuando las capas personalizadas cubren el punto, y el fallo seguro si no existe la referencia original.
+- Se mantienen las correcciones previas de exportación D8 CAUMAX/ESRI y el estilo rosa de 1,30 mm para Red > 50 km².
+
+---
+
 # HidroCAUMAX v.1.0 — recuperación de Cuenca hidrográfica (revisión 1.0.19, 2026-11-27)
 
 - Se recupera el cálculo de la cuenca desde **Mapa de caudales máximos** cuando el punto consultado no está cubierto por las capas personalizadas de 25/5 m configuradas en CAUMAX. Se verifican las rutas oficiales nativas de 500 m antes de utilizarlas exclusivamente para la cuenca de esa consulta, sin tocar la configuración del método racional ni el caudal original.
