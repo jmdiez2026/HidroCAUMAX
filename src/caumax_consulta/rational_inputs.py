@@ -760,12 +760,20 @@ class RationalInputsBridge(QObject):
                 dialog.calculateParameters = replacement
                 original_flow = getattr(dialog, 'calculate', None)
                 if callable(original_flow) and 'calculate' not in vars(dialog):
-                    adapted_flow = _clone_calculation(
-                        original_flow, None, require_factory=False,
-                        make_lookup=lambda native, mdt: _verified_mdt_lookup(
-                            native, mdt, binding))
-                    binding.flow_replacement = self._observe(binding, 'flow', adapted_flow)
-                    dialog.calculate = binding.flow_replacement
+                    # An unsupported native flow wrapper must not strand the
+                    # parameter adaptation without an ownership binding.
+                    try:
+                        adapted_flow = _clone_calculation(
+                            original_flow, None, require_factory=False,
+                            make_lookup=lambda native, mdt: _verified_mdt_lookup(
+                                native, mdt, binding))
+                    except ValueError as error:
+                        QgsMessageLog.logMessage(
+                            'No se pudo adaptar el cálculo de caudal racional: ' +
+                            str(error), 'HidroCAUMAX', Qgis.Warning)
+                    else:
+                        binding.flow_replacement = self._observe(binding, 'flow', adapted_flow)
+                        dialog.calculate = binding.flow_replacement
                 # The native buttons were connected before the reversible
                 # instance methods were installed. Rewire those exact slots.
                 self._route_native_button(binding, 'calculateParameters', previous)
