@@ -724,12 +724,16 @@ class BasinDialog(QDialog):
                     self.status.setText(self.status.text() + '\n' + self._terrain_layers.note)
             except Exception as error:
                 self.status.setText(self.status.text() + '\nNo se ha podido representar el relieve: ' + str(error))
-            if self._course_layers is None:
-                from .course_layers import CourseLayers
-                self._course_layers = CourseLayers(self.iface)
-            self._course_layers.update(self.analysis, self.query)
-            if self._course_layers.note:
-                self.status.setText(self.status.text() + '\n' + self._course_layers.note)
+            # A generated ESRI-D8 result replaces the previous course group.
+            # Do not recreate "Curso principal" during report, smoothing or
+            # redraw while the matching D8 result remains active.
+            if self._drainage_state is None:
+                if self._course_layers is None:
+                    from .course_layers import CourseLayers
+                    self._course_layers = CourseLayers(self.iface)
+                self._course_layers.update(self.analysis, self.query)
+                if self._course_layers.note:
+                    self.status.setText(self.status.text() + '\n' + self._course_layers.note)
         self._display_drainage_layers()
         self._refresh_basin_hydrology_controls()
 
@@ -878,6 +882,12 @@ class BasinDialog(QDialog):
         visible = bool((self._drainage_state or {}).get('network_visible',
                        (self._drainage_state or {}).get('metadata',{}).get('visible',True)))
         self._drainage_layers.update(self.analysis,self._drainage_state,visible=visible)
+        if self._drainage_state is not None:
+            # Publication is complete: purge every earlier course group (also
+            # from a previous maximum-flow or rational query) and leave only
+            # this ESRI-D8 result. Do not remove any shared MDT/D8 source.
+            from .course_layers import retire_other_course_groups
+            retire_other_course_groups(iface=self.iface)
 
     def _refresh_drainage_controls(self):
         if not hasattr(self,'drainage_prepare_button'):
@@ -2190,7 +2200,8 @@ class BasinDialog(QDialog):
             geometry = QgsGeometry()
             geometry.fromWkb(bytes(wkb))
             self.preview_geometries[kind] = geometry
-        if self._course_layers is not None and not self._delineation_cleared:
+        if (self._course_layers is not None and not self._delineation_cleared
+                and self._drainage_state is None):
             self._course_layers.update(self.analysis,self.query,visibility=state.get('course_visibility'))
         self._sync_boundary_layers()
         self._preview()
