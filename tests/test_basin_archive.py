@@ -128,6 +128,20 @@ class BasinArchiveTests(unittest.TestCase):
         self.assertTrue(restored_group.customProperty(PIN_PROPERTY, False))
         self.assertEqual(archive._digest(target), archive._digest(path))
 
+    def test_native_maximum_flow_section_is_recorded_without_open_basin_dialog(self):
+        section = QgsVectorLayer('Point?crs=EPSG:25830',
+                                 'Seccion de cierre Ej II Arroyo del Corco', 'memory')
+        feature = QgsFeature()
+        feature.setGeometry(QgsGeometry.fromPointXY(
+            QgsPointXY(349325.0, 4717000.0)))
+        self.assertTrue(section.dataProvider().addFeatures([feature])[0])
+        self.project.addMapLayer(section)
+        points = archive._query_points(project=self.project)
+        self.assertEqual(len(points), 1)
+        self.assertEqual(points[0]['kind'], 'consulta_capas')
+        self.assertEqual((points[0]['x'], points[0]['y']), (349325.0, 4717000.0))
+        self.assertEqual(points[0]['crs'], 'EPSG:25830')
+
     def test_invalid_archive_traversal_is_rejected_without_writing_outside_storage(self):
         malicious = self.folder / 'malicious.hidrocuenca'
         with ZipFile(malicious, 'w', ZIP_DEFLATED) as bundle:
