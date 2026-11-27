@@ -30,7 +30,7 @@ border: 1px solid #7EB4D0; border-radius: 3px; padding: 5px 9px; }
 QPushButton:hover { background-color: #C7E8FF; }
 QPushButton:disabled { background-color: #EAF3F8; color: #7A8790; }'''
 ACTION_FRAME_NAME = 'HidroCAUMAXRationalActionFrame'
-ACTION_BUTTON_STYLE = BUTTON_STYLE.replace('padding: 5px 9px', 'padding: 3px 6px')
+ACTION_BUTTON_STYLE = BUTTON_STYLE.replace('padding: 5px 9px', 'padding: 2px 3px')
 EXPORT_OWNER_PROPERTY = 'HidroCAUMAX/rational_export_owned'
 _TITLE = 'HidroCAUMAX v.1.0 · Guardar Divisoria'
 
