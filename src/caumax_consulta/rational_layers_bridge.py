@@ -334,8 +334,16 @@ class RationalLayersBridge(QObject):
                 if (event.get('completed') and event.get('ready_writes')
                         and event['ready_writes'][-1] is True and current == binding.parameter_start):
                     self._accept_parameters(binding, observed=True)
+                    binding.error.hide()
                 else:
-                    self._invalidate_basin(binding, 'El cálculo de variables intermedias no se ha completado. Vuelve a calcularlo.')
+                    detail = event.get('failure_reason')
+                    message = (str(detail) if detail else
+                               'El cálculo de variables intermedias no se ha completado. '
+                               'Vuelve a calcularlo.')
+                    self._invalidate_basin(binding, message)
+                    if detail:
+                        binding.error.setText(message)
+                        binding.error.show()
                 binding.parameter_start = None
             elif stage == 'flow':
                 signature = self._flow_signature(binding)
