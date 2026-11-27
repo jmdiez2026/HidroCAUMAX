@@ -12,7 +12,7 @@ import sys
 from qgis.PyQt.QtCore import QObject, QTimer, Qt
 from qgis.PyQt.QtGui import QPixmap
 from qgis.PyQt.QtWidgets import (
-    QApplication, QDialog, QFrame, QHBoxLayout, QLabel, QPushButton,
+    QApplication, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton,
     QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
 )
 from qgis.core import (QgsCoordinateReferenceSystem, QgsCoordinateTransform,
@@ -29,6 +29,8 @@ PANEL_NAME = 'HidroCAUMAXRationalLayersContainer'
 BASIN_BUTTON_NAME = 'btnCuencaHidrograficaRacionalHidroCAUMAX'
 FREQUENCY_BUTTON_NAME = 'btnCalcularFrecuenciaHidroCAUMAX'
 CLEAN_BUTTON_NAME = 'btnLimpiarCapasHidroCAUMAX'
+SAVE_CLOSURE_NAME = 'btnGuardarCierreRacionalHidroCAUMAX'
+SAVE_COMPLETE_NAME = 'btnGuardarCuencaCompletaHidroCAUMAX'
 _FLOW_INPUTS = ('txtArea', 'txtConcentrationTime', 'txtI1Id', 'txtRainfall',
                 'txtIntensityFactor', 'txtP0', 'txtP0Corrector', 'txtUniformity',
                 'txtCorrectedRainfall', 'txtP0CorrectorReturnPeriod', 'txtRainfallCorrection')
@@ -110,6 +112,8 @@ class _Binding:
     basin_button: object = None
     frequency_button: object = None
     clean_button: object = None
+    closure_button: object = None
+    complete_button: object = None
     native_height: object = None
     native_width: object = None
     fitted_height: object = None
@@ -135,13 +139,15 @@ class _Binding:
 class RationalLayersBridge(QObject):
     """Own the native buttons and an independent, modeless D8-generation window."""
     def __init__(self, iface, on_basin_requested=None, on_query_started=None,
-                 on_basin_refined=None, on_frequency_requested=None):
+                 on_basin_refined=None, on_frequency_requested=None,
+                 on_complete_basin_requested=None):
         super().__init__(iface.mainWindow())
         self.iface = iface
         self.on_basin_requested = on_basin_requested
         self.on_query_started = on_query_started
         self.on_frequency_requested = on_frequency_requested
         self.on_basin_refined = on_basin_refined
+        self.on_complete_basin_requested = on_complete_basin_requested
         self._running = False
         self._bindings = {}
         from .recommended_p0 import RecommendedP0Presentation
@@ -477,6 +483,16 @@ class RationalLayersBridge(QObject):
                                    'para varios periodos de retorno.')
         frequency_button.setEnabled(False)
         row.addWidget(frequency_button, 0, Qt.AlignLeft)
+        closure_button = QPushButton('Guardar Cierre', frame)
+        closure_button.setObjectName(SAVE_CLOSURE_NAME)
+        closure_button.setStyleSheet(ACTION_BUTTON_STYLE)
+        closure_button.setToolTip('Guardar el punto exacto seleccionado en un SHP amarillo y cargarlo en QGIS.')
+        row.addWidget(closure_button, 0, Qt.AlignLeft)
+        complete_button = QPushButton('Guardar CUENCA', frame)
+        complete_button.setObjectName(SAVE_COMPLETE_NAME)
+        complete_button.setStyleSheet(ACTION_BUTTON_STYLE)
+        complete_button.setToolTip('Guardar capas, estilos, MDT/D8, archivos mejorados y coordenadas en .hidrocuenca.')
+        row.addWidget(complete_button, 0, Qt.AlignLeft)
         basin_button = QPushButton('Descripción cuenca', frame)
         basin_button.setObjectName(BASIN_BUTTON_NAME)
         basin_button.setStyleSheet(ACTION_BUTTON_STYLE)
@@ -506,6 +522,8 @@ class RationalLayersBridge(QObject):
         binding.decimal_presentation = RationalDecimalPresentation(dialog)
         binding.basin_button, binding.action_row = basin_button, row
         binding.frequency_button = frequency_button
+        binding.closure_button = closure_button
+        binding.complete_button = complete_button
         binding.clean_button = clean
         self._group_save_button(binding)
         binding.native_height = native_height
@@ -515,6 +533,10 @@ class RationalLayersBridge(QObject):
         self._connect(binding, frequency_button.clicked,
                       lambda checked=False: self._request_frequency(binding))
         self._connect(binding, button.clicked, lambda checked=False: self._open_layers_dialog(binding))
+        self._connect(binding, closure_button.clicked,
+                      lambda checked=False: self._save_closure(binding))
+        self._connect(binding, complete_button.clicked,
+                      lambda checked=False: self._save_complete(binding))
         self._connect(binding, basin_button.clicked, lambda checked=False: self._request_basin(binding))
         self._connect(binding, clean.clicked, lambda checked=False: self._request_cleanup(binding))
         for field_widget in (dialog.txtX, dialog.txtY):
@@ -552,6 +574,36 @@ class RationalLayersBridge(QObject):
         # A foreign or historical standalone export controller stays untouched.
         if button is not None and button.property(EXPORT_OWNER_PROPERTY):
             _place_export_button(binding.dialog, button)
+
+    def _save_closure(self, binding):
+        if not self._running or self._bindings.get(id(binding.dialog)) is not binding:
+            return
+        try:
+            from .improved_storage import export_directory
+            from .closure_layers import export_closure
+            x, y = map(_number, self._fields(binding.dialog))
+            suggested = export_directory() / ('Cierre_%.0f_%.0f.shp' % (x, y))
+            path, selected = QFileDialog.getSaveFileName(
+                binding.dialog, 'Guardar Cierre · SHP', str(suggested),
+                'Shapefile (*.shp)')
+            if not path:
+                return
+            if not Path(path).suffix:
+                path += '.shp'
+            target, _ = export_closure(x, y, self._native_crs(), path)
+            binding.error.setText('Sección de cierre guardada y cargada en QGIS: ' + str(target))
+            binding.error.show()
+        except (ValueError, RuntimeError, OSError) as error:
+            QMessageBox.warning(binding.dialog, 'Guardar Cierre', str(error))
+
+    def _save_complete(self, binding):
+        if (not self._running or self._bindings.get(id(binding.dialog)) is not binding
+                or self.on_complete_basin_requested is None):
+            return
+        try:
+            self.on_complete_basin_requested(binding.dialog)
+        except (ValueError, RuntimeError, OSError) as error:
+            QMessageBox.warning(binding.dialog, 'Guardar CUENCA', str(error))
 
     def _request_frequency(self, binding):
         if (self._running and self._bindings.get(id(binding.dialog)) is binding
