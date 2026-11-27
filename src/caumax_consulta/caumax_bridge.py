@@ -218,36 +218,33 @@ def _native_grid_at_point(dem_path, directions_path, x, y, point_crs):
 
 
 def _effective_raster_paths(layers, x, y, point_crs):
-    """Reuse official CAUMAX 500 m sources only if the custom pair is invalid.
+    """Use only the *original* CAUMAX raster pair in maximum-flow queries.
 
-    The official paths originate in CAUMAX's own _defaultLayerPaths, never in
-    guessed or hard-coded locations. The native Calculate/Consultar result,
-    coordinates, return period and the settings for Método racional stay intact.
+    The native CAUMAX `Configurar capas de cálculo` menu controls the
+    *rational method*. Its customized 25/5 m MDT and D8 may be cropped, even
+    when the selected river point falls within those rasters. This bridge
+    deliberately never borrows them for `Mapa de caudales máximos`.
+
+    Resolve the original files from CAUMAX's own immutable defaults, validate
+    their common grid and coverage, and leave CAUMAX's active layer settings
+    entirely untouched. No 25/5 m fallback or implicit reconfiguration.
     """
-    dem_path = os.fspath(layers.getLayerPath(layers.MDT))
-    d8_path = os.fspath(layers.getLayerPath(layers.FLOWDIRS))
-    configured = (dem_path, d8_path)
     defaults = getattr(layers, '_defaultLayerPaths', None)
     if not isinstance(defaults, dict):
-        # Preserve compatibility with other CAUMAX implementations and tests.
-        return configured
-    official = (defaults.get(layers.MDT), defaults.get(layers.FLOWDIRS))
+        raise ValueError('CAUMAX no expone las rutas de su MDT y D8 originales. '
+                         'No se usarán capas personalizadas en Mapa de caudales máximos.')
+    dem_path, d8_path = defaults.get(layers.MDT), defaults.get(layers.FLOWDIRS)
     if not all(isinstance(path, (str, os.PathLike)) and os.fspath(path)
-               for path in official):
-        return configured
-    official = tuple(map(os.fspath, official))
-    comparable = lambda path: os.path.normcase(os.path.normpath(path.replace('\\', '/')))
-    if tuple(map(comparable, configured)) == tuple(map(comparable, official)):
-        return configured
-    if _native_grid_at_point(*configured, x, y, point_crs):
-        return configured
-    if _native_grid_at_point(*official, x, y, point_crs):
-        return official
-    raise ValueError(
-        'El punto consultado está fuera de la cobertura válida del MDT/D8 '
-        'personalizado y tampoco puede recuperarse con las capas originales '
-        'de CAUMAX. Revisa las rutas, malla y cobertura en Configurar capas '
-        'de cálculo. No se desplaza el punto ni se cambia tu configuración.')
+               for path in (dem_path, d8_path)):
+        raise ValueError('Falta el MDT o el D8 original de CAUMAX; '
+                         'comprueba la instalación de CAUMAX.')
+    original = (os.fspath(dem_path), os.fspath(d8_path))
+    if not _native_grid_at_point(*original, x, y, point_crs):
+        raise ValueError('El punto consultado no está cubierto por una pareja '
+                         'válida de MDT y D8 originales de CAUMAX. '
+                         'No se sustituirán por capas configuradas para '
+                         'Método racional.')
+    return original
 
 
 def make_native_query(dialog, module=None):
@@ -572,22 +569,14 @@ class CaumaxBridge(QObject):
 
     @staticmethod
     def _quick_signature(dialog, module=None):
-        """Track native query AND configured sources without reopening rasters."""
+        """Track only the native result; rational-layer edits are independent."""
         point = getattr(dialog, 'lastValidPoint', None)
         coordinates = (float(point.x()), float(point.y())) if point is not None else None
-        sources = ()
-        if module is not None:
-            try:
-                layers = _layers_module(module)
-                sources = (os.fspath(layers.getLayerPath(layers.MDT)),
-                           os.fspath(layers.getLayerPath(layers.FLOWDIRS)))
-            except (AttributeError, OSError, TypeError, ValueError):
-                pass
         return (
             bool(dialog.btnReport.isEnabled()),
             dialog.txtX.text(), dialog.txtY.text(),
             dialog.txtResultFlow.text(), dialog.txtResultReturnPeriod.text(),
-            coordinates, sources,
+            coordinates,
             tuple((id(button), bool(button.isChecked()))
                   for button in dialog.buttonsAndLayers),
         )
