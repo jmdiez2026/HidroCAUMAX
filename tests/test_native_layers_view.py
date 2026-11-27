@@ -173,10 +173,11 @@ class NativeLayersViewTests(unittest.TestCase):
         group = self.project.layerTreeRoot().addGroup('CAUMAX_CAPAS')
         self.project.addMapLayer(network, False)
         group.addLayer(network)
-        original_first = network.renderer().categories()[0].symbol()
+        initial_categories = network.renderer().categories()
+        original_first = initial_categories[0].symbol()
         initial_color = original_first.color().name()
         initial_width = original_first.width()
-        del original_first
+        del original_first, initial_categories
         style_query_network(self.project)
         current = network.renderer().categories()
         self.assertEqual(len(current), 2)
