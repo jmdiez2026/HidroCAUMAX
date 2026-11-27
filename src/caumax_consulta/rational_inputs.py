@@ -17,7 +17,7 @@ import weakref
 import numpy as np
 from osgeo import gdal, osr
 from qgis.PyQt.QtCore import QObject, QTimer, pyqtSignal
-from qgis.PyQt.QtWidgets import QAbstractButton, QApplication, QDialog
+from qgis.PyQt.QtWidgets import QAbstractButton, QApplication, QDialog, QMessageBox
 from qgis.core import Qgis, QgsMessageLog
 
 from .rational_grid_validation import verify_fine_rational_pair
@@ -303,16 +303,15 @@ def _configured_pair_hint(paths, x, y):
     return ''
 
 
-def _qgis_drainage_pair_hint(paths, x, y):
-    """Check current QGIS result layers, not assumed filenames or cached labels.
+def _matching_qgis_pair(paths, x, y):
+    """Find a *verified*, managed QGIS DEM/D8 pair covering this actual outlet.
 
-    This is diagnostic only: CAUMAX's explicitly configured raster sources
-    remain unchanged until the user selects the correct pair.
+    QGIS presentation is independent of native CAUMAX's QSettings-backed
+    getLayerPath(). Only same-owner terrain and ESRI-D8 result layers qualify.
     """
     try:
-        from qgis.core import QgsProject, QgsRasterLayer
+        from qgis.core import QgsProject, QgsRasterLayer, QgsPointXY
         from .drainage_layers import OWNER_PROPERTY, ROLE_PROPERTY
-        from .rational_grid_validation import verify_fine_rational_pair
         loaded = {}
         for layer in QgsProject.instance().mapLayers().values():
             if (not isinstance(layer, QgsRasterLayer) or not layer.isValid()
@@ -332,26 +331,47 @@ def _qgis_drainage_pair_hint(paths, x, y):
                 for role in ('dem', 'directions'))
             if (dem, d8) == configured:
                 continue
-            # Cheap extent test before a full, bounded-window D8 verification.
-            layer = pair['dem']
-            from qgis.core import QgsPointXY
-            if (not layer.extent().contains(QgsPointXY(x, y))
+            if (not pair['dem'].extent().contains(QgsPointXY(x, y))
                     or not os.path.isfile(dem) or not os.path.isfile(d8)):
                 continue
             try:
-                verified = verify_fine_rational_pair(dem, d8, x, y)
+                if verify_fine_rational_pair(dem, d8, x, y):
+                    return dem, d8
             except ValueError:
                 continue
-            if verified:
-                return (' El proyecto QGIS contiene una pareja MDT/D8 compatible '
-                        'con este punto, pero Método racional tiene configurados '
-                        'otros archivos. MDT cargado en QGIS: ' + dem +
-                        '; D8 CAUMAX/ESRI: ' + d8 +
-                        '. Configura estos TIFF en las capas de cálculo.')
     except (OSError, RuntimeError, TypeError, ValueError):
         pass
+    return None
+
+
+def _qgis_drainage_pair_hint(paths, x, y):
+    pair = _matching_qgis_pair(paths, x, y)
+    if pair:
+        return (' El proyecto QGIS contiene una pareja MDT/D8 compatible '
+                'con este punto, pero Método racional tiene configurados '
+                'otros archivos. MDT cargado en QGIS: ' + pair[0] +
+                '; D8 CAUMAX/ESRI: ' + pair[1] +
+                '. Configura estos TIFF en las capas de cálculo.')
     return ''
 
+
+def _offer_qgis_pair_recovery(owner, configured_paths, x, y, candidate):
+    """Ask before changing the two native CAUMAX calculation sources."""
+    try:
+        message = ('Las capas de 25/5 m que muestra QGIS NO son los mismos '
+                   'archivos que tiene configurados Método racional.\n\n'
+                   'El MDT configurado no cubre el punto solicitado, pero hay '
+                   'un par MDT + ESRI-D8 generado por HidroCAUMAX que sí lo cubre.\n\n'
+                   '¿Guardar copias verificadas en ResolucionMejorada, '
+                   'configurarlas en CAUMAX y calcular con ellas?\n\n'
+                   'No se desplaza el punto de cierre, no se cambian las '
+                   'capas de P₀/precipitación y se conservan los archivos anteriores.')
+        answer = QMessageBox.question(
+            owner, 'HidroCAUMAX · Corregir capas del Método racional', message,
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        return answer == QMessageBox.Yes
+    except (RuntimeError, TypeError, AttributeError):
+        return False
 
 
 def _is_owned_directions(path):
@@ -690,21 +710,48 @@ class RationalInputsBridge(QObject):
                             verified['elevation_m'])
                 except ValueError as error:
                     message = str(error)
+                    repaired = False
                     try:
                         point_x = _rational_coordinate(owner.txtX.text())
                         point_y = _rational_coordinate(owner.txtY.text())
-                        message += (_configured_pair_hint(paths, point_x, point_y)
-                                    or _qgis_drainage_pair_hint(paths, point_x, point_y))
-                    except (AttributeError, TypeError, ValueError):
-                        pass
-                    event['failure_reason'] = message
-                    owner.btnCalculate.setEnabled(False)
-                    report = getattr(owner, 'btnReport', None)
-                    if report is not None:
-                        report.setEnabled(False)
-                    _report_fine_failure(self.iface, message, owner)
-                    self.calculation_finished.emit(owner, stage, event)
-                    return None
+                        candidate = _matching_qgis_pair(paths, point_x, point_y) if paths else None
+                        if candidate and _offer_qgis_pair_recovery(
+                                owner, paths, point_x, point_y, candidate):
+                            native = next((sys.modules.get(cls.__module__.rsplit('.', 1)[0]
+                                + '.layers') for cls in type(owner).__mro__
+                                if cls.__module__.endswith('.rationalmethoddialog')), None)
+                            from .rational_source_recovery import activate_verified_qgis_pair
+                            new_paths = activate_verified_qgis_pair(
+                                native, *candidate, point_x, point_y)
+                            verified = _fine_preflight(owner, new_paths)
+                            if verified is None:
+                                raise ValueError('No se pudo verificar el par recuperado.')
+                            binding.checked_sample = (
+                                point_x, point_y, verified['elevation_m'])
+                            repaired = True
+                            QgsMessageLog.logMessage(
+                                'MDT y D8 activos de QGIS guardados y configurados '
+                                'para Método racional: ' + '; '.join(new_paths),
+                                'HidroCAUMAX', Qgis.Info)
+                        elif candidate:
+                            message += (' Las capas que cubren el cierre están '
+                                        'cargadas en QGIS; vuelve a pulsar '
+                                        'Calcular variables intermedias para '
+                                        'aceptar su configuración.')
+                        else:
+                            message += _configured_pair_hint(paths, point_x, point_y)
+                    except (AttributeError, TypeError, ValueError, OSError) as recovery_error:
+                        if str(recovery_error) != message:
+                            message += ' No se pudo recuperar el MDT/D8: ' + str(recovery_error)
+                    if not repaired:
+                        event['failure_reason'] = message
+                        owner.btnCalculate.setEnabled(False)
+                        report = getattr(owner, 'btnReport', None)
+                        if report is not None:
+                            report.setEnabled(False)
+                        _report_fine_failure(self.iface, message, owner)
+                        self.calculation_finished.emit(owner, stage, event)
+                        return None
                 current_identity = _rational_source_identity(
                     _configured_rational_paths(owner, all_sources=True))
                 # CAUMAX only creates BasinCalculator if basinCalc is None.
