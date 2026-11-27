@@ -80,6 +80,66 @@ class BasinHydrologyDialogTests(unittest.TestCase):
             for index, period in enumerate(PERIODS)})
         return dialog.basin_hydrology_widget.snapshot()
 
+    def test_completed_basin_automatically_calculates_p0_and_all_six_pd(self):
+        # No user button click. Keep the real dialog and combined GDAL worker;
+        # only hold QGIS task scheduling to inspect and finish synchronously.
+        dialog = self.dialog
+        before_query = dialog.query
+        native_task = SimpleNamespace(result=self.analysis, error='', trace='')
+        dialog._task = native_task
+        with patch.object(dialog, '_setup_resolutions'):
+            dialog._completed(native_task, True)
+        self.assertTrue(dialog._auto_hydrology_timer.isActive())
+        self.app.processEvents()
+        self.assertEqual(len(self.manager.tasks), 1)
+        task = self.manager.tasks[0]
+        self.assertEqual(task.kind, 'both')
+        self.assertTrue(dialog._basin_hydrology_busy())
+        self.assertFalse(dialog.report_button.isEnabled())
+        self.assertFalse(dialog.save_project_button.isEnabled())
+        called = []
+        def mean(analysis, path, **kwargs):
+            self.assertIs(analysis, dialog.analysis)
+            called.append(path)
+            return self.stats(float(len(called)), analysis=analysis, path=path)
+        self.publish(task, mean)
+        self.assertEqual(called, [self.sources['p0']] + [
+            self.sources['rainfall'][str(period)] for period in PERIODS])
+        state = dialog.basin_hydrology_widget.snapshot()
+        self.assertEqual(state['p0_result']['mean_mm'], 1.0)
+        self.assertEqual(list(state['rainfall_results']), [
+            str(period) for period in PERIODS])
+        self.assertEqual(state['rainfall_results']['500']['mean_mm'], 7.0)
+        self.assertIn('P₀ medio:', dialog.basin_hydrology_widget.p0_label.text())
+        self.assertEqual(dialog.query, before_query)
+        self.assertTrue(dialog.report_button.isEnabled())
+        self.assertTrue(dialog.save_project_button.isEnabled())
+        self.app.processEvents()
+        self.assertEqual(len(self.manager.tasks), 1)  # No duplicate workers.
+
+    def test_auto_means_are_not_started_if_the_surface_is_being_recalculated(self):
+        dialog = self.dialog
+        dialog._surface_pending = True
+        dialog._surface_valid = False
+        dialog._auto_calculate_basin_hydrology()
+        self.assertEqual(self.manager.tasks, [])
+        # SurfaceTask separately calculates P0 and Pd; no extra worker is
+        # started when both values are already available.
+        dialog._surface_pending = False
+        dialog._surface_valid = True
+        self.seed_results()
+        dialog._auto_calculate_basin_hydrology()
+        self.assertEqual(self.manager.tasks, [])
+
+    def test_manual_cancel_stops_pending_automatic_means_timer(self):
+        dialog = self.dialog
+        dialog._auto_hydrology_timer.start(0)
+        self.assertTrue(dialog._auto_hydrology_timer.isActive())
+        dialog._cancel_basin_hydrology()
+        self.assertFalse(dialog._auto_hydrology_timer.isActive())
+        self.app.processEvents()
+        self.assertEqual(self.manager.tasks, [])
+
     def test_both_buttons_schedule_real_task_bodies_and_publish_only_basin_results(self):
         dialog = self.dialog
         before_query = dialog.query
