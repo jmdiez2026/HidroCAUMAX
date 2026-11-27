@@ -1,3 +1,12 @@
+# HidroCAUMAX v.1.0 — recuperación de Cuenca hidrográfica (revisión 1.0.19, 2026-11-27)
+
+- Se recupera el cálculo de la cuenca desde **Mapa de caudales máximos** cuando el punto consultado no está cubierto por las capas personalizadas de 25/5 m configuradas en CAUMAX. Se verifican las rutas oficiales nativas de 500 m antes de utilizarlas exclusivamente para la cuenca de esa consulta, sin tocar la configuración del método racional ni el caudal original.
+- Se muestran las opciones 500/25/5 m de «Resolución MDT» desde la apertura. Una excepción al cargar datos ya no deja el selector vacío ni el indicador en «calculando» de forma indefinida.
+- Se incorporan pruebas reales PyQGIS de consulta, recuperación de malla, caso fuera de cobertura, conservación del punto y de la configuración personalizada, y compatibilidad con proyectos guardados.
+- Se conservan los estilos de «Red > 50 km²» y los productos finales Esri-D8 de 1.0.18.
+
+---
+
 # HidroCAUMAX v.1.0 — denominación visible Esri-D8 (revisión 1.0.18, 2026-11-27)
 
 - Los grupos y las capas de red calculadas se muestran como **HidroCAUMAX · Drenaje Esri-D8** y **Red de drenaje Esri-D8**. Las etiquetas de diálogos, estados, mensajes y manual adoptan la misma denominación.

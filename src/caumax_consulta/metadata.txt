@@ -2,7 +2,7 @@
 name=HidroCAUMAX v.1.0
 description=Cuenca nativa del Método Racional; capas oficiales CLC/SIOSE, Pfafstetter, agroclima, SNCZI e IGME; Google Satellite; SHP histórico de estaciones AEMET con identificación en OpenData. MDT mejorado con relieve natural en QGIS, Esri-D8, morfología, hipsometría, P₀, precipitaciones e interpretación automática local con criterios documentados.
 about=Punto original de consulta conservado. Ajuste automático del cierre compatible más próximo en Método racional con MDT de 25 y 5 m; ajuste manual con flechas o clic en el mapa. Borrado de los delineados de toda la sesión; capas nuevas de MDT desactivadas inicialmente. Complemento auxiliar para Mapa de caudales máximos > Consulta de capas de caudales máximos y Método Racional > Método Racional. Cuenca racional nativa con caudal pendiente o calculado, sin sustituirlo por capas ráster. Morfometría, suavizado, curva hipsométrica y consultas Q(T)/T(Q). Calcula P₀ medio y precipitaciones máximas diarias medias de la cuenca, con cobertura, consultas P(T)/T(P) y gráficos. Exporta MDT, direcciones D8 y red con umbral editable. PDF con mapa, proyectos multirresolución e interpretación automática sin conexión, basada en los valores calculados y en criterios docentes documentados. CAUMAX es el único complemento previo. Sin dependencia de Processing ni plugins de terceros. TauDEM 5.5.0 y dependencias incluidos para Windows de 64 bits, también para delinear MDT finos cuando GRASS no está disponible.
-version=1.0.18
+version=1.0.19
 qgisMinimumVersion=3.34
 qgisMaximumVersion=3.99
 author=JM
