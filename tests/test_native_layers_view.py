@@ -163,7 +163,7 @@ class NativeLayersViewTests(unittest.TestCase):
         style_query_network(self.project)
         self.assertEqual(pink.renderer().symbol().color().name(),NETWORK_PINK)
         self.assertAlmostEqual(pink.renderer().symbol().width(), NETWORK_LINE_WIDTH_MM)
-        self.assertEqual(pink.renderer().symbol().widthUnit(),
+        self.assertEqual(pink.renderer().symbol().symbolLayer(0).widthUnit(),
                          QgsUnitTypes.RenderMillimeters)
         self.assertEqual(pink.customProperty('HidroCAUMAX/query_network_style'),
                          NETWORK_STYLE_REVISION)
