@@ -21,7 +21,8 @@ from qgis.PyQt.QtCore import QCoreApplication, QEvent, QPoint, QSettings, Qt
 from qgis.PyQt.QtTest import QTest
 from qgis.PyQt.QtWidgets import QComboBox, QGridLayout, QLabel, QPushButton
 from qgis.PyQt.QtGui import QFontMetrics
-from qgis.core import QgsApplication, QgsCoordinateReferenceSystem, QgsGeometry, QgsProject
+from qgis.core import (QgsApplication, QgsCoordinateReferenceSystem, QgsGeometry,
+                       QgsProject, QgsVectorLayer)
 from qgis.gui import QgsMapCanvas
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'src'))
@@ -148,6 +149,39 @@ class DrainageDialogTests(unittest.TestCase):
             caumax_d8_path=str(self.directions)),updated)
         self.assertEqual(dialog.get_smoothing_state()['drainage_state']['threshold_area_m2'],updated['threshold_area_m2'])
         self.assertTrue(dialog.save_project_button.isEnabled())
+
+    def test_basin_d8_generation_erases_all_course_groups_and_does_not_restore_them(self):
+        from caumax_consulta.course_layers import _OWNER_PROPERTY
+        from caumax_consulta.drainage_layers import DRAINAGE_GROUP_LABEL
+        dialog = self.dialog
+        root = self.project.layerTreeRoot()
+        old_ids = []
+        for i in range(2):
+            group = root.addGroup('HidroCAUMAX · Curso principal [obsolete]')
+            group.setCustomProperty(_OWNER_PROPERTY, 'old-' + str(i))
+            layer = QgsVectorLayer('LineString?crs=EPSG:25830',
+                                   'Curso principal total (L)', 'memory')
+            layer.setCustomProperty(_OWNER_PROPERTY, 'old-' + str(i))
+            self.project.addMapLayer(layer, False)
+            group.addLayer(layer)
+            old_ids.append(layer.id())
+        products = SimpleNamespace(analysis=self.analysis, dem_path=str(self.dem),
+                                   caumax_d8_path=str(self.directions))
+        dialog._drainage_ready('25', products, deepcopy(self.state))
+        self.assertTrue(all(self.project.mapLayer(item) is None for item in old_ids))
+        self.assertFalse(any(g.customProperty(_OWNER_PROPERTY, '')
+                             for g in root.findGroups(recursive=True)))
+        self.assertTrue(any(g.name().startswith(DRAINAGE_GROUP_LABEL)
+                            for g in root.findGroups(recursive=True)))
+        self.assertIsNotNone(self.project.mapLayer(
+            dialog._drainage_layers.layers['directions'].id()))
+        self.assertTrue(self.dem.is_file())
+        self.assertTrue(self.directions.is_file())
+        # A subsequent report/redraw must not recreate courses while the D8
+        # result remains the published view.
+        dialog._display_analysis()
+        self.assertFalse(any(g.name().startswith('HidroCAUMAX · Curso principal')
+                             for g in root.findGroups(recursive=True)))
 
     def test_hydrology_export_flushes_pending_threshold_without_exporting_stale_network(self):
         self.choose_manual_threshold();dialog=self.dialog
