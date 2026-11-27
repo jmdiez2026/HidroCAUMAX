@@ -49,12 +49,23 @@ def _remove_unused_taudem_caches(candidates, project, protected_paths):
         # Do not follow symlink trees during disk cleanup.
         if any(path.is_symlink() for path in cache.rglob('*')):
             continue
+        # Rename the whole cache first. If Windows holds a dataset open,
+        # the rename fails without partially deleting a working D8 cache.
+        retired = cache.with_name(cache.name + '.obsolete-' + uuid4().hex[:10])
         try:
-            shutil.rmtree(cache)
+            cache.rename(retired)
         except OSError as error:
             QgsMessageLog.logMessage(
-                'No se pudo retirar la caché TauDEM anterior ' + str(cache) +
+                'No se pudo desvincular la caché TauDEM anterior ' + str(cache) +
                 ': ' + str(error), 'HidroCAUMAX', Qgis.Warning)
+            continue
+        try:
+            shutil.rmtree(retired)
+        except OSError as error:
+            QgsMessageLog.logMessage(
+                'La caché TauDEM anterior quedó en ' + str(retired) +
+                ' por un bloqueo del sistema: ' + str(error),
+                'HidroCAUMAX', Qgis.Warning)
 
 
 def prune_managed_drainage(project=None, *, keep_owner=None, protected_paths=(), retire_paths=()):
