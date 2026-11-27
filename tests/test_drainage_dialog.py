@@ -108,6 +108,78 @@ class DrainageDialogTests(unittest.TestCase):
         self.dialog.drainage_threshold.setValue(self.state['threshold_area_m2']/2e6)
         self.assertTrue(self.dialog._drainage_timer.isActive())
 
+    def test_real_top_dropdown_has_exactly_500_25_and_5_m_choices(self):
+        dialog = self.dialog
+        combo = dialog.resolution_combo
+        self.assertIsInstance(combo, QComboBox)
+        self.assertFalse(combo.isHidden())
+        self.assertTrue(dialog._resolution_checks_widget.isHidden())
+        self.assertEqual(combo.objectName(), 'hidrocaumax_basin_mdt_resolution')
+        self.assertEqual([combo.itemData(i) for i in range(combo.count())],
+                         ['500', '25', '5'])
+        self.assertEqual([combo.itemText(i) for i in range(combo.count())],
+                         ['500×500 m', '25×25 m', '5×5 m'])
+        self.assertFalse(combo.isEnabled())
+
+    def test_dropdown_changes_resolution_using_the_existing_controller(self):
+        dialog = self.dialog
+        options = [dict(key=key, resolution=float(key), available=True,
+                        label='MDT ' + key, status='Disponible')
+                   for key in ('500', '25', '5')]
+        controller = SimpleNamespace(options=options, busy=False, requested_key=None,
+            variants={'25': {'analysis':dialog.analysis, 'query':dialog.query,
+                             'smoothing_state':None}},
+            needs_reference_check=lambda key:False,
+            select=lambda key: selected.append(key))
+        selected = []
+        dialog._resolution_controller = controller
+        dialog._active_resolution_key = '25'
+        dialog._resolution_options(options)
+        combo = dialog.resolution_combo
+        self.assertTrue(combo.isEnabled())
+        self.assertEqual(combo.currentData(), '25')
+        with (patch.object(dialog,'_cancel_drainage'),
+              patch.object(dialog,'_cancel_basin_hydrology'),
+              patch.object(dialog,'_cancel_surface'),
+              patch.object(dialog,'_cache_variant_state'),
+              patch.object(dialog,'_render_interpretations'),
+              patch.object(dialog,'_clear_interpretations'),
+              patch.object(dialog,'_refresh_basin_hydrology_controls')):
+            combo.setCurrentIndex(combo.findData('5'))
+        self.assertEqual(selected, ['5'])
+        self.assertTrue(dialog._resolution_pending)
+        self.assertFalse(combo.isEnabled())
+        dialog._resolution_pending = False
+        dialog._active_resolution_key = '5'
+        dialog._resolution_options(options)
+        self.assertEqual(combo.currentData(), '5')
+        self.assertTrue(combo.isEnabled())
+        controller.variants['5'] = controller.variants['25']
+        with (patch.object(dialog,'_cancel_drainage'),
+              patch.object(dialog,'_cancel_basin_hydrology'),
+              patch.object(dialog,'_cancel_surface'),
+              patch.object(dialog,'_cache_variant_state'),
+              patch.object(dialog,'_render_interpretations'),
+              patch.object(dialog,'_clear_interpretations'),
+              patch.object(dialog,'_refresh_basin_hydrology_controls')):
+            combo.setCurrentIndex(combo.findData('500'))
+        self.assertEqual(selected, ['5','500'])
+
+    def test_dropdown_keeps_unavailable_option_visible_but_not_selectable(self):
+        dialog = self.dialog
+        options = [dict(key=key, resolution=float(key), available=key!='5',
+                        label='MDT '+key, status='Sin cobertura' if key=='5' else 'Disponible')
+                   for key in ('500','25','5')]
+        dialog._resolution_controller = SimpleNamespace(options=options)
+        dialog._active_resolution_key = '500'
+        dialog._resolution_options(options)
+        combo = dialog.resolution_combo
+        self.assertEqual(combo.count(),3)
+        self.assertFalse(combo.model().item(combo.findData('5')).isEnabled())
+        with patch.object(dialog,'_select_resolution') as change:
+            combo.setCurrentIndex(combo.findData('5'))
+        change.assert_not_called()
+
     def test_initial_basin_task_shows_all_resolution_choices_before_it_finishes(self):
         # The 1.0.18 window was empty when AnalysisTask failed before
         # _setup_resolutions(). Do not make the selector disappear again.
