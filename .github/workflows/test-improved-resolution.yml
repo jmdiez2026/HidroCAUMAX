@@ -9,6 +9,7 @@ on:
       - fix/1.0.20-independent-native-map-queries
       - fix/1.0.21-pink-network-and-500m-boundary
       - fix/1.0.22-rational-configured-grids
+      - fix/1.0.23-caummx-red50-category
   workflow_dispatch:
 
 permissions:
