@@ -990,6 +990,14 @@ class BasinDialog(QDialog):
                 or previous.outlet_x != self.analysis.outlet_x or previous.outlet_y != self.analysis.outlet_y):
             self.preview_geometries = {}
         self._update_smoothing()
+        # The improved analysis and its layers are now available; retire only
+        # old plugin-owned 500 m display results, never source DEM/D8 rasters.
+        from .improved_result_cleanup import retire_500m_results
+        retired = retire_500m_results(self.iface)
+        if retired:
+            QgsMessageLog.logMessage(
+                f'Retiradas {retired} capas de resultados de 500x500 m.',
+                'HidroCAUMAX', Qgis.Info)
         self._refresh_drainage_controls()
         self.drainage_progress.hide()
         self.report_button.setEnabled(True)
