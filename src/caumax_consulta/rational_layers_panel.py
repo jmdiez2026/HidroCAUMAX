@@ -261,8 +261,9 @@ class RationalLayersPanel(DrainageControls):
         previous = self._products
         self._discard_result()
         # Only the selected resolution may have a TauDEM group in QGIS.
-        retired = (() if previous is None else
-                   (previous.caumax_d8_path, previous.tau_d8_path))
+        retired = (() if previous is None else tuple(path for path in
+                   (getattr(previous, 'caumax_d8_path', None),
+                    getattr(previous, 'tau_d8_path', None)) if path))
         prune_managed_drainage(retire_paths=retired)
         self._default_threshold()
         self._start_delineation()
@@ -554,8 +555,10 @@ class RationalLayersPanel(DrainageControls):
             state['metadata']['visible'] = state['network_visible']
             self._layers.update(analysis, state, reset_presentation=True)
             prune_managed_drainage(keep_owner=self._layers.owner_key,
-                                  protected_paths=(products.caumax_d8_path,
-                                                   products.tau_d8_path))
+                                  protected_paths=tuple(path for path in
+                                      (getattr(products, 'caumax_d8_path', None),
+                                       getattr(products, 'tau_d8_path', None))
+                                      if path))
         except Exception as error:
             self._failed(str(error))
             return
