@@ -590,6 +590,9 @@ class RationalInputsBridge(QObject):
                     message = str(error)
                     event['failure_reason'] = message
                     owner.btnCalculate.setEnabled(False)
+                    report = getattr(owner, 'btnReport', None)
+                    if report is not None:
+                        report.setEnabled(False)
                     _report_fine_failure(self.iface, message, owner)
                     self.calculation_finished.emit(owner, stage, event)
                     return None
@@ -616,6 +619,9 @@ class RationalInputsBridge(QObject):
                     message = ('Han cambiado las capas MDT/D8 del Método racional. '
                                'Vuelve a calcular las variables intermedias antes del caudal.')
                     binding.checked_sample = None
+                    report = getattr(owner, 'btnReport', None)
+                    if report is not None:
+                        report.setEnabled(False)
                     event['failure_reason'] = message
                     _report_fine_failure(self.iface, message, owner)
                     self.calculation_finished.emit(owner, stage, event)
@@ -628,6 +634,12 @@ class RationalInputsBridge(QObject):
             try:
                 try:
                     result = original(*args, **kwargs)
+                    if (stage == 'parameters'
+                            and not owner.btnCalculate.isEnabled()):
+                        # An early native return (outside BASINS, restricted
+                        # period, insufficient area) must not leave a verified
+                        # elevation available for a later invalid Q calculation.
+                        binding.checked_sample = None
                 except (FineGridError, ZeroDivisionError, statistics.StatisticsError) as error:
                     if stage == 'parameters':
                         binding.checked_sample = None
