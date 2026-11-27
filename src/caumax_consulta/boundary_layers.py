@@ -43,7 +43,7 @@ def boundary_key(analysis, query):
     return hashlib.sha256(json.dumps(identity, ensure_ascii=True).encode('utf-8')).hexdigest()[:32]
 
 
-_FINE_RESOLUTIONS = (25., 5.)
+_FINE_RESOLUTIONS = (500., 25., 5.)
 
 
 def _fine_resolution(width, height):
@@ -114,7 +114,7 @@ def _prune_obsolete_files(paths, directories, project):
 
 
 def _keep_latest_fine(project, preferred):
-    """Retain the latest complete 25 m AND 5 m query, not just one overall."""
+    """Keep the latest managed 500, 25 AND 5 m outline, one query per size."""
     root = project.layerTreeRoot()
     candidates = list(_managed_fine(project))
     obsolete_ids, obsolete_paths = [], []
@@ -155,7 +155,7 @@ def _keep_latest_fine(project, preferred):
 
 
 def deduplicate_boundaries(project=None, preferred_ids=(), *, storage_roots=()):
-    """Keep the latest 25 m and 5 m outlines, removing proven old GPKGs."""
+    """Keep one latest outline at 500, 25 and 5 m; retire old owned files."""
     project = project or QgsProject.instance()
     root = project.layerTreeRoot()
     preferred = set(preferred_ids)
@@ -178,7 +178,7 @@ def deduplicate_boundaries(project=None, preferred_ids=(), *, storage_roots=()):
             continue
         feature = records[0]
         if _fine_resolution(feature['RES_X_M'], feature['RES_Y_M']) is not None:
-            continue  # Fine resolutions keep only the latest query each.
+            continue  # Managed resolutions keep the newest query for each size.
         geometry = QgsGeometry(feature.geometry())
         if geometry.isNull() or geometry.isEmpty():
             continue
@@ -201,10 +201,13 @@ def deduplicate_boundaries(project=None, preferred_ids=(), *, storage_roots=()):
     for group in reversed(root.findGroups()):
         if group.customProperty(OWNER_PROPERTY, '') and not group.children():
             group.parent().removeChildNode(group)
-    if obsolete_paths and storage_roots:
-        # Defer the unlink until OGR/QGIS has released the superseded layer.
+    if obsolete_paths:
+        # On project opening we also clean the private profile-local store.
+        # Never delete external output folders unless an owning controller
+        # explicitly supplied their root directory.
         paths = tuple(obsolete_paths)
-        directories = tuple(storage_roots)
+        directories = (storage_directory(), *tuple(storage_roots))
+        # Defer unlink until OGR/QGIS releases the replaced layer.
         QTimer.singleShot(0, lambda: _prune_obsolete_files(paths, directories, project))
     return len(duplicates) + len(obsolete_ids)
 
@@ -228,7 +231,7 @@ def _polygon(geometry):
 
 
 class BoundaryLayers:
-    """Durable results; only the current 25 m query stays loaded in QGIS."""
+    """Durable outlines: latest 500, 25 and 5 m queries remain in QGIS."""
     def __init__(self, directory=None):
         self.directory = Path(directory) if directory is not None else storage_directory()
         self.layers = {}
