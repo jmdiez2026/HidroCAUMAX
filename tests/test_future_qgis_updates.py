@@ -14,22 +14,28 @@ import prepare_next_version
 class FutureQgisUpdates(unittest.TestCase):
     def test_version_identity_and_published_feed(self):
         metadata=build_release.read_metadata(ROOT/'src/caumax_consulta')
-        self.assertEqual(metadata['version'],'1.0.16')
-        self.assertEqual(metadata['name'],'HidroCAUMAX v.1.0')
-        self.assertEqual(prepare_next_version.public_tag(metadata['version']),'v1.0.16')
+        version = metadata['version']
+        self.assertEqual(metadata['name'], 'HidroCAUMAX v.1.0')
+        tag = prepare_next_version.public_tag(version)
+        name = 'HidroCAUMAX_v' + version.replace('.', '_') + '.zip'
         xml=ET.fromstring(build_release.repository_xml(metadata,build_release.DEFAULT_REPOSITORY,
-            'v1.0.16','HidroCAUMAX_v1_0_16.zip'))
+            tag,name))
         entry=xml.find('pyqgis_plugin')
-        self.assertEqual(entry.get('version'),'1.0.16')
+        self.assertEqual(entry.get('version'),version)
         self.assertEqual(entry.findtext('file_name'),'caumax_consulta.zip')
         self.assertEqual(entry.findtext('download_url'),
-            'https://github.com/jmdiez2026/HidroCAUMAX/releases/download/v1.0.16/HidroCAUMAX_v1_0_16.zip')
+            f'https://github.com/jmdiez2026/HidroCAUMAX/releases/download/{tag}/{name}')
     def test_next_version_can_be_prepared_without_touching_current_source(self):
-        updates=prepare_next_version.plan(ROOT,'1.0.17')
+        metadata=build_release.read_metadata(ROOT/'src/caumax_consulta')
+        major,minor,patch=map(int, metadata['version'].split('.'))
+        future=f'{major}.{minor}.{patch+1}'
+        updates=prepare_next_version.plan(ROOT,future)
         paths={p.relative_to(ROOT).as_posix() for p in updates}
         self.assertIn('src/caumax_consulta/metadata.txt',paths)
-        self.assertEqual(prepare_next_version.public_tag('1.0.17'),'v1.0.17')
-        self.assertIn(b'version=1.0.17',updates[ROOT/'src/caumax_consulta/metadata.txt'])
+        self.assertEqual(prepare_next_version.public_tag(future),'v'+future)
+        self.assertIn(('version='+future).encode(),
+                      updates[ROOT/'src/caumax_consulta/metadata.txt'])
+        self.assertIn('README.md', paths)
     def test_git_workflow_detects_metadata_change_and_verifies_tag(self):
         workflow=(ROOT/'.github/workflows/release.yml').read_text()
         self.assertIn("'src/caumax_consulta/metadata.txt'",workflow)
