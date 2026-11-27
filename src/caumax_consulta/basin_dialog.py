@@ -521,7 +521,12 @@ class BasinDialog(QDialog):
                     control.setFont(font)
             needed = sum(control.sizeHint().width() for control in self._smoothing_controls)
             needed += self._smoothing_controls_layout.spacing()*(len(self._smoothing_controls)-1)
-            if needed <= available or points <= minimum:
+            if needed <= available:
+                break
+            if points <= minimum:
+                # The long label, not a save button, may be abbreviated:
+                # leave both "Exportar Cierre" and "Exportar Cuenca" intact.
+                self.original_check.setText('Original')
                 break
             points = max(minimum,points-.25)
 
