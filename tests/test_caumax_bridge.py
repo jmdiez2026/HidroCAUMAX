@@ -258,6 +258,29 @@ class BridgeTests(unittest.TestCase):
         self.dialog.txtX.setText('341901')
         self.assertEqual(len(started), 2)
 
+    def test_idle_native_query_does_not_reopen_caumax_raster_every_scan(self):
+        # Reproduces continuous "Calculando..." load while the user is idle.
+        # Once CAUMAX accepted the result, our observer must not repeatedly
+        # construct QGIS raster providers to reconfirm the same coordinates.
+        self.valid_query()
+        with patch.object(self.native_module, 'getLayer',
+                          wraps=self.native_module.getLayer) as reader:
+            self.bridge.start()
+            initial_reads = reader.call_count
+            self.assertEqual(initial_reads, 1)
+            for _ in range(30):
+                self.bridge.scan()
+            self.assertEqual(reader.call_count, initial_reads)
+            self.dialog.txtResultFlow.setText('28,5')
+            self.assertEqual(reader.call_count, initial_reads + 1)
+            for _ in range(10):
+                self.bridge.scan()
+            self.assertEqual(reader.call_count, initial_reads + 1)
+            self.dialog.btnReport.setEnabled(False)
+            self.assertFalse(self.basin_button().isEnabled())
+            self.dialog.btnReport.setEnabled(True)
+            self.assertTrue(self.basin_button().isEnabled())
+
     def test_repeat_native_query_cleans_but_period_changes_and_reopening_do_not(self):
         self.valid_query()
         started = []
