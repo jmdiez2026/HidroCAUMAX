@@ -35,13 +35,12 @@ def basin_fingerprint(analysis):
 
 
 def source_paths(query, paths=None):
-    """Freeze configured paths before launching a raster worker.
+    """Freeze P0 and rainfall sources without cross-linking CAUMAX workflows.
 
-    Explicit canonical {'p0','rainfall':{'2',...}} or native P0/RAIN_T mappings
-    take priority. Otherwise read getLayerPath from the already-loaded native
-    CAUMAX layers module; never import its UI, call getLayer, or access a project.
-    A configured missing/empty path is preserved, producing unavailable later.
-    Only unconfigured keys fall back beside query.dem_path.
+    Mapa de caudales máximos always uses original CAUMAX sources; its rational
+    layer configuration is ignored. Método racional retains user-configured
+    P0/rainfall. Explicit supplied paths support portable saved sessions.
+    Never import the native CAUMAX UI or modify its settings.
     """
     supplied = dict(paths or {})
     rainfall = supplied.get("rainfall", {})
@@ -55,6 +54,9 @@ def source_paths(query, paths=None):
                    name.endswith(".layers") and module is not None)
     native = next((module for module in modules
                    if callable(getattr(module, "getLayerPath", None)) and hasattr(module, "P0")), None)
+    source_kind = (query.get("source_kind", "caumax_raster") if isinstance(query, dict)
+                   else getattr(query, "source_kind", "caumax_raster"))
+    originals_only = source_kind != "rational"
     dem = query.get("dem_path", "") if isinstance(query, dict) else getattr(query, "dem_path", "")
     folder = Path(str(dem)).expanduser().parent
     flow = query.get("flow_layer_path", "") if isinstance(query, dict) else getattr(query, "flow_layer_path", "")
@@ -69,12 +71,21 @@ def source_paths(query, paths=None):
         if identifier in supplied:
             return str(supplied[identifier] or "")
         if native is not None and hasattr(native, identifier):
-            try:
-                configured = native.getLayerPath(getattr(native, identifier))
-            except (KeyError, AttributeError):
-                pass
+            key = getattr(native, identifier)
+            if originals_only:
+                defaults = getattr(native, "_defaultLayerPaths", None)
+                if isinstance(defaults, dict) and key in defaults:
+                    return str(defaults[key] or "")
+                # In an unrecognized CAUMAX release there is no reliable
+                # official source: fall back beside the original Q(T) raster
+                # (never to mutable /caumax/ rational settings).
             else:
-                return str(configured or "")
+                try:
+                    configured = native.getLayerPath(key)
+                except (KeyError, AttributeError):
+                    pass
+                else:
+                    return str(configured or "")
         return str(folder / fallback)
 
     return {"p0": value("p0", "P0", "p0.tif"),
