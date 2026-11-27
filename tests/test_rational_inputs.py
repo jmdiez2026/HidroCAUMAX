@@ -378,9 +378,9 @@ class BridgeTests(unittest.TestCase):
             ds.GetRasterBand(1).WriteArray(np.ones((3, 3), dtype=np.float32))
             ds = None
             mdts.append(str(file))
-        selected = {'MDT': mdts[0], 'FLOWDIRS': str(self.path)}
+        selected = {'MDT': mdts[0], 'FLOWDIRS': str(self.path), 'P0': mdts[0]}
         config = types.ModuleType('_test.layers')
-        config.MDT, config.FLOWDIRS = 'MDT', 'FLOWDIRS'
+        config.MDT, config.FLOWDIRS, config.P0 = 'MDT', 'FLOWDIRS', 'P0'
         config.getLayerPath = selected.__getitem__
         with patch.dict(sys.modules, {'_test.layers': config}):
             self.bridge.start()
@@ -393,6 +393,11 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(self.dialog.calculateParameters(), second)
             self.assertEqual(len(self.instances), 2)
             self.assertEqual(selected['MDT'], mdts[1])
+            selected['P0'] = mdts[1]
+            third = self.dialog.calculateParameters()
+            self.assertIsNot(second, third)
+            self.assertEqual(len(self.instances), 3)
+            self.assertEqual(self.dialog.calculateParameters(), third)
 
     def test_private_lookup_replays_verified_mdt_sample_in_both_native_stages(self):
         # Reproduce a stale QGIS raster provider returning None despite the
