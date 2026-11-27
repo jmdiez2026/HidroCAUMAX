@@ -394,6 +394,45 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(len(self.instances), 2)
             self.assertEqual(selected['MDT'], mdts[1])
 
+    def test_private_lookup_replays_verified_mdt_sample_in_both_native_stages(self):
+        # Reproduce a stale QGIS raster provider returning None despite the
+        # original 25 m GeoTIFF containing a valid elevation. No global
+        # CAUMAX function or layer source may be monkey-patched.
+        from caumax_consulta.rational_inputs import (
+            _clone_calculation, _verified_mdt_lookup)
+        from qgis.core import QgsPointXY
+        checked = types.SimpleNamespace(checked_sample=(355900., 4616710., 321.5))
+        native_calls = []
+        def original_reader(key, pt):
+            native_calls.append((key, pt.x(), pt.y()))
+            return None
+        namespace = dict(
+            BasinCalculator=self.Calculator, getValueAtPoint=original_reader,
+            MDT='MDT', point=QgsPointXY(355900, 4616710))
+        exec('def calculateParameters(self):\n'
+             '    instance = BasinCalculator()\n'
+             '    value = getValueAtPoint(MDT, point)\n'
+             '    return value, instance\n'
+             'def calculate(self):\n'
+             '    return getValueAtPoint(MDT, point)\n', namespace)
+        make_lookup = lambda func, mdt: _verified_mdt_lookup(func, mdt, checked)
+        prep = _clone_calculation(
+            types.MethodType(namespace['calculateParameters'], self.dialog),
+            lambda cls: cls, make_lookup=make_lookup)
+        result, instance = prep()
+        self.assertEqual(result, 321.5)
+        self.assertIsInstance(instance, self.Calculator)
+        flow = _clone_calculation(
+            types.MethodType(namespace['calculate'], self.dialog),
+            None, make_lookup=make_lookup, require_factory=False)
+        self.assertEqual(flow(), 321.5)
+        self.assertEqual(native_calls, [])
+        self.assertIsNone(original_reader('MDT', QgsPointXY(355900, 4616710)))
+        self.assertEqual(len(native_calls), 1)
+        checked.checked_sample = None
+        self.assertIsNone(flow())
+        self.assertEqual(len(native_calls), 2)
+
     def test_fine_preflight_failure_halts_native_calculation_and_reports_reason(self):
         from unittest.mock import patch
         self.bridge.start()
