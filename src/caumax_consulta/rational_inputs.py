@@ -336,7 +336,26 @@ def _cell(value):
     return (lambda: value).__closure__[0]
 
 
-def _clone_calculation(original, make_factory):
+def _verified_mdt_lookup(native_reader, mdt_key, binding):
+    """Private GDAL-backed MDT lookup for the exact validated rational cell.
+
+    QGIS may retain an outdated provider for an exported GeoTIFF in a project.
+    For a proven 25/5 m MDT/D8 pair, use the exact same elevation that GDAL
+    checked instead of a stale QGIS identify(None). No other layer or point
+    is intercepted and the original CAUMAX module is never patched.
+    """
+    @functools.wraps(native_reader)
+    def read(key, point, *args, **kwargs):
+        checked = binding.checked_sample
+        if (checked is not None and key == mdt_key
+                and math.isclose(float(point.x()), checked[0], rel_tol=0, abs_tol=1e-7)
+                and math.isclose(float(point.y()), checked[1], rel_tol=0, abs_tol=1e-7)):
+            return checked[2]
+        return native_reader(key, point, *args, **kwargs)
+    return read
+
+
+def _clone_calculation(original, make_factory, *, make_lookup=None, require_factory=True):
     """Clone the native waitcursor closure with private calculator-factory globals."""
     owner = getattr(original, '__self__', None)
     function = getattr(original, '__func__', None)
@@ -349,11 +368,16 @@ def _clone_calculation(original, make_factory):
         if current in memo:
             return memo[current]
         namespace = current.__globals__
-        if ('BasinCalculator' in current.__code__.co_names
+        if (make_factory is not None and 'BasinCalculator' in current.__code__.co_names
                 and callable(namespace.get('BasinCalculator'))):
             namespace = namespace.copy()
             namespace['BasinCalculator'] = make_factory(namespace['BasinCalculator'])
             replacements[0] += 1
+        if (make_lookup is not None and 'getValueAtPoint' in current.__code__.co_names
+                and callable(namespace.get('getValueAtPoint'))):
+            namespace = namespace.copy()
+            namespace['getValueAtPoint'] = make_lookup(
+                namespace['getValueAtPoint'], namespace.get('MDT'))
         closure = []
         for captured in current.__closure__ or ():
             try:
@@ -374,7 +398,7 @@ def _clone_calculation(original, make_factory):
         return copied
 
     copied = clone(function)
-    if not replacements[0]:
+    if require_factory and not replacements[0]:
         raise ValueError('CAUMAX no expone la creación esperada de BasinCalculator.')
     return types.MethodType(copied, owner)
 
@@ -428,6 +452,7 @@ class _DialogBinding:
     flow_previous: object = _MISSING
     flow_replacement: object = None
     source_identity: object = None
+    checked_sample: object = None
 
 
 class RationalInputsBridge(QObject):
@@ -545,8 +570,13 @@ class RationalInputsBridge(QObject):
             self.calculation_started.emit(owner, stage)
             if stage == 'parameters':
                 paths = _configured_rational_paths(owner)
+                binding.checked_sample = None
                 try:
-                    _fine_preflight(owner, paths)
+                    verified = _fine_preflight(owner, paths)
+                    if verified is not None:
+                        binding.checked_sample = (
+                            float(owner.txtX.text()), float(owner.txtY.text()),
+                            verified['elevation_m'])
                 except ValueError as error:
                     message = str(error)
                     event['failure_reason'] = message
@@ -569,6 +599,16 @@ class RationalInputsBridge(QObject):
             if stage == 'parameters':
                 record('btnCalculate', 'setEnabled', 'ready_writes')
             else:
+                # A parameter result is bound to its exact MDT/D8 pair.
+                current = _rational_source_identity(_configured_rational_paths(owner))
+                if (binding.checked_sample is not None and current != binding.source_identity):
+                    message = ('Han cambiado las capas MDT/D8 del Método racional. '
+                               'Vuelve a calcular las variables intermedias antes del caudal.')
+                    binding.checked_sample = None
+                    event['failure_reason'] = message
+                    _report_fine_failure(self.iface, message, owner)
+                    self.calculation_finished.emit(owner, stage, event)
+                    return None
                 record('txtResultFlow', 'setText', 'flow_writes')
                 record('txtResultReturnPeriod', 'setText', 'period_writes')
                 capture_method('getFlow', direct_flows)
@@ -578,6 +618,8 @@ class RationalInputsBridge(QObject):
                 try:
                     result = original(*args, **kwargs)
                 except (FineGridError, ZeroDivisionError, statistics.StatisticsError) as error:
+                    if stage == 'parameters':
+                        binding.checked_sample = None
                     calculator = getattr(owner, 'basinCalc', None)
                     if isinstance(error, FineGridError):
                         message = str(error)
@@ -654,7 +696,10 @@ class RationalInputsBridge(QObject):
                 binding.source_identity = _rational_source_identity(
                     _configured_rational_paths(dialog))
                 try:
-                    adapted = _clone_calculation(previous, lambda cls: self._factory(cls, binding))
+                    adapted = _clone_calculation(
+                        previous, lambda cls: self._factory(cls, binding),
+                        make_lookup=lambda native, mdt: _verified_mdt_lookup(
+                            native, mdt, binding))
                 except ValueError:
                     continue
                 replacement = self._observe(binding, 'parameters', adapted)
@@ -662,7 +707,11 @@ class RationalInputsBridge(QObject):
                 dialog.calculateParameters = replacement
                 original_flow = getattr(dialog, 'calculate', None)
                 if callable(original_flow) and 'calculate' not in vars(dialog):
-                    binding.flow_replacement = self._observe(binding, 'flow', original_flow)
+                    adapted_flow = _clone_calculation(
+                        original_flow, None, require_factory=False,
+                        make_lookup=lambda native, mdt: _verified_mdt_lookup(
+                            native, mdt, binding))
+                    binding.flow_replacement = self._observe(binding, 'flow', adapted_flow)
                     dialog.calculate = binding.flow_replacement
                 key = id(dialog)
                 closed = lambda *args, current=key: self._detach(current)
