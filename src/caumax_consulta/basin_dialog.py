@@ -262,6 +262,7 @@ class BasinDialog(QDialog):
         self.export_button = QPushButton('Guardar Divisoria', smoothing)
         self.export_button.setStyleSheet('QPushButton { padding: 2px 6px; min-height: 0px; }')
         self.export_button.setSizePolicy(QSizePolicy.Maximum,QSizePolicy.Fixed)
+        self.export_button.setMaximumWidth(155)
         self.export_button.setEnabled(False)
         self.export_button.clicked.connect(self._export)
         self._smoothing_controls = (self.original_check,self.smooth_check,degree_label,
