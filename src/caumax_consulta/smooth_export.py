@@ -237,8 +237,8 @@ def choose_export_destination(parent, analysis, query, geometries, degree):
         QMessageBox.warning(parent, 'CAUMAX · Exportar divisoria',
                             'Selecciona una divisoria mostrada en el mapa.')
         return []
-    directory = QStandardPaths.writableLocation(QStandardPaths.DocumentsLocation)
-    suggested = str(Path(directory) / suggested_filename(query))
+    from .improved_storage import export_directory
+    suggested = str(export_directory() / suggested_filename(query))
     destination, selected = QFileDialog.getSaveFileName(
         parent, 'Guardar divisoria', suggested,
         'Shapefile (*.shp);;GeoPackage (*.gpkg)', options=QFileDialog.DontConfirmOverwrite,
