@@ -141,15 +141,16 @@ class BasinArchiveTests(unittest.TestCase):
         green.renderer().setSymbol(green_closure_symbol())
         green.setCustomProperty(GREEN_CLOSURE_ROLE, True)
         self.project.addMapLayer(green)
+        green_name = green.name()
         destination = self.folder / 'con_cierre_verde.hidrocuenca'
         _, manifest = archive.save_complete_basin(
             destination, project=self.project)
-        self.assertTrue(any(item['name'] == green.name()
+        self.assertTrue(any(item['name'] == green_name
                             for item in manifest['layers']))
         self.project.removeMapLayer(green.id())
         restored, _ = archive.open_complete_basin(
             destination, project=self.project)
-        self.assertTrue(any(item['name'] == green.name()
+        self.assertTrue(any(item['name'] == green_name
                             for item in restored['layers']))
         actual = [layer for layer in self.project.mapLayers().values()
                   if layer.customProperty(GREEN_CLOSURE_ROLE, False)]
