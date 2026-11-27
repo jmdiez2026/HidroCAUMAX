@@ -253,6 +253,40 @@ class DrainageLayersTests(unittest.TestCase):
         self.assertEqual({layer.id() for layer in layers.values()}, set(self.project.mapLayers())-self.initial_ids)
         self.assertIn('25×25 m', self.project.layerTreeRoot().findLayer(layers['network'].id()).parent().name())
 
+    def test_last_published_d8_survives_panel_close_and_rational_reset_until_user_deletes(self):
+        state = self.snapshot()
+        state['caumax_d8_path'] = str(self.directions())
+        state['dem_path'] = str(self.elevation())
+        first = self.controller('first')
+        layers = first.update(self.analysis, state)
+        first.publish()
+        group = first._group
+        ids = {layer.id() for layer in layers.values()}
+        self.assertTrue(group.customProperty(drainage.PIN_PROPERTY, False))
+        first.remove()  # Closing a panel must detach, not delete the result.
+        self.assertEqual(first.layers, {})
+        self.assertNotEqual(first.owner_key, 'first')
+        self.assertTrue(all(self.project.mapLayer(k) is not None for k in ids))
+        self.assertEqual(drainage.prune_managed_drainage(self.project), 0)
+        self.assertTrue(all(self.project.mapLayer(k) is not None for k in ids))
+        # A second successfully generated D8 replaces the earlier group.
+        second = self.controller('second')
+        current = second.update(self.analysis, state)
+        second.publish()
+        drainage.prune_managed_drainage(self.project,
+            keep_owner=second.owner_key, preserve_published=False,
+            protected_paths=(state['dem_path'], state['caumax_d8_path']))
+        self.assertTrue(all(self.project.mapLayer(k) is None for k in ids))
+        self.assertTrue(all(self.project.mapLayer(layer.id()) is layer
+                            for layer in current.values()))
+        self.assertFalse(sip.isdeleted(second._group))
+        self.assertTrue(Path(state['dem_path']).is_file())
+        self.assertTrue(Path(state['caumax_d8_path']).is_file())
+        from caumax_consulta.delineation_cleanup import clear_delineation_layers
+        clear_delineation_layers(self.project)
+        self.assertTrue(all(self.project.mapLayer(layer.id()) is None
+                            for layer in current.values()))
+
     def test_offline_network_survives_missing_caumax_raster_without_native_fallback(self):
         state = self.snapshot()
         state['caumax_d8_path'] = '/missing/offline.tif'
