@@ -568,7 +568,11 @@ class RationalLayersPanel(DrainageControls):
             state['directions_visible'] = False
             state['metadata']['visible'] = state['network_visible']
             self._layers.update(analysis, state, reset_presentation=True)
+            self._layers.publish()
+            # A new COMPLETE generation replaces the previous published D8.
+            # Opening another dialog or merely previewing an MDT never does.
             prune_managed_drainage(keep_owner=self._layers.owner_key,
+                                  preserve_published=False,
                                   protected_paths=tuple(path for path in
                                       (getattr(products, 'dem_path', None),
                                        getattr(products, 'caumax_d8_path', None),
