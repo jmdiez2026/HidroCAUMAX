@@ -384,6 +384,12 @@ class ResolutionController(QObject):
         if self._disposed:return False
         key=str(key)
         option=next((item for item in self.options if item['key']==key),None)
+        # A retired resolution's temporary MDT/D8 may no longer exist. Rebuild
+        # it from the verified provider rather than reusing broken file paths.
+        if (key != self._base_key and key in self.variants
+                and not self._cached_sources_available(key)):
+            self.variants.pop(key, None)
+            self._automatic_references.pop(key, None)
         if key in self.variants and not self._needs_reference_rebuild(key):
             self.cancel()
             self.active_key=key
