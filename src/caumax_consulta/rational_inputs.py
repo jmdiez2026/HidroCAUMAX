@@ -225,6 +225,18 @@ def _rational_source_identity(paths):
     return tuple(result)
 
 
+def _rational_coordinate(text):
+    """Read UTM coordinates with Spanish or dot decimal notation."""
+    raw = str(text).strip().replace('\u00a0', '').replace(' ', '')
+    if ',' in raw:
+        raw = raw.replace('.', '').replace(',', '.')
+    value = float(raw)
+    if not math.isfinite(value):
+        raise ValueError('Las coordenadas del cierre no son finitas.')
+    return value
+
+
+
 def _fine_preflight(dialog, paths):
     """Check configured 25/5 m TIFFs *before* native CAUMAX tests the MDT."""
     if not paths:
@@ -247,8 +259,8 @@ def _fine_preflight(dialog, paths):
     if resolution is None and not named_fine:
         return None
     try:
-        x = float(dialog.txtX.text())
-        y = float(dialog.txtY.text())
+        x = _rational_coordinate(dialog.txtX.text())
+        y = _rational_coordinate(dialog.txtY.text())
     except (AttributeError, TypeError, ValueError):
         return None  # Let CAUMAX report an invalid native point.
     return verify_fine_rational_pair(paths[0], paths[1], x, y)
@@ -678,8 +690,8 @@ class RationalInputsBridge(QObject):
                 except ValueError as error:
                     message = str(error)
                     try:
-                        point_x = float(owner.txtX.text().replace(',', '.'))
-                        point_y = float(owner.txtY.text().replace(',', '.'))
+                        point_x = _rational_coordinate(owner.txtX.text())
+                        point_y = _rational_coordinate(owner.txtY.text())
                         message += (_configured_pair_hint(paths, point_x, point_y)
                                     or _qgis_drainage_pair_hint(paths, point_x, point_y))
                     except (AttributeError, TypeError, ValueError):
