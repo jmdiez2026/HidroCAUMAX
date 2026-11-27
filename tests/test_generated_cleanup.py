@@ -81,7 +81,8 @@ class GeneratedCleanupTests(unittest.TestCase):
         manually_loaded.write_text('also from dedicated output store')
         foreign = self.root / 'user-owned-original.tif'
         foreign.write_bytes(b'unrelated file outside private stores')
-        with patch.object(storage, 'po_path', return_value=po), \
+        with patch.object(storage, 'PLUGIN_ROOT', self.root / 'plugin'), \
+             patch.object(storage, 'po_path', return_value=po), \
              patch.object(storage, 'backup_directory', return_value=backups), \
              patch.object(cleanup, 'cache_roots', return_value=(temp_cache,)):
             plan = cleanup.deletion_plan(self.project)
