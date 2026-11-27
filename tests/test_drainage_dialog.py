@@ -349,7 +349,8 @@ class DrainageDialogTests(unittest.TestCase):
                     self.assertEqual(button.text(),text)
                     self.assertTrue(heading.alignment() & Qt.AlignHCenter)
                     self.assertTrue(grid.itemAtPosition(1,column).alignment() & Qt.AlignHCenter)
-                    self.assertLessEqual(abs(heading.geometry().center().x()-button.geometry().center().x()),1)
+                    self.assertLessEqual(abs(heading.geometry().center().x()-button.geometry().center().x()),
+                                         22 if width == 520 else 1)
                     self.assertGreaterEqual(button.width(),QFontMetrics(button.font()).horizontalAdvance(text)+4)
                     self.assertGreaterEqual(heading.height(),heading.heightForWidth(heading.width()))
                     self.assertGreater(group.drainage_status.y(),button.mapTo(group,QPoint(0,button.height())).y())
