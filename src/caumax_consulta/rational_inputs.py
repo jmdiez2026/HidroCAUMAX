@@ -771,7 +771,12 @@ class RationalInputsBridge(QObject):
             except Exception:
                 signal.connect(original)
                 raise
-            binding.routed_signals.append((signal, original, invoke))
+            # A decorated native Python method may accept no Qt checked bool.
+            # After unload, restore equivalent zero-argument dispatch rather
+            # than reconnecting the raw wrapper to clicked(bool).
+            def restore(checked=False, slot=original):
+                return slot()
+            binding.routed_signals.append((signal, original, invoke, restore))
 
     def scan(self):
         if not self._running:
@@ -835,10 +840,10 @@ class RationalInputsBridge(QObject):
         binding = self._bindings.pop(key, None)
         if binding is None:
             return
-        for signal, original, proxy in reversed(binding.routed_signals):
+        for signal, original, proxy, restore in reversed(binding.routed_signals):
             try:
                 signal.disconnect(proxy)
-                signal.connect(original)
+                signal.connect(restore)
             except (RuntimeError, TypeError):
                 pass
         binding.routed_signals.clear()
