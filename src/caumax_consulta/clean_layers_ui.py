@@ -3,6 +3,7 @@ from pathlib import Path
 
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QMessageBox, QPushButton
+from qgis.core import Qgis, QgsMessageLog
 
 
 def clean_button(parent):
@@ -43,7 +44,6 @@ def confirm_cleanup(parent):
         return None
     result = delete_generated(plan)
     from .improved_storage import preserve_exports
-    from qgis.core import Qgis, QgsMessageLog
     try:
         preserve_exports()
     except OSError as error:
