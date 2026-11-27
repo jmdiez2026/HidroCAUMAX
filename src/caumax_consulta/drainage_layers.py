@@ -404,7 +404,12 @@ class DrainageLayers:
         directions = _directions_layer(state.get('caumax_d8_path', ''))
         new = {'network': network, 'directions': directions}
         dem_path = state.get('dem_path')
-        if dem_path:
+        dem_missing = bool(dem_path and not Path(dem_path).is_file())
+        if dem_missing and reset_presentation:
+            # A fresh generation must have an actual MDT; silently reusing a
+            # saved network would mask a failed processing run.
+            raise ValueError('El MDT activo no está disponible para generar las capas.')
+        if dem_path and not dem_missing:
             # Build first so an invalid MDT never removes a valid earlier result.
             dem, shade = _styled_mdt(analysis, dem_path)
             new.update(dem=dem, hillshade=shade)
@@ -452,8 +457,14 @@ class DrainageLayers:
                     and layer.customProperty(OWNER_PROPERTY) == self.owner_key
                     and project.mapLayer(layer.id()) is layer):
                 project.removeMapLayer(layer.id())
-        self.note = ('' if directions is not None else
-            'El TIFF D8 CAUMAX/ESRI no está disponible; la red archivada sigue recuperada.')
+        warnings = []
+        if directions is None:
+            warnings.append('El TIFF D8 CAUMAX/ESRI no está disponible; '
+                            'la red archivada sigue recuperada.')
+        if dem_missing:
+            warnings.append('El MDT temporal ya no está disponible; se recupera '
+                            'la red guardada sin inventar el MDT ni el relieve.')
+        self.note = ' '.join(warnings)
         from .layer_order import ensure_results_above_official
         ensure_results_above_official(project)
         return dict(self.layers)
