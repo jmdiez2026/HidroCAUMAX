@@ -176,6 +176,7 @@ class NativeLayersViewTests(unittest.TestCase):
         original_first = network.renderer().categories()[0].symbol()
         initial_color = original_first.color().name()
         initial_width = original_first.width()
+        del original_first
         style_query_network(self.project)
         current = network.renderer().categories()
         self.assertEqual(len(current), 2)
@@ -187,6 +188,7 @@ class NativeLayersViewTests(unittest.TestCase):
                          QgsUnitTypes.RenderMillimeters)
         self.assertEqual(current[1].label(), 'Red > 50 km²')
         self.assertEqual(network.renderer().classAttribute(), 'sup')
+        del current
         # A freshly reloaded QLR style replaces the symbols, but not the
         # stored marker. The >50 km² category must be repaired regardless.
         restored = QgsCategorizedSymbolRenderer('sup', [
@@ -204,6 +206,7 @@ class NativeLayersViewTests(unittest.TestCase):
         self.assertAlmostEqual(current[1].symbol().width(), 1.30)
         self.assertEqual(current[0].symbol().color().name(), initial_color)
         self.assertEqual(current[0].symbol().width(), initial_width)
+        del current
         self.project.removeMapLayer(network.id())
         self.project.layerTreeRoot().removeChildNode(group)
 
