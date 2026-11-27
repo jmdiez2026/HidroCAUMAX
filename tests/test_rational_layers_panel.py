@@ -245,6 +245,35 @@ class RationalLayersPanelTests(unittest.TestCase):
                             for layer in self.panel._layers.layers.values()))
         self.assertTrue(Path(self.panel._controller.resolution.base_query.dem_path).exists())
 
+    def test_published_d8_survives_rational_point_change_and_panel_reopen_until_manual_clean(self):
+        from caumax_consulta.drainage_layers import (
+            PIN_PROPERTY, OWNER_PROPERTY, prune_managed_drainage)
+        project = QgsProject.instance()
+        self.prepared()
+        published = dict(self.panel._layers.layers)
+        group = self.panel._layers._group
+        ids = {layer.id() for layer in published.values()}
+        self.assertTrue(group.customProperty(PIN_PROPERTY, False))
+        self.assertTrue(all(layer.customProperty(PIN_PROPERTY, False)
+                            for layer in published.values()))
+        self.query = replace(self.query, x=self.query.x + 500.)
+        self.assertTrue(self.panel.refresh_context())
+        self.assertTrue(all(project.mapLayer(key) is not None for key in ids))
+        self.assertIs(group, project.layerTreeRoot().findLayer(
+            published['network'].id()).parent())
+        self.assertEqual(prune_managed_drainage(), 0)
+        self.panel.dispose()
+        self.assertTrue(all(project.mapLayer(key) is not None for key in ids))
+        # A fresh rational calculation window performs a startup prune.
+        # It must NOT silently remove the last published D8 group.
+        self.assertEqual(prune_managed_drainage(), 0)
+        self.assertTrue(all(project.mapLayer(key) is not None for key in ids))
+        # Explicit user cleanup still removes the pinned group and QGIS layers.
+        clear_delineations()
+        self.assertTrue(all(project.mapLayer(key) is None for key in ids))
+        self.assertFalse(any(g.customProperty(OWNER_PROPERTY, '')
+                             for g in project.layerTreeRoot().findGroups(recursive=True)))
+
     def test_ready_network_visibility_exports_and_clear_preserve_native_dialog(self):
         products, state = self.prepared()
         panel = self.panel
