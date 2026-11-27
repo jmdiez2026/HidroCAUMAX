@@ -123,6 +123,27 @@ class BoundaryLayersTests(unittest.TestCase):
         self.assertTrue(root.findLayer(old['suavizada'].id()).isVisible())
         self.assertFalse(root.findLayer(new['original'].id()).isVisible())
 
+    def test_latest_25m_and_latest_5m_coexist_without_previous_copies(self):
+        old_25 = self.update(smooth=False)['original']
+        old_25_id = old_25.id()
+        self.query.x += 100.
+        current_25 = self.update(smooth=False)['original']
+        self.analysis.cell_width = self.analysis.cell_height = 5.
+        old_5 = self.update(smooth=False)['original']
+        old_5_id = old_5.id()
+        self.query.x += 5.
+        current_5 = self.update(smooth=False)['original']
+        self.assertIsNone(self.project.mapLayer(old_25_id))
+        self.assertIsNone(self.project.mapLayer(old_5_id))
+        self.assertIs(self.project.mapLayer(current_25.id()), current_25)
+        self.assertIs(self.project.mapLayer(current_5.id()), current_5)
+        owned = [layer for layer in self.project.mapLayers().values()
+                 if layer.customProperty(OWNER_PROPERTY)
+                 and layer.customProperty(KIND_PROPERTY) == 'original']
+        self.assertEqual({layer.id() for layer in owned},
+                         {current_25.id(), current_5.id()})
+        self.assertEqual(deduplicate_boundaries(self.project), 0)
+
     def test_new_cache_path_and_reopened_controller_reuse_the_same_result(self):
         first = self.update()
         ids = {kind: layer.id() for kind, layer in first.items()}
