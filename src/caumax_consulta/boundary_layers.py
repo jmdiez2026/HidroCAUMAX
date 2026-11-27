@@ -3,13 +3,14 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import re
 import time
 
 from qgis.PyQt import sip
-from qgis.PyQt.QtCore import QVariant
+from qgis.PyQt.QtCore import QVariant, QTimer
 from qgis.core import (QgsApplication, QgsCoordinateReferenceSystem, QgsFeature,
                        QgsField, QgsFillSymbol, QgsGeometry, QgsProject,
-                       QgsVectorFileWriter, QgsVectorLayer, QgsWkbTypes)
+                       QgsVectorFileWriter, QgsVectorLayer, QgsWkbTypes, QgsMessageLog, Qgis)
 
 from .layer_order import activate_result_group, create_result_group, ensure_results_above_official, ORDER_PROPERTY
 
@@ -42,14 +43,25 @@ def boundary_key(analysis, query):
     return hashlib.sha256(json.dumps(identity, ensure_ascii=True).encode('utf-8')).hexdigest()[:32]
 
 
-def _is_25m(width, height):
+_FINE_RESOLUTIONS = (25., 5.)
+
+
+def _fine_resolution(width, height):
     try:
-        return math.isclose(abs(float(width)), 25.) and math.isclose(abs(float(height)), 25.)
+        for size in _FINE_RESOLUTIONS:
+            if (math.isclose(abs(float(width)), size, rel_tol=0, abs_tol=1e-6)
+                    and math.isclose(abs(float(height)), size, rel_tol=0, abs_tol=1e-6)):
+                return size
     except (TypeError, ValueError):
-        return False
+        pass
+    return None
 
 
-def _managed_25m(project):
+def _is_25m(width, height):
+    return _fine_resolution(width, height) == 25.
+
+
+def _managed_fine(project):
     for layer in project.mapLayers().values():
         if (not isinstance(layer, QgsVectorLayer) or not layer.isValid()
                 or not layer.customProperty(OWNER_PROPERTY, '')
@@ -58,49 +70,92 @@ def _managed_25m(project):
                 or layer.featureCount() != 1):
             continue
         feature = next(layer.getFeatures(), None)
-        if feature is not None and _is_25m(feature['RES_X_M'], feature['RES_Y_M']):
+        if feature is not None:
+            resolution = _fine_resolution(feature['RES_X_M'], feature['RES_Y_M'])
+            if resolution is not None:
+                yield resolution, layer
+
+
+def _managed_25m(project):
+    for resolution, layer in _managed_fine(project):
+        if resolution == 25.:
             yield layer
 
 
-def _keep_current_25m(project, preferred):
-    """Keep the last 25 m result, including only its optional smoothed outline."""
-    root = project.layerTreeRoot()
-    candidates = list(_managed_25m(project))
-    if any(layer.isEditable() for layer in candidates):
-        return 0
-    def priority(layer):
+def _prune_obsolete_files(paths, directories, project):
+    """Delete only superseded, unreferenced GeoPackages inside owned stores."""
+    if not paths:
+        return
+    roots = tuple(Path(root).resolve() for root in directories)
+    if not roots:
+        return
+    sources = {str(Path(layer.source().split('|', 1)[0]).resolve())
+               for layer in project.mapLayers().values()
+               if isinstance(layer, QgsVectorLayer) and layer.providerType() == 'ogr'}
+    for raw in sorted(set(paths)):
+        path = Path(raw)
         try:
-            updated = int(layer.customProperty(UPDATED_PROPERTY, '0'))
-        except (TypeError, ValueError):
-            updated = 0
-        node = root.findLayer(layer.id())
-        return (layer.id() not in preferred, -updated,
-                not bool(node and node.isVisible()), layer.customProperty(KIND_PROPERTY) != 'original')
-    candidates.sort(key=priority)
-    if not candidates:
-        return 0
-    current = candidates[0].customProperty(OWNER_PROPERTY)
-    kept, removed = {}, []
-    for layer in candidates:
-        kind = layer.customProperty(KIND_PROPERTY)
-        if layer.customProperty(OWNER_PROPERTY) != current or kind in kept:
-            removed.append(layer.id())
-        else:
-            kept[kind] = layer
-    project.removeMapLayers(removed)
-    # A saved project can contain multiple legend nodes for the same layer ID.
-    for layer in kept.values():
-        nodes = root.findLayers()
-        nodes = [node for node in nodes if node.layerId() == layer.id()]
-        nodes.sort(key=lambda node: (node.parent().customProperty(OWNER_PROPERTY) != current,
-                                    not node.isVisible()))
-        for node in nodes[1:]:
-            node.parent().removeChildNode(node)
-    return len(removed)
+            actual = path.resolve()
+            if (actual.parent not in roots or not re.fullmatch(
+                    r'[0-9a-f]{32}_(original|suavizada)\.gpkg', actual.name)
+                    or str(actual) in sources or not actual.is_file()
+                    or actual.is_symlink()):
+                continue
+            actual.unlink()
+            # These SQLite files, if present, belong to the same retired GPKG.
+            for suffix in ('-wal', '-shm'):
+                sidecar = Path(str(actual) + suffix)
+                if sidecar.is_file() and not sidecar.is_symlink():
+                    sidecar.unlink()
+        except OSError as error:
+            QgsMessageLog.logMessage('No se pudo retirar la divisoria antigua ' +
+                                     str(path) + ': ' + str(error),
+                                     'HidroCAUMAX', Qgis.Warning)
 
 
-def deduplicate_boundaries(project=None, preferred_ids=()):
-    """Retire owned copies and older 25 m results, keeping all GeoPackages."""
+def _keep_latest_fine(project, preferred):
+    """Retain the latest complete 25 m AND 5 m query, not just one overall."""
+    root = project.layerTreeRoot()
+    candidates = list(_managed_fine(project))
+    obsolete_ids, obsolete_paths = [], []
+    for resolution in _FINE_RESOLUTIONS:
+        selected = [layer for size, layer in candidates if size == resolution]
+        if not selected or any(layer.isEditable() for layer in selected):
+            continue
+        def priority(layer):
+            try:
+                updated = int(layer.customProperty(UPDATED_PROPERTY, '0'))
+            except (TypeError, ValueError):
+                updated = 0
+            node = root.findLayer(layer.id())
+            return (layer.id() not in preferred, -updated,
+                    not bool(node and node.isVisible()),
+                    layer.customProperty(KIND_PROPERTY) != 'original')
+        selected.sort(key=priority)
+        current = selected[0].customProperty(OWNER_PROPERTY)
+        kept = {}
+        for layer in selected:
+            kind = layer.customProperty(KIND_PROPERTY)
+            if layer.customProperty(OWNER_PROPERTY) != current or kind in kept:
+                obsolete_ids.append(layer.id())
+                if layer.providerType() == 'ogr':
+                    obsolete_paths.append(layer.source().split('|', 1)[0])
+            else:
+                kept[kind] = layer
+        for layer in kept.values():
+            nodes = [node for node in root.findLayers() if node.layerId() == layer.id()]
+            nodes.sort(key=lambda node: (
+                node.parent().customProperty(OWNER_PROPERTY) != current,
+                not node.isVisible()))
+            for node in nodes[1:]:
+                node.parent().removeChildNode(node)
+    if obsolete_ids:
+        project.removeMapLayers(obsolete_ids)
+    return obsolete_ids, obsolete_paths
+
+
+def deduplicate_boundaries(project=None, preferred_ids=(), *, storage_roots=()):
+    """Keep the latest 25 m and 5 m outlines, removing proven old GPKGs."""
     project = project or QgsProject.instance()
     root = project.layerTreeRoot()
     preferred = set(preferred_ids)
@@ -122,8 +177,8 @@ def deduplicate_boundaries(project=None, preferred_ids=()):
         if len(records) != 1:
             continue
         feature = records[0]
-        if _is_25m(feature['RES_X_M'], feature['RES_Y_M']):
-            continue  # The current 25 m query is selected below, even if its geometry differs.
+        if _fine_resolution(feature['RES_X_M'], feature['RES_Y_M']) is not None:
+            continue  # Fine resolutions keep only the latest query each.
         geometry = QgsGeometry(feature.geometry())
         if geometry.isNull() or geometry.isEmpty():
             continue
@@ -142,11 +197,16 @@ def deduplicate_boundaries(project=None, preferred_ids=()):
             kept.setdefault(signature, []).append(layer)
     if duplicates:
         project.removeMapLayers(duplicates)
-    removed_25m = _keep_current_25m(project, preferred)
+    obsolete_ids, obsolete_paths = _keep_latest_fine(project, preferred)
     for group in reversed(root.findGroups()):
         if group.customProperty(OWNER_PROPERTY, '') and not group.children():
             group.parent().removeChildNode(group)
-    return len(duplicates) + removed_25m
+    if obsolete_paths and storage_roots:
+        # Defer the unlink until OGR/QGIS has released the superseded layer.
+        paths = tuple(obsolete_paths)
+        directories = tuple(storage_roots)
+        QTimer.singleShot(0, lambda: _prune_obsolete_files(paths, directories, project))
+    return len(duplicates) + len(obsolete_ids)
 
 
 def boundary_symbol(kind):
@@ -281,9 +341,9 @@ class BoundaryLayers:
             geometries['suavizada'] = _polygon(smooth)
         self._result_keys.add(key)
         layers = self._existing(key)
-        if _is_25m(analysis.cell_width, analysis.cell_height):
+        if _fine_resolution(analysis.cell_width, analysis.cell_height) is not None:
             if any(layer.isEditable() and layer not in layers.values()
-                   for layer in _managed_25m(project)):
+                   for _, layer in _managed_fine(project)):
                 raise ValueError('Finaliza la edición de la divisoria de 25 m antes de sustituirla.')
         root = project.layerTreeRoot()
         group = next((node for node in root.children() if node.customProperty(OWNER_PROPERTY) == key), None)
@@ -315,7 +375,8 @@ class BoundaryLayers:
                 group.addLayer(layer).setExpanded(False)
         self.layers, self.key = layers, key
         self.set_visibility(visibility or {'original': True, 'suavizada': smooth is not None})
-        deduplicate_boundaries(project, [layer.id() for layer in layers.values()])
+        deduplicate_boundaries(project, [layer.id() for layer in layers.values()],
+                               storage_roots=(self.directory,))
         activate_result_group(project, group, OWNER_PROPERTY)
         ensure_results_above_official(project)
         return dict(layers)
