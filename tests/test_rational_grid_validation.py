@@ -227,6 +227,56 @@ class RationalGridValidationTests(unittest.TestCase):
         self.assertFalse(_qgis_drainage_pair_hint(foreign,
                                                   self.default_x, self.default_y + 100000))
 
+    def test_one_click_recovery_persists_real_25m_dem_d8_and_updates_only_native_sources(self):
+        from caumax_consulta.rational_source_recovery import activate_verified_qgis_pair
+        from caumax_consulta.rational_grid_validation import verify_fine_rational_pair
+        from caumax_consulta.improved_storage import _compatible
+        dem, d8 = self.pair(25)
+        selected = {'MDT': 'previous-mdt.tif', 'FLOWDIRS': 'previous-d8.tif',
+                    'P0': 'original-p0.tif'}
+        cached = {'MDT': object(), 'FLOWDIRS': object(), 'P0': object()}
+        native = SimpleNamespace(MDT='MDT', FLOWDIRS='FLOWDIRS',
+                                 _layerPaths=selected, _layers=cached)
+        writes = {}
+        class FakeSettings:
+            NoError = 0
+            def setValue(self, key, value):
+                writes[key] = value
+            def remove(self, key):
+                writes.pop(key, None)
+            def sync(self):
+                pass
+            def status(self):
+                return self.NoError
+        with patch('caumax_consulta.improved_storage.PLUGIN_ROOT',
+                   self.root / 'installed'), patch(
+                   'caumax_consulta.rational_source_recovery.QSettings',
+                   FakeSettings), patch(
+                   'caumax_consulta.improved_storage.record_exports') as recorder:
+            new_dem, new_d8 = activate_verified_qgis_pair(
+                native, str(dem), str(d8), self.default_x, self.default_y)
+            self.assertTrue(Path(new_dem).is_file())
+            self.assertTrue(Path(new_d8).is_file())
+            self.assertTrue(_compatible(Path(new_dem), Path(new_d8)))
+            self.assertEqual(verify_fine_rational_pair(
+                new_dem, new_d8, self.default_x, self.default_y)['resolution_m'], 25)
+            recorder.assert_called_once()
+            self.assertEqual(selected['MDT'], new_dem)
+            self.assertEqual(selected['FLOWDIRS'], new_d8)
+            self.assertEqual(writes['/caumax/MDT'], new_dem)
+            self.assertEqual(writes['/caumax/FLOWDIRS'], new_d8)
+            self.assertEqual(selected['P0'], 'original-p0.tif')
+            self.assertIn('P0', cached)
+            self.assertNotIn('MDT', cached)
+            self.assertNotIn('FLOWDIRS', cached)
+            before = len(list((self.root / 'installed' / 'ResolucionMejorada').glob('*.tif')))
+            with self.assertRaisesRegex(ValueError, 'no está cubierto por el MDT'):
+                activate_verified_qgis_pair(native, str(dem), str(d8),
+                                            self.default_x, self.default_y + 100000)
+            self.assertEqual(before, len(list(
+                (self.root / 'installed' / 'ResolucionMejorada').glob('*.tif'))))
+            self.assertEqual(selected['MDT'], new_dem)
+
     def test_existing_matching_export_is_suggested_without_reconfiguring_native_layers(self):
         dem, d8 = self.pair(25)
         foreign = (str(self.root / 'wrong_dem.tif'), str(self.root / 'wrong_d8.tif'))
