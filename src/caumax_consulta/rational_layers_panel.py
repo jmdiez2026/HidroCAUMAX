@@ -574,6 +574,13 @@ class RationalLayersPanel(DrainageControls):
                                        getattr(products, 'caumax_d8_path', None),
                                        getattr(products, 'tau_d8_path', None))
                                       if path))
+            # Once the new ESRI-D8 group has actually been published, there
+            # must be no earlier "HidroCAUMAX · Curso principal..." group.
+            # Those vector layers are memory-backed: retire them from the
+            # QGIS registry and release their owned private disk products, but
+            # preserve the new D8 group, MDT and ESRI direction sources.
+            from .course_layers import retire_other_course_groups
+            retire_other_course_groups(iface=self.iface)
         except Exception as error:
             self._failed(str(error))
             return
