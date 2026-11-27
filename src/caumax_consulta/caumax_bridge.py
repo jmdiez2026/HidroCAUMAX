@@ -13,6 +13,7 @@ import sys
 import types
 from typing import Optional, Union
 
+from osgeo import gdal, osr
 from qgis.PyQt.QtCore import QObject, QEvent, QSize, QTimer, QUrl
 from qgis.PyQt.QtGui import QDesktopServices, QFont, QFontInfo, QIcon, QPixmap
 from qgis.PyQt.QtWidgets import QApplication, QBoxLayout, QDialog, QPushButton
@@ -161,6 +162,94 @@ def _layers_module(module):
     return layers
 
 
+def _native_grid_at_point(dem_path, directions_path, x, y, point_crs):
+    """Check the *actual* DEM/D8 grid before launching an asynchronous basin.
+
+    This only reads georeferencing and one sample. A rational custom 25/5 m
+    dataset may cover a different area from the official 500 m flow map.
+    Do not move the click, resample any D8 codes, or change CAUMAX settings.
+    """
+    dem = directions = None
+    try:
+        dem = gdal.Open(str(dem_path).split('|', 1)[0], gdal.GA_ReadOnly)
+        directions = gdal.Open(str(directions_path).split('|', 1)[0], gdal.GA_ReadOnly)
+        if dem is None or directions is None or not dem.RasterCount or not directions.RasterCount:
+            return False
+        if ((dem.RasterXSize, dem.RasterYSize) !=
+                (directions.RasterXSize, directions.RasterYSize)):
+            return False
+        geo_dem, geo_d8 = dem.GetGeoTransform(), directions.GetGeoTransform()
+        if not all(math.isclose(float(a), float(b), abs_tol=1e-7, rel_tol=0)
+                   for a, b in zip(geo_dem, geo_d8)):
+            return False
+        source, dem_crs, d8_crs = (osr.SpatialReference() for _ in range(3))
+        if (source.ImportFromWkt(point_crs.toWkt()) != 0 or
+                dem_crs.ImportFromWkt(dem.GetProjectionRef() or '') != 0 or
+                d8_crs.ImportFromWkt(directions.GetProjectionRef() or '') != 0 or
+                not dem_crs.IsSame(d8_crs)):
+            return False
+        source.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+        dem_crs.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+        px, py = osr.CoordinateTransformation(source, dem_crs).TransformPoint(
+            float(x), float(y))[:2]
+        inverse = gdal.InvGeoTransform(geo_dem)
+        if inverse is None:
+            return False
+        col, row = gdal.ApplyGeoTransform(inverse, px, py)
+        col, row = math.floor(col), math.floor(row)
+        if not (0 <= col < dem.RasterXSize and 0 <= row < dem.RasterYSize):
+            return False
+        for dataset in (dem, directions):
+            band = dataset.GetRasterBand(1)
+            value = band.ReadAsArray(col, row, 1, 1)
+            if value is None or not math.isfinite(float(value[0, 0])):
+                return False
+            nodata = band.GetNoDataValue()
+            if nodata is not None and float(value[0, 0]) == float(nodata):
+                return False
+            if (not band.GetMaskFlags() & gdal.GMF_ALL_VALID
+                    and band.GetMaskBand().ReadAsArray(col, row, 1, 1)[0, 0] == 0):
+                return False
+        return True
+    except (OSError, RuntimeError, ValueError, TypeError, OverflowError):
+        return False
+    finally:
+        dem = directions = None
+
+
+def _effective_raster_paths(layers, x, y, point_crs):
+    """Reuse official CAUMAX 500 m sources only if the custom pair is invalid.
+
+    The official paths originate in CAUMAX's own _defaultLayerPaths, never in
+    guessed or hard-coded locations. The native Calculate/Consultar result,
+    coordinates, return period and the settings for Método racional stay intact.
+    """
+    dem_path = os.fspath(layers.getLayerPath(layers.MDT))
+    d8_path = os.fspath(layers.getLayerPath(layers.FLOWDIRS))
+    configured = (dem_path, d8_path)
+    defaults = getattr(layers, '_defaultLayerPaths', None)
+    if not isinstance(defaults, dict):
+        # Preserve compatibility with other CAUMAX implementations and tests.
+        return configured
+    official = (defaults.get(layers.MDT), defaults.get(layers.FLOWDIRS))
+    if not all(isinstance(path, (str, os.PathLike)) and os.fspath(path)
+               for path in official):
+        return configured
+    official = tuple(map(os.fspath, official))
+    comparable = lambda path: os.path.normcase(os.path.normpath(path.replace('\\', '/')))
+    if tuple(map(comparable, configured)) == tuple(map(comparable, official)):
+        return configured
+    if _native_grid_at_point(*configured, x, y, point_crs):
+        return configured
+    if _native_grid_at_point(*official, x, y, point_crs):
+        return official
+    raise ValueError(
+        'El punto consultado está fuera de la cobertura válida del MDT/D8 '
+        'personalizado y tampoco puede recuperarse con las capas originales '
+        'de CAUMAX. Revisa las rutas, malla y cobertura en Configurar capas '
+        'de cálculo. No se desplaza el punto ni se cambia tu configuración.')
+
+
 def make_native_query(dialog, module=None):
     """Freeze the successful native query; edited input fields are only checked.
 
@@ -214,10 +303,10 @@ def make_native_query(dialog, module=None):
         # The successful native query remains authoritative. A cell estimate
         # must not silently replace its point with another point.
         pass
+    selected_dem, selected_d8 = _effective_raster_paths(layers, x, y, crs)
     return NativeQuery(
         flow, period, x, y, crs,
-        os.fspath(layers.getLayerPath(layers.FLOWDIRS)),
-        os.fspath(layers.getLayerPath(layers.MDT)),
+        selected_d8, selected_dem,
         raster.name(), raster.id(), raster.source(), cell,
     )
 
