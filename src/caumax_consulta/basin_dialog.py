@@ -881,7 +881,11 @@ class BasinDialog(QDialog):
             self._drainage_layers = DrainageLayers(self.iface)
         visible = bool((self._drainage_state or {}).get('network_visible',
                        (self._drainage_state or {}).get('metadata',{}).get('visible',True)))
-        self._drainage_layers.update(self.analysis,self._drainage_state,visible=visible)
+        published = self._drainage_layers.update(
+            self.analysis, self._drainage_state, visible=visible)
+        if (self._drainage_state is not None and
+                all(kind in published for kind in ('network', 'directions', 'dem'))):
+            self._drainage_layers.publish()
         if self._drainage_state is not None:
             # Publication is complete: purge every earlier course group (also
             # from a previous maximum-flow or rational query) and leave only
@@ -1001,6 +1005,20 @@ class BasinDialog(QDialog):
         self._map_data = {}
         self._restored = False
         self._display_analysis()
+        # At this point the actual ESRI-D8 result has been registered. Keep
+        # only this published generation, not obsolete earlier D8 groups.
+        if (self._drainage_layers is not None and self._drainage_layers._group
+                is not None and
+                self._drainage_layers._group.customProperty(
+                    'HidroCAUMAX/drainage_published', False)):
+            from .drainage_layers import prune_managed_drainage
+            prune_managed_drainage(
+                keep_owner=self._drainage_layers.owner_key,
+                protected_paths=tuple(path for path in
+                    (getattr(products, 'dem_path', None),
+                     getattr(products, 'caumax_d8_path', None),
+                     getattr(products, 'tau_d8_path', None)) if path),
+                preserve_published=False)
         if (previous.geometry_wkb != self.analysis.geometry_wkb
                 or previous.outlet_x != self.analysis.outlet_x or previous.outlet_y != self.analysis.outlet_y):
             self.preview_geometries = {}
