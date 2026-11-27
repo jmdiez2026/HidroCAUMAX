@@ -130,7 +130,7 @@ class DrainageDialogTests(unittest.TestCase):
             variants={'25': {'analysis':dialog.analysis, 'query':dialog.query,
                              'smoothing_state':None}},
             needs_reference_check=lambda key:False,
-            select=lambda key: selected.append(key))
+            select=lambda key: selected.append(key), dispose=lambda: None)
         selected = []
         dialog._resolution_controller = controller
         dialog._active_resolution_key = '25'
@@ -170,7 +170,7 @@ class DrainageDialogTests(unittest.TestCase):
         options = [dict(key=key, resolution=float(key), available=key!='5',
                         label='MDT '+key, status='Sin cobertura' if key=='5' else 'Disponible')
                    for key in ('500','25','5')]
-        dialog._resolution_controller = SimpleNamespace(options=options)
+        dialog._resolution_controller = SimpleNamespace(options=options, dispose=lambda: None)
         dialog._active_resolution_key = '500'
         dialog._resolution_options(options)
         combo = dialog.resolution_combo
