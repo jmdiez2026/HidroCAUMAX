@@ -30,6 +30,7 @@ OWNERS = (
     'HidroCAUMAX/terrain_owner',
     'HidroCAUMAX/export_owner',
     'HidroCAUMAX/closure_point',
+    'HidroCAUMAX/main_course_outlet',
 )
 
 
