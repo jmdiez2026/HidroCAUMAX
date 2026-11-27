@@ -15,7 +15,7 @@ from typing import Optional, Union
 
 from osgeo import gdal, osr
 from qgis.PyQt.QtCore import QObject, QEvent, QSize, QTimer, QUrl
-from qgis.PyQt.QtGui import QDesktopServices, QFont, QFontInfo, QIcon, QPixmap
+from qgis.PyQt.QtGui import QDesktopServices, QFont, QFontInfo, QIcon, QImage, QPixmap
 from qgis.PyQt.QtWidgets import QApplication, QBoxLayout, QDialog, QPushButton
 from qgis.core import (
     Qgis, QgsCoordinateReferenceSystem, QgsMessageLog, QgsRasterLayer,
@@ -34,13 +34,36 @@ QPushButton:disabled { color: #7A8790; background-color: #EAF3F8; }
 '''
 
 
+def _gea_state_icon(logo):
+    """Provide an explicitly muted, translucent icon for disabled buttons."""
+    icon = QIcon()
+    icon.addPixmap(logo, QIcon.Normal, QIcon.Off)
+    image = logo.toImage().convertToFormat(QImage.Format_ARGB32)
+    for y in range(image.height()):
+        for x in range(image.width()):
+            color = image.pixelColor(x, y)
+            if color.alpha() == 0:
+                continue
+            luminance = round(0.2126 * color.red() + 0.7152 * color.green()
+                              + 0.0722 * color.blue())
+            # Cool grey with reduced contrast and opacity, preserving the logo.
+            shade = round(0.40 * luminance + 0.60 * 190)
+            color.setRed(max(0, min(255, shade - 5)))
+            color.setGreen(max(0, min(255, shade)))
+            color.setBlue(max(0, min(255, shade + 7)))
+            color.setAlpha(round(color.alpha() * 0.57))
+            image.setPixelColor(x, y, color)
+    icon.addPixmap(QPixmap.fromImage(image), QIcon.Disabled, QIcon.Off)
+    return icon
+
+
 def _set_gea_icon(button):
     """Add the existing GEA image without replacing a native button or its slots."""
     logo = QPixmap(str(LOGO_PATH))
     if logo.isNull():
         return
     height = max(1, min(button.fontMetrics().height(), button.sizeHint().height() - 4))
-    button.setIcon(QIcon(logo))
+    button.setIcon(_gea_state_icon(logo))
     button.setIconSize(QSize(max(1, round(height * logo.width() / logo.height())), height))
 
 
@@ -104,7 +127,7 @@ class _LogoBasinButton(QPushButton):
             if logo.isNull():
                 return
             self._logo = logo
-            self.setIcon(QIcon(logo))
+            self.setIcon(_gea_state_icon(logo))
             self._update_relative_size()
         except RuntimeError:
             # A queued callback may outlive an already closed native dialog.
