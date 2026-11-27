@@ -190,6 +190,9 @@ class RationalLayersBridge(QObject):
                 raise ValueError('El punto de cierre no está en el CRS nativo EPSG:25830.')
         if not crs.isValid():
             raise ValueError('No está disponible el CRS EPSG:25830 del Método racional.')
+        if -180 <= x <= 180 and -90 <= y <= 90:
+            raise ValueError('CAUMAX necesita coordenadas UTM EPSG:25830 en metros, '
+                             'no longitudes/latitudes en grados. Selecciona el punto en el mapa.')
         dem, directions = _layer_paths(binding.dialog)
         return RationalTerrainQuery(x, y, crs, dem, directions)
 
@@ -212,18 +215,19 @@ class RationalLayersBridge(QObject):
             if not canvas_crs.isValid() or not native_crs.isValid():
                 raise ValueError('El lienzo o el sistema EPSG:25830 no tiene un CRS válido.')
             if canvas_crs != native_crs:
-                # The stock CAUMAX updatePoint() writes raw canvas X/Y and
-                # outletPoint() reads those numbers as 25830, which silently
-                # selects another geographical location. Correct the fields
-                # in-place, preserving the actual map click.
+                # Native CAUMAX updatePoint() writes raw canvas X/Y, while
+                # outletPoint() always interprets the fields as EPSG:25830.
                 native_pt = QgsCoordinateTransform(
                     canvas_crs, native_crs, QgsProject.instance()
                 ).transform(QgsPointXY(x, y))
                 x, y = native_pt.x(), native_pt.y()
-                binding.dialog.txtX.setText(f'{x:.8f}'.rstrip('0').rstrip('.'))
-                binding.dialog.txtY.setText(f'{y:.8f}'.rstrip('0').rstrip('.'))
-            # Use exactly what the native calculator reads, not a different
-            # high-precision position in the independent improved panel.
+            # Preserve the clicked cell's actual position in *both* CAUMAX
+            # and the refined result: stock CAUMAX rounds to one decimal.
+            # Using the rounded native fields only in CAUMAX previously made
+            # its basin and HidroCAUMAX's basin use slightly different closes.
+            binding.dialog.txtX.setText(f'{x:.8f}'.rstrip('0').rstrip('.'))
+            binding.dialog.txtY.setText(f'{y:.8f}'.rstrip('0').rstrip('.'))
+            # Use exactly what the native calculator reads.
             fields = self._fields(binding.dialog)
             actual_x, actual_y = map(_number, fields)
             binding.input_crs = native_crs
