@@ -346,12 +346,16 @@ class BoundaryLayersTests(unittest.TestCase):
         other_ids = {layer.id() for layer in other.update(
             self.analysis, other_query, self.original).values()}
         root = self.project.layerTreeRoot()
-        group = root.findLayer(second['original'].id()).parent()
+        # The other 5 m query supersedes the controller's earlier 5 m result.
+        # Keep the user layer inside the still-current 25 m result group: explicit
+        # removal must remove only its owned layers, not this foreign layer.
+        group = root.findLayer(first['original'].id()).parent()
         user_layer = QgsVectorLayer('LineString?crs=EPSG:25830', 'Divisoria original', 'memory')
         self.project.addMapLayer(user_layer, False)
         group.addLayer(user_layer)
         user_id = user_layer.id()
-        self.assertEqual(self.controller.remove(), len(ids))
+        still_loaded = len(ids & set(self.project.mapLayers()))
+        self.assertEqual(self.controller.remove(), still_loaded)
         self.assertTrue(all(self.project.mapLayer(layer_id) is None for layer_id in ids))
         self.assertTrue(all(self.project.mapLayer(layer_id) is not None for layer_id in other_ids))
         self.assertIs(self.project.mapLayer(user_id), user_layer)
