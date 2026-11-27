@@ -255,25 +255,40 @@ def _fine_preflight(dialog, paths):
 
 
 def _configured_pair_hint(paths, x, y):
-    """Offer a verified existing export, never change the user's CAUMAX settings."""
+    """Offer a geographically verified export without changing CAUMAX settings."""
     try:
-        from .improved_storage import latest_pair
-        pair = latest_pair()
-        if not pair:
-            return ''
-        dem, d8 = (os.path.normcase(os.path.abspath(os.fspath(p))) for p in pair)
-        if paths and tuple(os.path.normcase(os.path.abspath(os.fspath(p)))
-                           for p in paths[:2]) == (dem, d8):
-            return ''
-        verified = verify_fine_rational_pair(dem, d8, x, y)
-        if not verified:
-            return ''
-        return (' Existe una pareja MDT/D8 de HidroCAUMAX verificada para este '
-                'punto en ResolucionMejorada. Configura en Método racional '
-                f'el MDT: {dem} y las direcciones ESRI-D8: {d8}.')
+        from .improved_storage import exported_pairs
+        configured = tuple(os.path.normcase(os.path.abspath(os.fspath(p)))
+                           for p in paths[:2]) if paths else ()
+        for source_dem, source_d8 in exported_pairs():
+            dem, d8 = (os.path.normcase(os.path.abspath(os.fspath(p)))
+                       for p in (source_dem, source_d8))
+            if configured == (dem, d8):
+                continue
+            dataset = gdal.Open(dem, gdal.GA_ReadOnly)
+            if dataset is None:
+                continue
+            transform = dataset.GetGeoTransform()
+            if (transform[1] <= 0 or transform[5] >= 0
+                    or transform[2] != 0 or transform[4] != 0):
+                dataset = None
+                continue
+            within = (transform[0] <= x < transform[0] + dataset.RasterXSize * transform[1]
+                      and transform[3] + dataset.RasterYSize * transform[5] < y <= transform[3])
+            dataset = None
+            if not within:
+                continue
+            try:
+                verified = verify_fine_rational_pair(dem, d8, x, y)
+            except ValueError:
+                continue
+            if verified:
+                return (' Existe una pareja MDT/D8 de HidroCAUMAX verificada para este '
+                        'punto en ResolucionMejorada. Configura en Método racional '
+                        f'el MDT: {dem} y las direcciones ESRI-D8: {d8}.')
     except (OSError, RuntimeError, TypeError, ValueError):
-        return ''
-
+        pass
+    return ''
 
 
 def _is_owned_directions(path):
