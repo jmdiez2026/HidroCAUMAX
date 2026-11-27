@@ -50,7 +50,7 @@ def _esri_d8_schema_issue(raster, resolution):
     encoding = (raster.GetMetadataItem('FLOW_DIRECTION_ENCODING') or '').strip().upper()
     product = raster.GetMetadataItem('HIDROCAUMAX_PRODUCT') or ''
     if encoding == 'TAUDEM_D8':
-        return ('El ráster utiliza códigos nativos TauDEM (1–8) sin recodificar, no ESRI D8. '
+        return ('El ráster utiliza códigos D8 nativos (1–8) sin recodificar, no Esri-D8. '
                 'Selecciona Dirección de flujo D8 · CAUMAX/ESRI en '
                 'ResolucionMejorada, no d8_tau.tif.')
     if encoding and encoding != 'ESRI_D8':

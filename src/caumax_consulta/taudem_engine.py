@@ -72,7 +72,7 @@ def probe_taudem(bin_dir=None, *, required_tools=None):
         try:
             bundled = _runtime.discover_bundled_runtime()
         except (OSError, ValueError) as error:
-            return {"available": False, "reason": "No se puede usar el TauDEM integrado: " + str(error),
+            return {"available": False, "reason": "No se pueden preparar las herramientas Esri-D8: " + str(error),
                     "executables": {}, "mpiexec": None, "engine": "TauDEM", "installation_url": INSTALL_URL}
         if bundled is not None:
             return dict(bundled, installation_url=INSTALL_URL)
@@ -118,7 +118,7 @@ def probe_taudem(bin_dir=None, *, required_tools=None):
     if not mpi:
         missing.append("MPI/mpiexec")
     return {"available": not missing, "reason": "" if not missing else
-            "TauDEM real no está disponible. Falta: " + ", ".join(missing) +
+            "El procesamiento Esri-D8 no está disponible. Falta: " + ", ".join(missing) +
             ". Revisa el motor predeterminado y sus dependencias oficiales: " + INSTALL_URL,
             "executables": executables, "mpiexec": mpi, "engine": "TauDEM",
             "installation_url": INSTALL_URL, "bin_dir": str(bin_dir) if bin_dir is not None else None,
@@ -162,10 +162,10 @@ def _run(engine, tool, arguments, work, cancelled):
     _h._check(cancelled)
     text = logfile.read_text(encoding="utf-8", errors="replace")
     if status:
-        raise ValueError(f"TauDEM {tool} falló (código{status}). No se usa otro motor.\n" + text[-9000:])
+        raise ValueError(f"La herramienta {tool} para Esri-D8 falló (código{status}). No se usa otro motor.\n" + text[-9000:])
     version = re.search(r"\bversion\s+([^\s]+)", text, re.I)
     if version is None:
-        raise ValueError(f"El ejecutable {tool} no identifica una versión TauDEM. "
+        raise ValueError(f"El ejecutable {tool} para Esri-D8 no identifica su versión. "
                          "Revise la carpeta seleccionada; no se sustituye por otro motor.")
     return {"tool": tool, "seconds": time.monotonic() - started,
             "version": version.group(1), "returncode": status}
@@ -174,7 +174,7 @@ def _run(engine, tool, arguments, work, cancelled):
 def _recode_tau_d8(native_path, destination, dem_path, cancelled):
     source = dem = target = None
     try:
-        source, dem = _b._open_raster(native_path, "D8 TauDEM"), _b._open_raster(dem_path, "MDT original")
+        source, dem = _b._open_raster(native_path, "D8 nativo"), _b._open_raster(dem_path, "MDT original")
         _b._aligned(source, dem)
         target = gdal.GetDriverByName("GTiff").Create(str(destination), source.RasterXSize,
             source.RasterYSize, 1, gdal.GDT_Byte, ["COMPRESS=LZW", "TILED=YES", "BIGTIFF=IF_SAFER"])
@@ -204,7 +204,7 @@ def _recode_tau_d8(native_path, destination, dem_path, cancelled):
             if not original.GetMaskFlags() & gdal.GMF_ALL_VALID:
                 valid &= _b._read(original.GetMaskBand(), 0, top, values.shape[1], values.shape[0]) != 0
             if np.any(valid & ((values < 1) | (values > 8) | (values != np.trunc(values)))):
-                raise ValueError("La salida TauDEM contiene códigos distintos de1..8.")
+                raise ValueError("El D8 de origen contiene códigos distintos de 1..8.")
             coded = np.full(values.shape, 255, dtype=np.uint8)
             coded[valid] = _LUT[values[valid].astype(np.intp)]
             out.WriteArray(coded, 0, top)
@@ -226,7 +226,7 @@ def _cached_directions(paths, manifest, dem, key, hashes, runtime):
                 or any(not step.get('version') for step in steps)):
             return None
         for path in paths:
-            cached = _b._open_raster(path, 'producto TauDEM D8 en caché')
+            cached = _b._open_raster(path, 'producto Esri-D8 en caché')
             try:
                 _b._aligned(cached, dem)
                 if path == paths[-1] and not (
@@ -263,15 +263,15 @@ def _prepare_d8_cache(engine, source, dem, cache_dir, cancelled, progress):
         with tempfile.TemporaryDirectory(prefix='td_', dir=str(_h._runtime_folder()), ignore_cleanup_errors=True) as temporary:
             work = Path(temporary)
             staged = _h._stage_dem(source, dem, work, cancelled)
-            progress('Preparando MDT con TauDEM PitRemove', 5)
+            progress('Preparando MDT para Esri-D8 (PitRemove)', 5)
             steps = [_run(engine, 'pitremove', ['-z', staged, '-fel', work/'filled.tif'], work, cancelled)]
-            progress('Calculando direcciones TauDEM D8', 20)
+            progress('Calculando direcciones Esri-D8', 20)
             steps.append(_run(engine, 'd8flowdir', ['-fel', work/'filled.tif', '-p', work/'d8_tau.tif',
                                                   '-sd8', work/'slope_tau.tif'], work, cancelled))
             _recode_tau_d8(work/'d8_tau.tif', work/'d8_caumax.tif', source, cancelled)
             converted = gdal.Open(str(work/'d8_caumax.tif'), gdal.GA_Update)
             if converted is None:
-                raise ValueError('No se puede identificar la caché D8 TauDEM generada.')
+                raise ValueError('No se puede identificar el resultado D8 generado.')
             converted.SetMetadataItem('HYDRO_VERSION', _D8_VERSION)
             converted.SetMetadataItem('SOURCE_KEY', key)
             converted.FlushCache()
@@ -306,10 +306,10 @@ def prepare_d8(dem_path, cache_dir, *, bin_dir=None, cancelled=lambda: False,
     if not engine['available']:
         raise ValueError(engine['reason'])
     if engine.get('private_runtime'):
-        progress('Preparando TauDEM integrado y verificando sus archivos', 0)
+        progress('Preparando herramientas Esri-D8 y verificando sus archivos', 0)
     engine = _runtime.ensure_runtime(engine, cancelled)
     source = Path(dem_path).expanduser().resolve()
-    dem = _b._open_raster(source, 'MDT TauDEM')
+    dem = _b._open_raster(source, 'MDT de cálculo Esri-D8')
     try:
         _b._aligned(dem, dem)
         if dem.RasterXSize * dem.RasterYSize > _h.MAX_RASTER_CELLS:
@@ -322,7 +322,7 @@ def prepare_d8(dem_path, cache_dir, *, bin_dir=None, cancelled=lambda: False,
 def _outlet(path, x, y, wkt):
     ds = ogr.GetDriverByName("GPKG").CreateDataSource(str(path))
     if ds is None:
-        raise ValueError("No se puede crear el cierre de trabajo TauDEM.")
+        raise ValueError("No se puede crear el cierre de trabajo Esri-D8.")
     reference = osr.SpatialReference(wkt=wkt)
     reference.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
     layer = ds.CreateLayer("outlet", reference, ogr.wkbPoint)
@@ -333,7 +333,7 @@ def _outlet(path, x, y, wkt):
     feature.SetGeometry(point)
     feature.SetField("id", 1)
     if layer.CreateFeature(feature) != ogr.OGRERR_NONE:
-        raise ValueError("No se puede escribir el cierre de trabajo TauDEM.")
+        raise ValueError("No se puede escribir el cierre de trabajo Esri-D8.")
     feature = layer = ds = None
 
 
@@ -358,10 +358,10 @@ def _network(engine, filled, native, accumulation, outlet, threshold_cells, fold
     staging = work / ("network_" + str(threshold_cells))
     staging.mkdir(exist_ok=True)
     staged_stream, staged_network = staging / stream.name, staging / network.name
-    progress("Definiendo red TauDEM", 75)
+    progress("Definiendo red Esri-D8", 75)
     steps = [_run(engine, "threshold", ["-ssa", accumulation, "-src", staged_stream,
                    "-thresh", threshold_cells], work, cancelled)]
-    progress("Generando cauces TauDEM", 85)
+    progress("Generando cauces Esri-D8", 85)
     steps.append(_run(engine, "streamnet", ["-fel", filled, "-p", native,
         "-ad8", accumulation, "-src", staged_stream, "-o", outlet, "-lyrname", "outlet",
         "-ord", staging / "order.tif", "-tree", staging / "tree.dat",
@@ -369,7 +369,7 @@ def _network(engine, filled, native, accumulation, outlet, threshold_cells, fold
         "-w", staging / "watersheds.tif", "-sw"], work, cancelled))
     vector = ogr.Open(str(staged_network))
     if vector is None or vector.GetLayer(0).GetFeatureCount() <= 0:
-        raise EmptyStreamNetworkError("El umbral no produce cauces TauDEM en la cuenca. Elija un umbral menor.")
+        raise EmptyStreamNetworkError("El umbral no produce cauces Esri-D8 en la cuenca. Elija un umbral menor.")
     vector = None
     _h._check(cancelled)
     folder.mkdir(parents=True, exist_ok=True)
@@ -402,7 +402,7 @@ def _preserved_outlet(directions_path, counts, transform, target_crs, x, y, para
     if outlet_analysis is not None:
         source_crs = osr.SpatialReference()
         if source_crs.ImportFromWkt(str(outlet_analysis.crs_wkt)) != 0:
-            raise ValueError('No se conserva el CRS del cierre aceptado para TauDEM.')
+            raise ValueError('No se conserva el CRS del cierre aceptado para Esri-D8.')
         source_crs.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
         if not source_crs.IsSame(target_crs):
             convert = osr.CoordinateTransformation(source_crs, target_crs)
@@ -447,11 +447,11 @@ def _preserved_outlet(directions_path, counts, transform, target_crs, x, y, para
                     fine_candidate_overlap_fraction=evidence['candidate_overlap_fraction'],
                     fine_intersection_over_union=evidence['intersection_over_union'])
         except ValueError as error:
-            raise ValueError('Las direcciones TauDEM no conservan la cuenca aceptada en una '
+            raise ValueError('Las direcciones Esri-D8 no conservan la cuenca aceptada en una '
                 'sección compatible. No se sustituye el delineado ni se cambia de cauce. ' + str(error)) from error
     count = int(counts[effective.row, effective.col])
     if count <= 0:
-        raise ValueError('El cierre elegido no tiene dirección TauDEM válida (NoData); '
+        raise ValueError('El cierre elegido no tiene dirección Esri-D8 válida (NoData); '
                          'no se publica una cuenca sin drenaje válido.')
     if manual and convert is not None:
         if 'manual_requested_x' in snap and 'manual_requested_y' in snap:
@@ -496,10 +496,10 @@ def prepare_taudem(dem_path, outlet_x, outlet_y, cache_dir, *, reference_area_m2
         raise ValueError(engine["reason"])
     _h._check(cancelled)
     if engine.get("private_runtime"):
-        progress("Preparando TauDEM integrado y verificando sus archivos", 0)
+        progress("Preparando herramientas Esri-D8 y verificando sus archivos", 0)
     engine = _runtime.ensure_runtime(engine, cancelled)
     source = Path(dem_path).expanduser().resolve()
-    dem = _b._open_raster(source, "MDT TauDEM")
+    dem = _b._open_raster(source, "MDT de cálculo Esri-D8")
     try:
         transform, reference = _b._aligned(dem, dem)
         total = dem.RasterXSize * dem.RasterYSize
@@ -528,11 +528,11 @@ def prepare_taudem(dem_path, outlet_x, outlet_y, cache_dir, *, reference_area_m2
             cell_area = abs(transform[1] * transform[5])
             if snap is not None:
                 if snap["candidate_upstream_area_m2"] != count * cell_area:
-                    raise ValueError("La acumulación TauDEM no coincide con su cuenca.")
+                    raise ValueError("La acumulación Esri-D8 no coincide con su cuenca.")
                 snap["candidate_touches_boundary"] = bool(boundary)
-            progress("Analizando cuenca TauDEM", 52)
+            progress("Analizando cuenca Esri-D8", 52)
             analysis = analyze_basin(coded, source, effective.x, effective.y, cancelled=cancelled, upstream_only=False,
-                progress=lambda n: progress("Analizando cuenca TauDEM", 52 + min(10, 10 * n / max(count, 1))))
+                progress=lambda n: progress("Analizando cuenca Esri-D8", 52 + min(10, 10 * n / max(count, 1))))
             selection_key = hashlib.sha256(repr((effective.row, effective.col)).encode()).hexdigest()[:16]
             selected_folder = base / ('products_' + product_key) / ("outlet_" + selection_key)
             selected_folder.mkdir(parents=True, exist_ok=True)
@@ -541,21 +541,21 @@ def prepare_taudem(dem_path, outlet_x, outlet_y, cache_dir, *, reference_area_m2
             if not closure.is_file():
                 _outlet(closure, effective.x, effective.y, reference.ExportToWkt())
             if not accumulation.is_file():
-                progress("Acumulando cuenca con TauDEM AreaD8", 65)
+                progress("Acumulando cuenca Esri-D8 con AreaD8", 65)
                 steps.append(_run(engine, "aread8", ["-p", native, "-ad8", work / "area_tau.tif",
                     "-o", closure, "-lyrname", "outlet"], work, cancelled))
                 area_source = work / "area_tau.tif"
             else:
                 area_source = accumulation
-            area_ds = _b._open_raster(area_source, "área contribuyente TauDEM")
+            area_ds = _b._open_raster(area_source, "área contribuyente Esri-D8")
             _b._aligned(area_ds, dem)
             value = float(area_ds.GetRasterBand(1).ReadAsArray(effective.col, effective.row, 1, 1)[0, 0])
             area_nodata = area_ds.GetRasterBand(1).GetNoDataValue()
             area_ds = None
             if not math.isfinite(value) or value == area_nodata or value <= 0:
-                raise ValueError("TauDEM detecta contaminación de borde en la cuenca; amplíe la cobertura del MDT.")
+                raise ValueError("El cálculo Esri-D8 detecta contaminación de borde en la cuenca; amplíe la cobertura del MDT.")
             if not math.isclose(value, count, rel_tol=1e-6, abs_tol=.01):
-                raise ValueError("El aporte de AreaD8 no coincide con la delimitación TauDEM inclusiva.")
+                raise ValueError("El aporte de AreaD8 no coincide con la delimitación Esri-D8 inclusiva.")
             if area_source != accumulation:
                 _h._publish_cache(area_source, accumulation, cancelled)
             from .drainage_threshold import recommended_threshold, automatic_threshold_cells
@@ -575,7 +575,7 @@ def prepare_taudem(dem_path, outlet_x, outlet_y, cache_dir, *, reference_area_m2
                     if not is_automatic:
                         raise  # Respect the user's explicit threshold; do not silently change it.
                     if cells == candidates[-1]:
-                        raise ValueError('TauDEM no genera tramos conectados al cierre, incluso '
+                        raise ValueError('Esri-D8 no genera tramos conectados al cierre, incluso '
                             'con un umbral reducido. Revisa la correspondencia del cierre, '
                             'las direcciones D8 y la cobertura del MDT.') from None
                     progress('Umbral sin cauces; comprobando otro más pequeño', 87)
@@ -604,13 +604,13 @@ def prepare_taudem(dem_path, outlet_x, outlet_y, cache_dir, *, reference_area_m2
         diagnostic.update(taudem_pipeline_executed=True, dem_hydrology=metadata)
         if snap is not None:
             diagnostic['outlet_snap'] = snap
-        notes = tuple(note for note in analysis.notes if "No se ejecuta TauDEM" not in note)
-        notes += ("Direcciones y red calculadas con TauDEM real: PitRemove, D8FlowDir, AreaD8, Threshold y StreamNet. "
+        notes = tuple(note for note in analysis.notes if "No se ejecuta Esri-D8" not in note)
+        notes += ("Direcciones y red Esri-D8 calculadas con: PitRemove, D8FlowDir, AreaD8, Threshold y StreamNet. "
                   "Las cotas, TRI y pendiente local siguen usando el MDT original, no el MDT rellenado.",)
         analysis = replace(analysis, selected_x=selection['original_x'], selected_y=selection['original_y'],
                            diagnostics=diagnostic, notes=notes)
         _h._check(cancelled)
-        progress("Capas TauDEM preparadas", 100)
+        progress("Capas Esri-D8 preparadas", 100)
         return TauDEMProducts(analysis, str(source), str(filled), str(native), str(coded), str(slope),
             str(accumulation), str(stream), str(network), cells, threshold_area, metadata)
     finally:
@@ -627,7 +627,7 @@ def rebuild_network(products, threshold_area_m2, *, bin_dir=None,
     engine = _runtime.ensure_runtime(engine, cancelled)
     previous_runtime = products.metadata.get("runtime", {})
     if previous_runtime.get("sha256") and previous_runtime != engine.get("runtime"):
-        raise ValueError("El runtime TauDEM ha cambiado; genere de nuevo las capas antes de modificar la red.")
+        raise ValueError("El motor para Esri-D8 ha cambiado; genere de nuevo las capas antes de modificar la red.")
     cells, area = _threshold(threshold_area_m2, products.analysis.cell_width * products.analysis.cell_height)
     folder = Path(products.accumulation_path).parent / ("network_" + str(cells))
     with tempfile.TemporaryDirectory(prefix="tn_", dir=str(_h._runtime_folder()), ignore_cleanup_errors=True) as temporary:
@@ -637,6 +637,6 @@ def rebuild_network(products, threshold_area_m2, *, bin_dir=None,
     metadata = dict(products.metadata)
     metadata.update(threshold_area_m2=area, threshold_cells=cells, automatic=False)
     _h._check(cancelled)
-    progress("Red TauDEM actualizada", 100)
+    progress("Red Esri-D8 actualizada", 100)
     return replace(products, stream_raster_path=str(stream), network_path=str(network),
                    threshold_cells=cells, threshold_area_m2=area, metadata=metadata)

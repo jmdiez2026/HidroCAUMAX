@@ -124,11 +124,11 @@ def availability_engine():
     if tau['available']:
         bundled = tau.get('runtime', {}).get('kind') == 'bundled'
         return dict(available=True, kind='taudem',
-            name='TauDEM PitRemove + D8FlowDir' + (' (incluido)' if bundled else ''),
+            name='Esri-D8 (PitRemove + D8FlowDir)' + (' (incluido)' if bundled else ''),
             path=str(tau.get('bin_dir') or Path(tau['executables']['d8flowdir']).parent),
             reason='', runtime_kind='bundled' if bundled else 'external')
     return dict(grass, reason=grass['reason'] + ' ' + tau.get('reason',
-        'Tampoco se encuentra un runtime TauDEM compatible con esta plataforma.'))
+        'No se encuentran las herramientas necesarias para generar Esri-D8 en esta plataforma.'))
 
 
 def _check(cancelled):
@@ -1189,7 +1189,7 @@ def analyze_dem(dem_path, outlet_x, outlet_y, cache_dir,
     if snap is not None:
         diagnostic["outlet_snap"] = snap
     if routing['engine'] == 'TauDEM':
-        routing_note = ('Direcciones D8 calculadas con TauDEM PitRemove y D8FlowDir, a resolución original, '
+        routing_note = ('Direcciones Esri-D8 calculadas con PitRemove y D8FlowDir, a resolución original, '
             'al no disponer de GRASS. El MDT rellenado se usa exclusivamente para dirigir el flujo; '
             'las cotas, el TRI y la pendiente local se calculan sobre el MDT original. '
             'Esta delimitación no ejecuta Threshold ni StreamNet.')

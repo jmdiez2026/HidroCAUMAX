@@ -26,7 +26,7 @@ _VC_DLLS = ('msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll', 'concrt140
 
 def _check(cancelled):
     if cancelled():
-        raise InterruptedError('Preparación del runtime TauDEM cancelada.')
+        raise InterruptedError('Preparación de Esri-D8 cancelada.')
 
 
 def _windows_x64():
@@ -47,13 +47,13 @@ def _digest(path, cancelled=lambda: False):
 
 def _relative(name):
     if not isinstance(name, str) or not name or '\\' in name or '\x00' in name:
-        raise ValueError('Ruta no válida en el runtime TauDEM.')
+        raise ValueError('Ruta no válida en el motor Esri-D8.')
     raw = name.rstrip('/')
     parts = raw.split('/')
     if (PurePosixPath(raw).is_absolute() or any(part in ('', '.', '..') for part in parts)
             or any(any(c in part for c in '<>:"|?*') or part.endswith(('.', ' '))
                    or part.split('.')[0].lower() in _RESERVED for part in parts)):
-        raise ValueError('Ruta insegura en el runtime TauDEM: ' + name)
+        raise ValueError('Ruta insegura en el motor Esri-D8: ' + name)
     return raw
 
 
@@ -62,10 +62,10 @@ def _child(base, relative):
     current = target
     while current != base:
         if current.is_symlink() or (hasattr(current, 'is_junction') and current.is_junction()):
-            raise ValueError('El runtime TauDEM no admite enlaces de archivos o carpetas.')
+            raise ValueError('El motor Esri-D8 no admite enlaces de archivos o carpetas.')
         current = current.parent
     if not target.resolve().is_relative_to(base.resolve()):
-        raise ValueError('Una ruta del runtime TauDEM sale de su carpeta privada.')
+        raise ValueError('Una ruta del motor Esri-D8 sale de su carpeta privada.')
     return target
 
 
@@ -73,14 +73,14 @@ def _inventory(archive):
     members, seen, total = {}, set(), 0
     infos = archive.infolist()
     if len(infos) > 4096:
-        raise ValueError('El runtime TauDEM contiene demasiados archivos.')
+        raise ValueError('El motor Esri-D8 contiene demasiados archivos.')
     for item in infos:
         name = _relative(item.filename)
         mode = item.external_attr >> 16
         if stat.S_ISLNK(mode) or (stat.S_IFMT(mode) and not (stat.S_ISDIR(mode) or stat.S_ISREG(mode))):
-            raise ValueError('El runtime TauDEM contiene un enlace o archivo especial.')
+            raise ValueError('El motor Esri-D8 contiene un enlace o archivo especial.')
         if name.casefold() in seen:
-            raise ValueError('El runtime TauDEM contiene rutas duplicadas.')
+            raise ValueError('El motor Esri-D8 contiene rutas duplicadas.')
         seen.add(name.casefold())
         if item.is_dir():
             continue
@@ -89,28 +89,28 @@ def _inventory(archive):
             raise ValueError('Tamaño o cifrado no admitido en el runtime TauDEM.')
         members[name] = item
     if 'manifest.json' not in members or members['manifest.json'].file_size > 4*1024**2:
-        raise ValueError('Falta el manifiesto del runtime TauDEM.')
+        raise ValueError('Falta el manifiesto del motor Esri-D8.')
     manifest_bytes = archive.read('manifest.json')
     manifest = json.loads(manifest_bytes.decode('utf-8-sig'))
     if (not isinstance(manifest, dict) or manifest.get('schema_version') != 1 or manifest.get('platform') != 'windows'
             or manifest.get('architecture') != 'x86_64' or manifest.get('taudem_version') != '5.5.0'):
-        raise ValueError('El manifiesto no corresponde al runtime TauDEM 5.5.0 Windows x64.')
+        raise ValueError('El manifiesto del motor Esri-D8 no corresponde al paquete Windows x64.')
     files = manifest.get('files')
     if (not isinstance(files, dict) or set(files) != set(members)-{'manifest.json'}
             or any(name.casefold() == _RECEIPT for name in files)):
-        raise ValueError('El inventario TauDEM no coincide con el paquete.')
+        raise ValueError('El inventario Esri-D8 no coincide con el paquete.')
     for name, checksum in files.items():
         _relative(name)
         if not isinstance(checksum, str) or re.fullmatch('[0-9a-fA-F]{64}', checksum) is None:
-            raise ValueError('Hash no válido en el manifiesto TauDEM.')
+            raise ValueError('Hash no válido en el manifiesto Esri-D8.')
     lookup = {name.casefold(): name for name in files}
     if any('bin/'+name in lookup for name in _VC_DLLS):
-        raise ValueError('Las DLL de Microsoft Visual C++ deben proceder del QGIS local, no del paquete TauDEM.')
+        raise ValueError('Las DLL de Microsoft Visual C++ deben proceder del QGIS local, no del paquete Esri-D8.')
     required = ['bin/'+name for name in TOOLS.values()]
     required += ['bin/mpiexec.exe', 'bin/smpd.exe', 'bin/msmpi.dll', 'share/proj/proj.db']
     missing = [name for name in required if name not in lookup]
     if missing or not any(name.startswith('licenses/') and members[lookup[name]].file_size > 0 for name in lookup):
-        raise ValueError('Runtime TauDEM incompleto: ' + ', '.join(missing or ['licenses/']))
+        raise ValueError('Motor Esri-D8 incompleto: ' + ', '.join(missing or ['licenses/']))
     return manifest, manifest_bytes, members, lookup
 
 
@@ -152,7 +152,7 @@ def discover_bundled_runtime(bundle_path=None, cache_base=None, cancelled=lambda
         with zipfile.ZipFile(bundle) as archive:
             manifest, _, _, lookup = _inventory(archive)
     except (OSError, zipfile.BadZipFile, UnicodeError, json.JSONDecodeError) as error:
-        raise ValueError('El paquete TauDEM integrado está dañado: ' + str(error)) from error
+        raise ValueError('El paquete para Esri-D8 integrado está dañado: ' + str(error)) from error
     base = Path(cache_base) if cache_base is not None else _default_cache()
     vc_folder = _vc_runtime_directory()
     if vc_folder is None:
@@ -175,23 +175,23 @@ def discover_bundled_runtime(bundle_path=None, cache_base=None, cancelled=lambda
 
 def _validate_cache(root, manifest, manifest_bytes, checksum, vc_hashes, cancelled):
     if root.is_symlink() or (hasattr(root, 'is_junction') and root.is_junction()):
-        raise ValueError('La carpeta TauDEM privada no puede ser un enlace.')
+        raise ValueError('La carpeta Esri-D8 privada no puede ser un enlace.')
     verified_files = dict(manifest['files'], **{'bin/'+name: value for name, value in vc_hashes.items()})
     expected = set(verified_files) | {'manifest.json', _RECEIPT}
     actual = set()
     for path in root.rglob('*'):
         _check(cancelled)
         if path.is_symlink() or (hasattr(path, 'is_junction') and path.is_junction()):
-            raise ValueError('La caché TauDEM contiene un enlace de archivos o carpetas.')
+            raise ValueError('La caché Esri-D8 contiene un enlace de archivos o carpetas.')
         if path.is_file():
             actual.add(path.relative_to(root).as_posix())
     if actual != expected:
-        raise ValueError('La caché TauDEM está incompleta o contiene archivos ajenos.')
+        raise ValueError('La caché Esri-D8 está incompleta o contiene archivos ajenos.')
     receipt = json.loads(_child(root, _RECEIPT).read_text(encoding='utf-8'))
     if (not isinstance(receipt, dict) or receipt.get('bundle_sha256') != checksum
             or receipt.get('vc_sha256') != vc_hashes
             or _child(root, 'manifest.json').read_bytes() != manifest_bytes):
-        raise ValueError('La caché TauDEM no corresponde al paquete integrado.')
+        raise ValueError('La caché Esri-D8 no corresponde al paquete integrado.')
     for name, expected_hash in verified_files.items():
         if _digest(_child(root, name), cancelled).lower() != expected_hash.lower():
             raise ValueError('Archivo de caché TauDEM dañado: ' + name)
@@ -208,7 +208,7 @@ def ensure_runtime(engine, cancelled=lambda: False):
     vc_hashes = descriptor['vc_sha256']
     vc_folder = Path(descriptor['vc_runtime_dir'])
     if _digest(bundle, cancelled) != checksum:
-        raise ValueError('El paquete TauDEM cambió después de comprobarlo.')
+        raise ValueError('El paquete para Esri-D8 cambió después de comprobarlo.')
     for name, expected_hash in vc_hashes.items():
         if _digest(vc_folder/name, cancelled) != expected_hash:
             raise ValueError('Las DLL de Visual C++ cambiaron después de comprobarlas; repita el cálculo.')
@@ -235,7 +235,7 @@ def ensure_runtime(engine, cancelled=lambda: False):
                             target.write(block)
                             digest.update(block)
                     if name != 'manifest.json' and digest.hexdigest().lower() != manifest['files'][name].lower():
-                        raise ValueError('Hash incorrecto en el paquete TauDEM: ' + name)
+                        raise ValueError('Hash incorrecto en el paquete Esri-D8: ' + name)
                 for name, expected_hash in vc_hashes.items():
                     destination = _child(stage, 'bin/'+name)
                     digest = hashlib.sha256()
@@ -261,7 +261,7 @@ def ensure_runtime(engine, cancelled=lambda: False):
                 if stage.exists():
                     # stage is our mkdtemp child; never remove an existing runtime.
                     if stage.resolve().parent != base.resolve() or stage.is_symlink():
-                        raise ValueError('Ruta temporal TauDEM inesperada; no se elimina.')
+                        raise ValueError('Ruta temporal Esri-D8 inesperada; no se elimina.')
                     shutil.rmtree(stage)
     result = dict(engine)
     result['runtime_prepared'] = True
