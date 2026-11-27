@@ -15,7 +15,7 @@ from qgis.core import QgsApplication, QgsProject
 from .delineation_cleanup import _owned, clear_delineations
 
 REGISTRY = 'HidroCAUMAX/generated_files_v1'
-SHAPE_SUFFIXES = ('.shp', '.shx', '.dbf', '.prj', '.cpg', '.qix', '.sbn', '.sbx', '.qpj', '.shp.xml')
+SHAPE_SUFFIXES = ('.shp', '.shx', '.dbf', '.prj', '.cpg', '.qix', '.sbn', '.sbx', '.qpj', '.qml', '.shp.xml')
 
 
 def _plain_file(path):
