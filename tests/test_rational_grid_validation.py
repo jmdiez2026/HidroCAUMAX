@@ -8,7 +8,8 @@ from unittest.mock import patch
 import numpy as np
 from osgeo import gdal, osr
 
-from caumax_consulta.rational_grid_validation import verify_fine_rational_pair
+from caumax_consulta.rational_grid_validation import (verify_fine_rational_pair,
+                                                       verify_rational_climate_crs)
 from caumax_consulta.rational_inputs import (_fine_preflight, _safe_secondary_sample,
                                              _configured_pair_hint, _qgis_drainage_pair_hint)
 
@@ -159,6 +160,19 @@ class RationalGridValidationTests(unittest.TestCase):
                 result = verify_fine_rational_pair(
                     dem, narrower, self.default_x, self.default_y)
                 self.assertEqual(result['resolution_m'], size)
+
+    def test_climate_layers_use_same_utm_crs_as_native_rational_mdt(self):
+        dem, d8 = self.pair(25)
+        good = self.grid('p0_100m.tif', 100, np.full((4, 4), 35, dtype=np.float32))
+        self.assertIsNone(verify_rational_climate_crs(dem, [good]))
+        # Different resolution is valid, different CRS is not: CAUMAX
+        # samples climate values from UTM coordinates without reprojection.
+        other = osr.SpatialReference()
+        other.ImportFromEPSG(32630)
+        wrong = self.grid('rain_wrong_crs.tif', 100,
+                          np.full((4, 4), 35, dtype=np.float32), crs=other)
+        with self.assertRaisesRegex(ValueError, 'CRS diferente'):
+            verify_rational_climate_crs(dem, [good, wrong])
 
     def test_native_500m_stays_under_caumax_original_behaviour(self):
         dem = self.grid('original-mdt.tif', 500,
