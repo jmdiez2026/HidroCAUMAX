@@ -1,3 +1,12 @@
+# HidroCAUMAX v.1.0 — medias automáticas de cuenca y red principal rosa/violeta (revisión 1.0.23, 2026-11-27)
+
+- Al finalizar un análisis de «Cuenca hidrográfica», se calculan **sin pulsar botones** el P₀ medio y las medias espaciales de Pd(T) para 2, 5, 10, 25, 100 y 500 años. Una única tarea de fondo publica ambos conjuntos atómicamente y conserva cancelación y recalculo manual.
+- La tarea de recálculo completo existente actualiza automáticamente estas medias cuando cambia la divisoria activa, el cierre o la resolución. Una cancelación no publica resultados de dos geometrías diferentes.
+- Se corrige el diagnóstico de simbología: «Red > 50 km²» es la categoría `sup=2` de la capa CAUMAX «Red 10 km²», y ahora se colorea en rosa/violeta `#FF1493`, con ancho **1,30 mm**, sin alterar el símbolo de «Red 10–50 km²» (`sup=1`).
+- Pruebas reales de Qt/PyQGIS verifican tarea automática, seis mapas de precipitación, resultados atómicos, cancelación, restauración de simbología y preservación de la categoría adyacente.
+
+---
+
 # HidroCAUMAX v.1.0 — reparar método racional con capas configuradas (revisión 1.0.22, 2026-11-27)
 
 - Validación previa GDAL del MDT y D8 ESRI de 25 m o 5 m seleccionados en «Configurar capas de cálculo»: mismo origen, tamaño y CRS EPSG:25830, cobertura real del punto de cierre, máscara NoData coherente y ocho códigos ESRI-D8. No se combinan rásteres de zonas diferentes.
