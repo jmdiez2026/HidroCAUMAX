@@ -11,7 +11,9 @@ from qgis.core import (QgsApplication, QgsCoordinateReferenceSystem, QgsCoordina
 from qgis.gui import QgsMapCanvas
 import qgis.utils
 
-from caumax_consulta.native_layers_view import IBERIA_BOUNDS, NativeLayersView, terrain_background, TERRAIN_PROPERTY, style_query_network, NETWORK_PINK
+from caumax_consulta.native_layers_view import (IBERIA_BOUNDS, NativeLayersView, terrain_background,
+    TERRAIN_PROPERTY, style_query_network, NETWORK_PINK, NETWORK_LINE_WIDTH_MM,
+    NETWORK_STYLE_REVISION)
 
 
 class NativeLayersViewTests(unittest.TestCase):
@@ -160,6 +162,11 @@ class NativeLayersViewTests(unittest.TestCase):
         for layer in (pink,other): self.project.addMapLayer(layer)
         style_query_network(self.project)
         self.assertEqual(pink.renderer().symbol().color().name(),NETWORK_PINK)
-        self.assertEqual(pink.renderer().symbol().width(),width)
+        self.assertAlmostEqual(pink.renderer().symbol().width(), NETWORK_LINE_WIDTH_MM)
+        self.assertEqual(pink.renderer().symbol().widthUnit(),
+                         QgsUnitTypes.RenderMillimeters)
+        self.assertEqual(pink.customProperty('HidroCAUMAX/query_network_style'),
+                         NETWORK_STYLE_REVISION)
+        self.assertNotEqual(pink.renderer().symbol().width(), width)
         self.assertEqual(other.renderer().symbol().color().name(),color)
         self.assertEqual(pink.featureCount(),0)
