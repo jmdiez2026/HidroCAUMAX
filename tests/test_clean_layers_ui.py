@@ -18,14 +18,12 @@ class CleanupDialogTests(unittest.TestCase):
         with (patch.object(ui, 'QMessageBox') as box,
               patch.object(ui, 'QgsMessageLog') as log,
               patch('caumax_consulta.generated_cleanup.deletion_plan', return_value=plan),
-              patch('caumax_consulta.generated_cleanup.delete_generated', return_value=result),
-              patch('caumax_consulta.improved_storage.preserve_exports',
-                    side_effect=OSError('sin espacio'))):
+              patch('caumax_consulta.generated_cleanup.delete_generated', return_value=result)):
             box.return_value = fake_box
             message = ui.confirm_cleanup(None)
         self.assertIn('No se han podido eliminar 1 archivos', message)
         self.assertEqual(fake_box.exec.call_count, 1)  # confirmation BEFORE deleting
-        self.assertEqual(log.logMessage.call_count, 2)  # errors logged, not modal
+        self.assertEqual(log.logMessage.call_count, 1)  # failures logged, never backed up
         box.warning.assert_not_called()
         box.information.assert_not_called()
         box.critical.assert_not_called()
