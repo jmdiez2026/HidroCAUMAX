@@ -129,6 +129,25 @@ class HydroExportTests(unittest.TestCase):
                 self.assertEqual(band_metadata['SOURCE_NOTE'],'preserved band metadata')
         self.assertEqual(self.hashes(),self.before)
 
+    def test_original_dem_nodata_outside_native_tau_d8_does_not_block_export(self):
+        # PitRemove may assign a direction to an edge cell which was NoData
+        # in the *original* elevation raster. The CAUMAX recode correctly
+        # masks it out; both TIFFs must not be required to have identical
+        # validity beyond the original MDT footprint.
+        raster = gdal.Open(self.products.tau_d8_path, gdal.GA_Update)
+        native = self.native.copy()
+        native[1, 1] = 1
+        raster.GetRasterBand(1).WriteArray(native)
+        raster = None
+        target = self.output / 'Direccion_D8_caumax_25m.tif'
+        saved = export.export_directions(self.products, target, encoding='caumax')
+        self.assertTrue(saved.is_file())
+        self.assertGreater(saved.stat().st_size, 0)
+        data, _, _, _, metadata, _, _, driver = self.read(saved)
+        np.testing.assert_array_equal(data, self.esri)
+        self.assertEqual(driver, 'GTiff')
+        self.assertEqual(metadata['FLOW_DIRECTION_ENCODING'], 'ESRI_D8')
+
     def test_default_directions_are_caummx_esri_and_source_is_not_overwritten(self):
         target = export.export_directions(self.products,self.output/'default.tif')
         np.testing.assert_array_equal(self.read(target)[0],self.esri)
