@@ -67,7 +67,7 @@ class _ProductsTask(QgsTask):
     update = pyqtSignal(int, str, float)
 
     def __init__(self, generation, operation, callback):
-        super().__init__('HidroCAUMAX: capas TauDEM para el Método Racional', QgsTask.CanCancel)
+        super().__init__('HidroCAUMAX: capas Esri-D8 para el Método Racional', QgsTask.CanCancel)
         self.generation, self.operation, self.callback = generation, operation, callback
         self.result = None
         self.error = ''
@@ -159,7 +159,7 @@ class DrainageController(QObject):
         task.signature = signature
         self._task = task
         self.busy = True
-        self.on_status('Preparando las capas con TauDEM…',0.)
+        self.on_status('Preparando las capas Esri-D8…',0.)
         QgsApplication.taskManager().addTask(task)
 
     def _status(self, generation, text, progress):

@@ -259,7 +259,7 @@ def export_directions(products, destination, encoding='caumax', add_to_project=F
     normalized = {'esri': 'caumax', 'esri_d8': 'caumax', 'taudem_d8': 'taudem',
                   'native': 'taudem'}.get(normalized, normalized)
     if normalized not in ('caumax', 'taudem'):
-        raise ValueError('Selecciona codificación CAUMAX/ESRI o TauDEM nativa.')
+        raise ValueError('Selecciona codificación Esri-D8 o D8 nativa.')
     source = _check_directions(products, normalized)
     try:
         return _raster_export(products, source, destination, 'FLOW_DIRECTION', normalized, add_to_project)
@@ -372,7 +372,7 @@ def export_network(products, destination, add_to_project=False, *, snapshot=None
         _publish(stage, target, True)
     if add_to_project:
         from qgis.core import QgsLineSymbol, QgsProject, QgsVectorLayer
-        layer = QgsVectorLayer(str(target), 'Red de drenaje TauDEM', 'ogr')
+        layer = QgsVectorLayer(str(target), 'Red de drenaje Esri-D8', 'ogr')
         if not layer.isValid():
             raise ValueError('La red está guardada pero QGIS no puede abrirla.')
         layer.renderer().setSymbol(QgsLineSymbol.createSimple({

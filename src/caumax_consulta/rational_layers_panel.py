@@ -27,7 +27,7 @@ class RationalLayersPanel(DrainageControls):
         self._disposed = self._loading = self._cleared = False
         self._queued_prepare = False
         self._generation_running = False
-        self.help_label.setText('Genera las tres capas necesarias para ejecutar CAUMAX con resolución mayor de la original 500x500m (esquema D8-TauDEM/Esri): (1) ráster MDT, (2) ráster Direcciones de flujo, y (3) shape Red de Drenaje.')
+        self.help_label.setText('Genera las tres capas necesarias para ejecutar CAUMAX con resolución mayor de la original 500x500m (esquema Esri-D8): (1) ráster MDT, (2) ráster Direcciones de flujo, y (3) shape Red de Drenaje.')
         self.layout().setSpacing(10)
         self._drainage_controls_layout.setSpacing(8)
         self._drainage_exports_widget.layout().setHorizontalSpacing(8)
@@ -567,7 +567,7 @@ class RationalLayersPanel(DrainageControls):
         finally:
             self._loading = False
         value = format(threshold / 1e6, 'g').replace('.', ',')
-        self._status(f'TauDEM · umbral {value} km² · {len(state["features"])} tramos. '
+        self._status(f'Esri-D8 · umbral {value} km² · {len(state["features"])} tramos. '
                      'Cada archivo se exporta por separado.', 100)
 
     def _failed(self, text):

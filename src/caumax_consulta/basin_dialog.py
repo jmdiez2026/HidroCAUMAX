@@ -907,10 +907,10 @@ class BasinDialog(QDialog):
             self.drainage_status.setText('Selecciona un MDT mejorado para preparar sus capas.')
         elif state and not busy:
             self.drainage_status.setText(
-                f"TauDEM · umbral {format_decimal(state['threshold_area_m2']/1e6)} km² · "
+                f"Esri-D8 · umbral {format_decimal(state['threshold_area_m2']/1e6)} km² · "
                 f"{len(state['features'])} tramos. Cada archivo se exporta por separado.")
         elif not busy:
-            self.drainage_status.setText('TauDEM predeterminado seleccionado. Pulsa Generar capas D8.')
+            self.drainage_status.setText('Esri-D8 seleccionado. Pulsa Generar capas D8.')
 
     def _prepare_drainage(self, *args):
         self._drainage_timer.stop()
@@ -922,7 +922,7 @@ class BasinDialog(QDialog):
             from .taudem_engine import probe_taudem
             info = probe_taudem(bin_dir=None)
             if not info.get('available'):
-                self.drainage_status.setText(info.get('reason','No se puede preparar el motor TauDEM predeterminado. Comprueba la instalación del complemento.'))
+                self.drainage_status.setText(info.get('reason','No se pueden preparar las herramientas de Esri-D8. Comprueba la instalación del complemento.'))
                 return
             if self._drainage_controller is None:
                 from .drainage_controller import DrainageController

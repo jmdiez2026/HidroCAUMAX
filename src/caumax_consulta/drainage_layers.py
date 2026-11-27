@@ -17,6 +17,25 @@ from qgis.core import (QgsCoordinateReferenceSystem,QgsFeature,QgsField,QgsGeome
 
 OWNER_PROPERTY='HidroCAUMAX/drainage_owner'
 ROLE_PROPERTY='HidroCAUMAX/drainage_role'
+DRAINAGE_GROUP_LABEL='HidroCAUMAX · Drenaje Esri-D8'
+DRAINAGE_NETWORK_LABEL='Red de drenaje Esri-D8'
+
+
+def migrate_drainage_display_names(project=None):
+    """Rename managed legacy legends, preserving IDs, sources and user layers."""
+    project = project or QgsProject.instance()
+    for layer in project.mapLayers().values():
+        if (layer.customProperty(OWNER_PROPERTY, '')
+                and layer.customProperty(ROLE_PROPERTY, '') == 'network'
+                and layer.name() == 'Red de drenaje TauDEM'):
+            layer.setName(DRAINAGE_NETWORK_LABEL)
+    for group in project.layerTreeRoot().findGroups(recursive=True):
+        if (group.customProperty(OWNER_PROPERTY, '')
+                and group.name().startswith('HidroCAUMAX · Drenaje TauDEM')):
+            group.setName(group.name().replace('HidroCAUMAX · Drenaje TauDEM',
+                                               DRAINAGE_GROUP_LABEL, 1))
+
+
 
 def _private_generated_directory(source):
     """Identify only one resolution/TauDEM temp subtree, never an export."""
@@ -61,14 +80,14 @@ def _remove_unused_taudem_caches(candidates, project, protected_paths):
             cache.rename(retired)
         except OSError as error:
             QgsMessageLog.logMessage(
-                'No se pudo desvincular la caché TauDEM anterior ' + str(cache) +
+                'No se pudo desvincular la caché Esri-D8 anterior ' + str(cache) +
                 ': ' + str(error), 'HidroCAUMAX', Qgis.Warning)
             continue
         try:
             shutil.rmtree(retired)
         except OSError as error:
             QgsMessageLog.logMessage(
-                'La caché TauDEM anterior quedó en ' + str(retired) +
+                'La caché Esri-D8 anterior quedó en ' + str(retired) +
                 ' por un bloqueo del sistema: ' + str(error),
                 'HidroCAUMAX', Qgis.Warning)
 
@@ -134,7 +153,7 @@ def _network_path(products):
     for key in ('network_path','network_shp','network'):
         if isinstance(paths,dict) and paths.get(key):
             return Path(paths[key])
-    raise ValueError('TauDEM no ha proporcionado la ruta de la red de drenaje.')
+    raise ValueError('No se ha proporcionado la ruta de la red Esri-D8.')
 
 
 def _point_count(geometry):
@@ -155,23 +174,23 @@ def read_network_snapshot(products):
     try:
         dataset=ogr.Open(str(path),0)
     except RuntimeError as error:
-        raise ValueError('No se puede abrir la red de drenaje generada por TauDEM.') from error
+        raise ValueError('No se puede abrir la red de drenaje Esri-D8.') from error
     if dataset is None:
-        raise ValueError('No se puede abrir la red de drenaje generada por TauDEM.')
+        raise ValueError('No se puede abrir la red de drenaje Esri-D8.')
     layer=None
     try:
         layer=dataset.GetLayer(0)
         if layer is None or layer.GetSpatialRef() is None:
-            raise ValueError('La red TauDEM no contiene un sistema de referencia.')
+            raise ValueError('La red Esri-D8 no contiene un sistema de referencia.')
         reference=layer.GetSpatialRef().Clone()
         if not reference.IsProjected() or not math.isclose(reference.GetLinearUnits(),1.0,abs_tol=1e-10):
-            raise ValueError('La red TauDEM necesita coordenadas proyectadas métricas.')
+            raise ValueError('La red Esri-D8 necesita coordenadas proyectadas métricas.')
         reference.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
         definition=layer.GetLayerDefn();fields=[]
         for i in range(definition.GetFieldCount()):
             field=definition.GetFieldDefn(i)
             if field.GetType() not in FIELD_TYPES:
-                raise ValueError('La red TauDEM contiene un tipo de atributo no admitido.')
+                raise ValueError('La red Esri-D8 contiene un tipo de atributo no admitido.')
             fields.append({'name':field.GetName(),'type':FIELD_TYPES[field.GetType()],
                            'width':field.GetWidth(),'precision':field.GetPrecision()})
         features=[];total_bytes=vertices=attribute_items=0
@@ -180,9 +199,9 @@ def read_network_snapshot(products):
             if (geometry is None or geometry.IsEmpty()
                     or geometry.IsMeasured()
                     or ogr.GT_Flatten(geometry.GetGeometryType()) not in (ogr.wkbLineString,ogr.wkbMultiLineString)):
-                raise ValueError('La red TauDEM debe contener líneas de drenaje no vacías.')
+                raise ValueError('La red Esri-D8 debe contener líneas de drenaje no vacías.')
             if not _finite_points(geometry):
-                raise ValueError('La red TauDEM contiene coordenadas no finitas.')
+                raise ValueError('La red Esri-D8 contiene coordenadas no finitas.')
             # Preserve StreamNet Z coordinates for lossless offline export;
             # QGIS automatically renders their XY projection on the map.
             wkb=bytes(geometry.ExportToWkb())
@@ -195,7 +214,7 @@ def read_network_snapshot(products):
             for i,field in enumerate(fields):
                 value=feature.GetField(i)
                 if isinstance(value,float) and not math.isfinite(value):
-                    raise ValueError('La red TauDEM contiene atributos numéricos no finitos.')
+                    raise ValueError('La red Esri-D8 contiene atributos numéricos no finitos.')
                 attributes[field['name']]=value
             features.append({'wkb':wkb,'attributes':attributes})
         return {'network_crs_wkt':reference.ExportToWkt(),'fields':fields,'features':features}
@@ -257,7 +276,7 @@ def build_network_layer(snapshot):
                 or attribute_items>MAX_ATTRIBUTE_ITEMS):
             raise ValueError('La red archivada excede el tamaño admitido.')
         geometries.append(geometry)
-    layer=QgsVectorLayer(QgsWkbTypes.displayString(wkb_type or QgsWkbTypes.LineString),'Red de drenaje TauDEM','memory')
+    layer=QgsVectorLayer(QgsWkbTypes.displayString(wkb_type or QgsWkbTypes.LineString),DRAINAGE_NETWORK_LABEL,'memory')
     layer.setCrs(crs)
     types={'int':QVariant.Int,'int64':QVariant.LongLong,'real':QVariant.Double,'str':QVariant.String}
     fields=_snapshot_fields(snapshot)
@@ -329,7 +348,7 @@ class DrainageLayers:
         from .layer_order import create_result_group, ensure_results_above_official
         ensure_results_above_official(QgsProject.instance())
         if self._group is None or sip.isdeleted(self._group):
-            self._group=create_result_group(QgsProject.instance(),'HidroCAUMAX · Drenaje TauDEM',10)
+            self._group=create_result_group(QgsProject.instance(),DRAINAGE_GROUP_LABEL,10)
             self._group.setCustomProperty(OWNER_PROPERTY,self.owner_key)
             self._group.setExpanded(True)
         return self._group
@@ -353,7 +372,7 @@ class DrainageLayers:
         root = project.layerTreeRoot()
         group = self._ensure_group()
         group.setName(
-            f'HidroCAUMAX · Drenaje TauDEM [{analysis.cell_width:g}×{analysis.cell_height:g} m]')
+            f'{DRAINAGE_GROUP_LABEL} [{analysis.cell_width:g}×{analysis.cell_height:g} m]')
         for index, (kind, layer) in enumerate((('dem', dem), ('hillshade', shade))):
             layer.setCustomProperty(OWNER_PROPERTY, self.owner_key)
             layer.setCustomProperty(ROLE_PROPERTY, kind)
@@ -414,7 +433,7 @@ class DrainageLayers:
             group.setItemVisibilityChecked(True)
             group.setExpanded(True)
         group.setName(
-            f'HidroCAUMAX · Drenaje TauDEM [{analysis.cell_width:g}×{analysis.cell_height:g} m]')
+            f'{DRAINAGE_GROUP_LABEL} [{analysis.cell_width:g}×{analysis.cell_height:g} m]')
         # Insert by final visual order, not by reversing a sequence of index 0
         # inserts. As long as both D8 products exist, MDT is precisely third.
         for index, kind in enumerate(('network', 'directions', 'dem', 'hillshade')):

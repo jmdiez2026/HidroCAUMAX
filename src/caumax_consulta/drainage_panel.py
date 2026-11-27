@@ -27,7 +27,7 @@ class DrainageStatusLabel(QLabel):
         self.setOpenExternalLinks(True)
 
     def setText(self, text):
-        super().setText(escape(str(text)) + ' TauDEM y sus dependencias están incluidos '
+        super().setText(escape(str(text)) + ' Las herramientas para generar Esri-D8 están incluidas '
             'para Windows de 64 bits. <a href="https://hydrology.usu.edu/taudem/taudem5/documentation.html">'
             'Documentación</a>.')
 
@@ -56,7 +56,7 @@ class DrainageControls(QGroupBox):
         # button sizes become this widget's hard minimum before it can adapt.
         layout.setSizeConstraint(QLayout.SetNoConstraint)
         self.help_label = QLabel('Genera el MDT elegido, el ráster de Dirección de Flujo y el shape '
-            'de la Red de Drenaje con el esquema D8 (TauDEM/Esri)', self)
+            'de la Red de Drenaje con el esquema Esri-D8', self)
         self.help_label.setWordWrap(True)
         layout.addWidget(self.help_label)
         row = QHBoxLayout()
@@ -117,7 +117,7 @@ class DrainageControls(QGroupBox):
             exports.setColumnStretch(column, 1)
         layout.addWidget(self._drainage_exports_widget)
         self.drainage_status = DrainageStatusLabel(self)
-        self.drainage_status.setText('TauDEM predeterminado seleccionado. Pulsa Generar capas D8.')
+        self.drainage_status.setText('Esri-D8 seleccionado. Pulsa Generar capas D8.')
         layout.addWidget(self.drainage_status)
         self.drainage_progress = QProgressBar(self)
         self.drainage_progress.setRange(0, 100)
