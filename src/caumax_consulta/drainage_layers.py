@@ -490,7 +490,8 @@ class DrainageLayers:
         project = QgsProject.instance()
         if (self._group is None or sip.isdeleted(self._group)
                 or not all(kind in self.layers for kind in ('network', 'directions', 'dem'))
-                or any(project.mapLayer(self.layers[kind].id()) is not self.layers[kind]
+                or any(self.layers.get(kind) is None or
+                       project.mapLayer(self.layers[kind].id()) is not self.layers[kind]
                        for kind in ('network', 'directions', 'dem'))):
             raise ValueError('No se puede conservar una red D8 incompleta.')
         self._group.setCustomProperty(PIN_PROPERTY, True)
