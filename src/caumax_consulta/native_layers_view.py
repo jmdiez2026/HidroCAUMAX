@@ -75,21 +75,19 @@ def style_query_network(project):
         if name == 'red10km2' and isinstance(renderer, QgsCategorizedSymbolRenderer):
             if renderer.classAttribute().strip().lower() != 'sup':
                 continue
+            # Hold the returned category objects alive until cloning their
+            # QgsSymbol: using renderer.categories()[i].symbol() directly
+            # creates a dangling SIP pointer when the temporary list dies.
+            categories = renderer.categories()
             selected_index = None
-            for index, category in enumerate(renderer.categories()):
+            for index, category in enumerate(categories):
                 label = ''.join(category.label().lower().split()).replace('²', '2').replace('^2', '2')
                 if label == 'red>50km2' and str(category.value()) == '2':
                     selected_index = index
                     break
             if selected_index is None:
                 continue
-            del category
-            # QgsRendererCategory/QgsSymbol Python wrappers refer to C++ data
-            # owned by the renderer. Replacing the whole renderer while those
-            # wrappers still exist can invalidate their pointers in PyQGIS.
-            # Update *only* its matched category in place, keeping the layer
-            # and other categories untouched.
-            symbol = renderer.categories()[selected_index].symbol()
+            symbol = categories[selected_index].symbol()
             if symbol is None:
                 continue
             if _network_symbol_matches(symbol):
@@ -98,7 +96,9 @@ def style_query_network(project):
                 continue
             painted = symbol.clone()
             _paint_network_symbol(painted)
-            del symbol
+            del symbol, categories, category
+            # Update the matched category in place. Replacing the whole
+            # renderer deletes C++ symbols held by Python legend wrappers.
             renderer.updateCategorySymbol(selected_index, painted)
             layer.setCustomProperty('HidroCAUMAX/query_network_pink', True)
             layer.setCustomProperty('HidroCAUMAX/query_network_style',
