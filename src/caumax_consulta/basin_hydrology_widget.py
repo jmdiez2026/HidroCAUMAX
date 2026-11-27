@@ -519,6 +519,15 @@ class BasinHydrologyWidget(QWidget):
             raise ValueError('Tipo de resultado hidrológico no reconocido.')
         self._apply(_normalise(updated))
 
+    def set_results(self, p0, rainfall):
+        """Publish both automatic results in one widget state and one signal."""
+        if self._state is None:
+            raise ValueError('Primero debe seleccionarse una cuenca.')
+        updated = self.snapshot()
+        updated['p0_result'] = p0
+        updated['rainfall_results'] = rainfall
+        self._apply(_normalise(updated))
+
     def set_busy(self,busy,text=''):
         self._busy = bool(busy)
         self._sync_busy()
@@ -552,7 +561,7 @@ class BasinHydrologyWidget(QWidget):
         count = len(self._state['rainfall_results'])
         p0 = self._state['p0_result']
         if p0 is None and not count:
-            return 'Datos todavía no calculados. Pulsa el botón correspondiente.'
+            return 'P₀ y Pd se calculan automáticamente tras delimitar la cuenca. Los botones permiten repetir el cálculo.'
         partial = any(result['status'] != 'ok' for result in
                       ([p0] if p0 is not None else [])+list(self._state['rainfall_results'].values()))
         return 'Revisa las coberturas parciales o los datos no disponibles.' if partial else ''
@@ -605,7 +614,7 @@ class BasinHydrologyWidget(QWidget):
         if self._state is None:
             self.forward_label.setText('Pd(T): no calculada.')
             self.inverse_label.setText('T(Pd): no calculado.')
-            self.method_label.setText('P₀ sin aplicar β. La precipitación se calcula únicamente cuando se solicita.')
+            self.method_label.setText('P₀ sin aplicar β. P₀ y Pd se calculan automáticamente sobre la cuenca delimitada.')
             self.plots.state = None
         else:
             descriptions = describe_precipitation_estimates(self._state,rich_text=True)
