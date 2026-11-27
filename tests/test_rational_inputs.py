@@ -360,6 +360,56 @@ class BridgeTests(unittest.TestCase):
         self.assertNotIn('_processCell',vars(calc))
         self.assertEqual(calc._processCell(),'original')
 
+    def test_configured_raster_change_invalidates_stale_native_calculator(self):
+        # CAUMAX creates BasinCalculator only if basinCalc is None, so the
+        # second configuration must instantiate a fresh object, not reuse the
+        # previous native arrays from a different MDT/D8 pair.
+        import os
+        import numpy as np
+        from osgeo import gdal
+        from unittest.mock import patch
+        folder = Path(self.temp.name)
+        mdts = []
+        for index in range(2):
+            file = folder / f'mdt_{index}.tif'
+            ds = gdal.GetDriverByName('GTiff').Create(
+                str(file), 3, 3, 1, gdal.GDT_Float32)
+            ds.SetGeoTransform((0, 500, 0, 1500, 0, -500))
+            ds.GetRasterBand(1).WriteArray(np.ones((3, 3), dtype=np.float32))
+            ds = None
+            mdts.append(str(file))
+        selected = {'MDT': mdts[0], 'FLOWDIRS': str(self.path)}
+        config = types.ModuleType('_test.layers')
+        config.MDT, config.FLOWDIRS = 'MDT', 'FLOWDIRS'
+        config.getLayerPath = selected.__getitem__
+        with patch.dict(sys.modules, {'_test.layers': config}):
+            self.bridge.start()
+            first = self.dialog.calculateParameters()
+            self.assertEqual(len(self.instances), 1)
+            selected['MDT'] = mdts[1]
+            second = self.dialog.calculateParameters()
+            self.assertIsNot(first, second)
+            self.assertEqual(len(self.instances), 2)
+            self.assertEqual(self.dialog.calculateParameters(), second)
+            self.assertEqual(len(self.instances), 2)
+            self.assertEqual(selected['MDT'], mdts[1])
+
+    def test_fine_preflight_failure_halts_native_calculation_and_reports_reason(self):
+        from unittest.mock import patch
+        self.bridge.start()
+        finished = []
+        self.bridge.calculation_finished.connect(
+            lambda _owner, stage, event: finished.append((stage, event)))
+        with patch('caumax_consulta.rational_inputs._fine_preflight',
+                   side_effect=ValueError('El cierre está fuera del MDT 25 m')):
+            result = self.dialog.calculateParameters()
+        self.assertIsNone(result)
+        self.assertEqual(len(self.instances), 0)
+        self.assertFalse(self.dialog.btnCalculate.isEnabled())
+        self.assertEqual(finished[-1][0], 'parameters')
+        self.assertFalse(finished[-1][1]['completed'])
+        self.assertIn('fuera del MDT 25 m', finished[-1][1]['failure_reason'])
+
     def test_native_zero_division_at_both_fine_resolutions_is_reported_not_published(self):
         namespace = {'BasinCalculator': self.Calculator, 'requested_size': [25]}
         exec(
