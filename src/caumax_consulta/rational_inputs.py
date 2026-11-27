@@ -254,6 +254,28 @@ def _fine_preflight(dialog, paths):
     return verify_fine_rational_pair(paths[0], paths[1], x, y)
 
 
+def _configured_pair_hint(paths, x, y):
+    """Offer a verified existing export, never change the user's CAUMAX settings."""
+    try:
+        from .improved_storage import latest_pair
+        pair = latest_pair()
+        if not pair:
+            return ''
+        dem, d8 = (os.path.normcase(os.path.abspath(os.fspath(p))) for p in pair)
+        if paths and tuple(os.path.normcase(os.path.abspath(os.fspath(p)))
+                           for p in paths[:2]) == (dem, d8):
+            return ''
+        verified = verify_fine_rational_pair(dem, d8, x, y)
+        if not verified:
+            return ''
+        return (' Existe una pareja MDT/D8 de HidroCAUMAX verificada para este '
+                'punto en ResolucionMejorada. Configura en Método racional '
+                f'el MDT: {dem} y las direcciones ESRI-D8: {d8}.')
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return ''
+
+
+
 def _is_owned_directions(path):
     """An encoding alone never establishes ownership of another user's data."""
     try:
@@ -589,6 +611,12 @@ class RationalInputsBridge(QObject):
                             verified['elevation_m'])
                 except ValueError as error:
                     message = str(error)
+                    try:
+                        point_x = float(owner.txtX.text().replace(',', '.'))
+                        point_y = float(owner.txtY.text().replace(',', '.'))
+                        message += _configured_pair_hint(paths, point_x, point_y)
+                    except (AttributeError, TypeError, ValueError):
+                        pass
                     event['failure_reason'] = message
                     owner.btnCalculate.setEnabled(False)
                     report = getattr(owner, 'btnReport', None)
