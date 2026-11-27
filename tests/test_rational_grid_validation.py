@@ -191,7 +191,7 @@ class RationalGridValidationTests(unittest.TestCase):
     def test_existing_matching_export_is_suggested_without_reconfiguring_native_layers(self):
         dem, d8 = self.pair(25)
         foreign = (str(self.root / 'wrong_dem.tif'), str(self.root / 'wrong_d8.tif'))
-        with patch('caumax_consulta.improved_storage.exported_pairs', return_value=iter(((dem, d8),))):
+        with patch('caumax_consulta.improved_storage.exported_pairs', return_value=((dem, d8),)):
             hint = _configured_pair_hint(foreign, self.default_x, self.default_y)
             self.assertIn('Existe una pareja', hint)
             self.assertIn(str(dem), hint)
