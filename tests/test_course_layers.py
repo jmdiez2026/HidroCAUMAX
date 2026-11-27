@@ -153,6 +153,21 @@ class CourseLayersTests(unittest.TestCase):
                          before)
         self.assertEqual(migrate_course_display_names(self.project), 0)
 
+    def test_migrate_old_group_with_empty_memory_layers_after_project_reopen(self):
+        controller = self.controller()
+        layers = controller.update(self.analysis, self.query)
+        group = self.project.layerTreeRoot().findLayer(layers['main'].id()).parent()
+        old_title = ('HidroCAUMAX · Curso principal [X=500000; Y=4700000; '
+                     'celda Q 5,9; 10×20 m]')
+        group.setName(old_title)
+        for layer in layers.values():
+            self.assertTrue(layer.dataProvider().deleteFeatures(
+                [feature.id() for feature in layer.getFeatures()]))
+            self.assertEqual(layer.featureCount(), 0)
+        self.assertEqual(migrate_course_display_names(self.project), 1)
+        self.assertEqual(group.name(), 'HidroCAUMAX · Curso principal 10x20')
+        self.assertEqual(migrate_course_display_names(self.project), 0)
+
     def test_course_group_is_created_above_existing_terrain_and_symbols_are_independent(self):
         terrain=self.project.layerTreeRoot().insertGroup(0,'HidroCAUMAX · Terreno')
         layers=self.controller().update(self.analysis,self.query)
