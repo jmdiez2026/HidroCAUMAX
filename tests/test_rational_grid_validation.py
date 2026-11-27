@@ -3,12 +3,14 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 from osgeo import gdal, osr
 
 from caumax_consulta.rational_grid_validation import verify_fine_rational_pair
-from caumax_consulta.rational_inputs import _fine_preflight, _safe_secondary_sample
+from caumax_consulta.rational_inputs import (_fine_preflight, _safe_secondary_sample,
+                                             _configured_pair_hint)
 
 
 class RationalGridValidationTests(unittest.TestCase):
@@ -185,6 +187,21 @@ class RationalGridValidationTests(unittest.TestCase):
         self.assertIsNone(_safe_secondary_sample(calc, 200, 550, 'P0'))
         self.assertEqual(_safe_secondary_sample(calc, 150, 450, 'P0'), 0.)
         self.assertEqual(_safe_secondary_sample(calc, 250, 350, 'P0'), 4.)
+
+    def test_existing_matching_export_is_suggested_without_reconfiguring_native_layers(self):
+        dem, d8 = self.pair(25)
+        foreign = (str(self.root / 'wrong_dem.tif'), str(self.root / 'wrong_d8.tif'))
+        with patch('caumax_consulta.improved_storage.latest_pair', return_value=(dem, d8)):
+            hint = _configured_pair_hint(foreign, self.default_x, self.default_y)
+            self.assertIn('Existe una pareja', hint)
+            self.assertIn(str(dem), hint)
+            self.assertIn(str(d8), hint)
+            self.assertEqual(_configured_pair_hint((str(dem), str(d8)),
+                                                   self.default_x, self.default_y), '')
+            self.assertEqual(_configured_pair_hint(foreign, self.default_x,
+                                                   self.default_y + 100000), '')
+        self.assertEqual(foreign, (str(self.root / 'wrong_dem.tif'),
+                                   str(self.root / 'wrong_d8.tif')))
 
 
 if __name__ == '__main__':
