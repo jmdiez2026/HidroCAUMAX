@@ -261,6 +261,10 @@ class ResolutionController(QObject):
         # verifies automatic fine variants against the current coarse reference;
         # only explicit manual choices may bypass that automatic correspondence.
         self._automatic_references={}
+        # Only grids verified to exist at generation time are eligible for
+        # invalidation after temporary cache cleanup. Manual and restored
+        # variants are not automatically discarded because a file is missing.
+        self._verified_cache_sources=set()
         self._set_base(base_analysis,base_query)
         self.active_key=self._base_key
         self.variants={self._base_key:{'analysis':base_analysis,'query':base_query,
@@ -386,10 +390,14 @@ class ResolutionController(QObject):
         option=next((item for item in self.options if item['key']==key),None)
         # A retired resolution's temporary MDT/D8 may no longer exist. Rebuild
         # it from the verified provider rather than reusing broken file paths.
-        if (key != self._base_key and key in self.variants
-                and not self._cached_sources_available(key)):
+        if (key != self._base_key and key in self._verified_cache_sources
+                and key in self.variants and not self._cached_sources_available(key)):
+            # A previously verified, generated cache was explicitly retired.
+            # Preserve manual choices and restored snapshots whose sources may
+            # be unavailable until the user selects new data.
             self.variants.pop(key, None)
             self._automatic_references.pop(key, None)
+            self._verified_cache_sources.discard(key)
         if key in self.variants and not self._needs_reference_rebuild(key):
             self.cancel()
             self.active_key=key
@@ -623,6 +631,11 @@ class ResolutionController(QObject):
             query=replace(self.base_query,directions_path=data['directions_path'],dem_path=data['dem_path'])
             self.variants[key]={'analysis':data['analysis'],'query':query,
                                 'smoothing_state':None,'metadata':data['metadata']}
+            if (not data['metadata'].get('manual_outlet_selected')
+                    and self._cached_sources_available(key)):
+                self._verified_cache_sources.add(key)
+            else:
+                self._verified_cache_sources.discard(key)
             signature=getattr(task,'reference_signature',None)
             if signature is not None:self._automatic_references[key]=signature
             else:self._automatic_references.pop(key,None)
@@ -665,6 +678,7 @@ class ResolutionController(QObject):
                 raise ValueError('Variante incompleta en el proyecto.')
         self.cancel()
         self._automatic_references.clear()
+        self._verified_cache_sources.clear()
         self.variants={str(key):dict(value) for key,value in variants.items()}
         self.options=options
         self.active_key=active
