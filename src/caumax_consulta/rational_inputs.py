@@ -17,7 +17,7 @@ import weakref
 import numpy as np
 from osgeo import gdal, osr
 from qgis.PyQt.QtCore import QObject, QTimer, pyqtSignal
-from qgis.PyQt.QtWidgets import QApplication, QDialog, QPushButton
+from qgis.PyQt.QtWidgets import QAbstractButton, QApplication, QDialog
 from qgis.core import Qgis, QgsMessageLog
 
 from .rational_grid_validation import verify_fine_rational_pair
@@ -713,7 +713,7 @@ class RationalInputsBridge(QObject):
         dialog = binding.dialog
         if not callable(original):
             return
-        for button in dialog.findChildren(QPushButton):
+        for button in dialog.findChildren(QAbstractButton):
             signal = button.clicked
             try:
                 signal.disconnect(original)
