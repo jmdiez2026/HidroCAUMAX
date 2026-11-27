@@ -4,11 +4,12 @@ import unittest
 from unittest.mock import patch
 
 from qgis.PyQt import sip
-from qgis.PyQt.QtCore import Qt
+from qgis.PyQt.QtCore import Qt, QVariant
 from qgis.PyQt.QtGui import QColor
 from qgis.PyQt.QtWidgets import QAction
 from qgis.core import (QgsApplication, QgsCoordinateReferenceSystem, QgsCoordinateTransform,
-                       QgsProject, QgsRectangle, QgsVectorLayer, QgsUnitTypes)
+                       QgsProject, QgsRectangle, QgsVectorLayer, QgsUnitTypes, QgsField,
+                       QgsCategorizedSymbolRenderer, QgsRendererCategory, QgsLineSymbol)
 from qgis.gui import QgsMapCanvas
 import qgis.utils
 
@@ -154,6 +155,57 @@ class NativeLayersViewTests(unittest.TestCase):
         self.assertFalse(root.children()[-1].itemVisibilityChecked())
         terrain_background(self.project,self.group)
         self.assertEqual(len([n for n in root.findLayers() if n.layerId()==satellite.id()]),1)
+
+    def test_native_caumax_categorized_red10_layer_colors_only_sup_2(self):
+        # The real CAUMAX layer is NOT named 'Red > 50 km²'. The latter is
+        # legend category sup=2 in a single OGR layer 'Red 10 km²'.
+        network = QgsVectorLayer('LineString?crs=EPSG:25830', 'Red 10 km²', 'memory')
+        network.dataProvider().addAttributes([QgsField('sup', QVariant.String)])
+        network.updateFields()
+        network.setRenderer(QgsCategorizedSymbolRenderer('sup', [
+            QgsRendererCategory('1', QgsLineSymbol.createSimple({
+                'line_color': '35,35,35,255', 'line_width': '0.5'}),
+                'Red 10  - 50 km²'),
+            QgsRendererCategory('2', QgsLineSymbol.createSimple({
+                'line_color': '192,223,255,255', 'line_width': '0.5'}),
+                'Red > 50 km²'),
+        ]))
+        group = self.project.layerTreeRoot().addGroup('CAUMAX_CAPAS')
+        self.project.addMapLayer(network, False)
+        group.addLayer(network)
+        original_first = network.renderer().categories()[0].symbol()
+        initial_color = original_first.color().name()
+        initial_width = original_first.width()
+        style_query_network(self.project)
+        current = network.renderer().categories()
+        self.assertEqual(len(current), 2)
+        self.assertEqual(current[0].symbol().color().name(), initial_color)
+        self.assertEqual(current[0].symbol().width(), initial_width)
+        self.assertEqual(current[1].symbol().color().name(), NETWORK_PINK)
+        self.assertAlmostEqual(current[1].symbol().width(), 1.30)
+        self.assertEqual(current[1].symbol().symbolLayer(0).widthUnit(),
+                         QgsUnitTypes.RenderMillimeters)
+        self.assertEqual(current[1].label(), 'Red > 50 km²')
+        self.assertEqual(network.renderer().classAttribute(), 'sup')
+        # A freshly reloaded QLR style replaces the symbols, but not the
+        # stored marker. The >50 km² category must be repaired regardless.
+        restored = QgsCategorizedSymbolRenderer('sup', [
+            QgsRendererCategory('1', QgsLineSymbol.createSimple({
+                'line_color': '35,35,35,255', 'line_width': '0.5'}),
+                'Red 10  - 50 km²'),
+            QgsRendererCategory('2', QgsLineSymbol.createSimple({
+                'line_color': '192,223,255,255', 'line_width': '0.5'}),
+                'Red > 50 km²'),
+        ])
+        network.setRenderer(restored)
+        style_query_network(self.project)
+        current = network.renderer().categories()
+        self.assertEqual(current[1].symbol().color().name(), NETWORK_PINK)
+        self.assertAlmostEqual(current[1].symbol().width(), 1.30)
+        self.assertEqual(current[0].symbol().color().name(), initial_color)
+        self.assertEqual(current[0].symbol().width(), initial_width)
+        self.project.removeMapLayer(network.id())
+        self.project.layerTreeRoot().removeChildNode(group)
 
     def test_only_named_50km_network_gets_pink_and_keeps_width_and_geometry(self):
         pink=QgsVectorLayer('LineString?crs=EPSG:25830','Red > 50 km²','memory')
