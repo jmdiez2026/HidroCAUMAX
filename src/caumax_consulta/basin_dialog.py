@@ -259,7 +259,7 @@ class BasinDialog(QDialog):
         self.smoothing_degree.setValue(3)
         self.smoothing_degree.setToolTip('Grado entero de 1 a 45. Recalcula automáticamente morfología, hipsometría, P₀ y Pd sobre la divisoria activa.')
         degree_label = QLabel('Grado:', smoothing)
-        self.export_button = QPushButton('Exportar shape', smoothing)
+        self.export_button = QPushButton('Guardar Divisoria', smoothing)
         self.export_button.setStyleSheet('QPushButton { padding: 2px 6px; min-height: 0px; }')
         self.export_button.setSizePolicy(QSizePolicy.Maximum,QSizePolicy.Fixed)
         self.export_button.setEnabled(False)
