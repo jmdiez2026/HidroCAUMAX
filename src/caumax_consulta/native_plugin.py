@@ -14,6 +14,7 @@ from .rational_layers_bridge import RationalLayersBridge
 from .visible_dem import VisibleDemController
 from .update_ui import UpdateNotifier
 from .delineation_cleanup import clear_delineations
+from .clean_layers_ui import confirm_cleanup
 from .map_services import ReferenceLayerLoader
 from .native_layers_view import NativeLayersView
 
@@ -148,7 +149,7 @@ class NativeCaumaxPlugin(QObject):
                 (self.reference_action, 'Capas', 'Cargar las capas de referencia HidroCAUMAX'),
                 (self.open_action, 'Abrir cuenca', 'Abrir un proyecto de cuenca guardado'),
                 (self.clear_layers_action, 'Limpiar capas',
-                 'Retirar de QGIS los resultados y las referencias de HidroCAUMAX. Conserva los archivos en disco.'),
+                 'Eliminar resultados HidroCAUMAX de QGIS, disco, copias de seguridad y cachés temporales.'),
                 (self.update_action, 'Actualizar', 'Descargar, verificar e instalar una nueva versión de HidroCAUMAX'),
                 (self.help_action, 'Ayuda', 'Abrir el manual de usuario incluido en PDF')):
             action.setIconText(caption)
@@ -200,15 +201,16 @@ class NativeCaumaxPlugin(QObject):
         self._manual.activateWindow()
 
     def _clear_generated_layers(self, *args):
-        # Clear live work first so its late results cannot repopulate the map.
-        # Ownership markers also find previous queries and reopened projects.
+        # Both Clean buttons must use the exact same reviewed destructive
+        # operation; a toolbar-only visual reset would leave disk caches.
         self.clear_layers_action.setEnabled(False)
         try:
-            count = clear_delineations(close_dialogs=False, include_exports=True, include_references=True)
-            message = (f'Se han retirado {count} capas de HidroCAUMAX (resultados y referencias). '
-                       'Los archivos se conservan en disco.' if count else
-                       'No hay capas de HidroCAUMAX cargadas en el proyecto.')
-            self.iface.messageBar().pushMessage('HidroCAUMAX', message, level=Qgis.Info, duration=5)
+            message = confirm_cleanup(self.iface.mainWindow(), iface=self.iface)
+            if message:
+                warning = 'No se han podido eliminar' in message
+                self.iface.messageBar().pushMessage(
+                    'HidroCAUMAX', message,
+                    level=Qgis.Warning if warning else Qgis.Info, duration=10)
         finally:
             self.clear_layers_action.setEnabled(True)
 
