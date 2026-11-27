@@ -193,7 +193,7 @@ class HydroExportTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'ocho direcciones'):
             export.export_directions(self.products,target)
         self.products.metadata = {'engine':'GRASS'}
-        with self.assertRaisesRegex(ValueError,'TauDEM'):
+        with self.assertRaisesRegex(ValueError,'procedencia'):
             export.export_dem(self.products,target)
         self.assertEqual(list(self.output.iterdir()),[])
 

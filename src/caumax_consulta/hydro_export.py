@@ -118,16 +118,16 @@ def _check_directions(products, encoding):
             raise ValueError('El D8 CAUMAX/ESRI no conserva la máscara válida del MDT original.')
         values = n[native_valid]
         if np.any(~np.isin(values, np.arange(1, 9))):
-            raise ValueError('Las direcciones nativas TauDEM deben usar códigos enteros 1–8.')
+            raise ValueError('Las direcciones de entrada para Esri-D8 deben tener códigos nativos enteros 1–8.')
         if not np.array_equal(c[native_valid], _TAU_TO_ESRI[values.astype(np.uint8)]):
-            raise ValueError('La codificación ESRI no corresponde a las ocho direcciones TauDEM.')
+            raise ValueError('La codificación Esri-D8 no corresponde a los ocho códigos de dirección de origen.')
     return native if encoding == 'taudem' else caumax
 
 
 def _metadata(products, product, encoding=None):
     source = dict(getattr(products, 'metadata', {}) or {})
     if 'taudem' not in str(source.get('engine', '')).lower():
-        raise ValueError('El producto no acredita que el procesamiento se haya ejecutado con TauDEM.')
+        raise ValueError('El producto no acredita la procedencia necesaria para exportar Esri-D8.')
     result = {
         'HIDROCAUMAX_PRODUCT': product,
         'HIDROCAUMAX_ENGINE': 'TauDEM',
@@ -283,7 +283,7 @@ def _check_network(source, copied):
                    != (fields_b.GetFieldDefn(i).GetName(), fields_b.GetFieldDefn(i).GetType(),
                        fields_b.GetFieldDefn(i).GetPrecision())
                    for i in range(fields_a.GetFieldCount()))):
-        raise ValueError('La copia de la red no conserva los atributos TauDEM.')
+        raise ValueError('La copia de la red Esri-D8 no conserva sus atributos originales.')
     a.ResetReading()
     b.ResetReading()
     for first in a:

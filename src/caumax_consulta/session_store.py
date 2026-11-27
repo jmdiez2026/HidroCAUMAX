@@ -1620,7 +1620,7 @@ def _drainage_state(value, encode=False, budget=None):
     result = dict(value)
     metadata_budget = [0]
     if not isinstance(value['metadata'], dict):
-        _fail('metadatos TauDEM', 'se esperaba un objeto')
+        _fail('metadatos Esri-D8', 'se esperaba un objeto')
     result['metadata'] = _simple_metadata(value['metadata'], budget=metadata_budget)
     for key in ('threshold_area_m2', 'recommended_threshold_area_m2'):
         result[key] = _float(value[key], 'drenaje ' + key, positive=True)
