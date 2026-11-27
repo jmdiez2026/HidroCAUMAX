@@ -1,3 +1,12 @@
+# HidroCAUMAX v.1.0 — estilo rosa/violeta y divisoria única 500 m (revisión 1.0.21, 2026-11-27)
+
+- «Red > 50 km²» mantiene el color rosa-violeta `#FF1493` y el grosor **1,30 mm** al cargar o reabrir el proyecto, incluso si CAUMAX/QGIS recrean su renderizador sin borrar la propiedad de estilo anterior.
+- Se elimina la duplicidad de «HidroCAUMAX · Divisoria 500x500 m»: conservar únicamente el resultado gestionado más reciente de 500 m, como ya se hace para las divisorias de 25 m y 5 m. Se retiran capas y grupos obsoletos del árbol QGIS y se eliminan sus GeoPackages privados no referenciados cuando el sistema libera el archivo.
+- La eliminación verifica ubicación privada, nombre generado, que no sea enlace simbólico y ausencia de referencias desde otras capas; no se afectan datos originales de CAUMAX ni archivos de usuario.
+- Pruebas de la nueva simbología tras carga y restauración, y limpieza de resultados 500 m con preservación de capas ajenas.
+
+---
+
 # HidroCAUMAX v.1.0 — independencia de consulta máxima y Método racional (revisión 1.0.20, 2026-11-27)
 
 - El botón «Cuenca hidrográfica» de **Consulta de capas de caudales máximos** toma siempre MDT y D8 de la configuración original que proporciona CAUMAX (`_defaultLayerPaths`). Se elimina la lógica de 1.0.19 que recurría a capas racionales personalizadas si cubrían el punto.
