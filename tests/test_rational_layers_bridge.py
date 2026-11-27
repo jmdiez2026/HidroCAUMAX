@@ -352,16 +352,29 @@ class RationalLayersBridgeTests(unittest.TestCase):
         binding = self.attach(expand=True)
         point = QgsPointXY(342324.84321, 4709533.91234)
         self.dialog.tool.canvasClicked.emit(point, Qt.LeftButton)
-        self.assertEqual(self.dialog.txtX.text(), '342324.8')
+        self.assertEqual(self.dialog.txtX.text(), '342324.84321')
+        self.assertEqual(self.dialog.txtY.text(), '4709533.91234')
         query = binding.panel.context_getter()
         self.assertEqual((query.x, query.y), (point.x(), point.y()))
         self.canvas.setDestinationCrs(QgsCoordinateReferenceSystem('EPSG:4326'))
         self.assertEqual(binding.panel.context_getter().crs.authid(), 'EPSG:25830')
         self.dialog.txtX.setText('-4.7')
         self.dialog.txtY.setText('41.6')
+        with self.assertRaisesRegex(ValueError, 'UTM EPSG:25830'):
+            binding.panel.context_getter()
+        geo_point = QgsPointXY(-4.7, 41.6)
+        from qgis.core import QgsCoordinateTransform, QgsProject
+        expected = QgsCoordinateTransform(
+            QgsCoordinateReferenceSystem('EPSG:4326'),
+            QgsCoordinateReferenceSystem('EPSG:25830'),
+            QgsProject.instance()).transform(geo_point)
+        self.dialog.tool.canvasClicked.emit(geo_point, Qt.LeftButton)
         query = binding.panel.context_getter()
-        self.assertEqual(query.crs.authid(), 'EPSG:4326')
-        self.assertEqual((query.x, query.y), (-4.7, 41.6))
+        self.assertEqual(query.crs.authid(), 'EPSG:25830')
+        self.assertAlmostEqual(query.x, expected.x(), places=7)
+        self.assertAlmostEqual(query.y, expected.y(), places=7)
+        self.assertAlmostEqual(float(self.dialog.txtX.text()), query.x, places=8)
+        self.assertAlmostEqual(float(self.dialog.txtY.text()), query.y, places=8)
 
     def test_invalid_fields_paths_and_crs_fail_before_generation(self):
         binding = self.attach(expand=True)
@@ -376,9 +389,9 @@ class RationalLayersBridgeTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'archivo'):
                 binding.panel.context_getter()
             self.paths[name] = old
-        binding.input_crs = QgsCoordinateReferenceSystem()
-        with self.assertRaisesRegex(ValueError, 'referencia'):
-            binding.panel.context_getter()
+        with patch.object(self.bridge, '_native_crs', return_value=QgsCoordinateReferenceSystem()):
+            with self.assertRaisesRegex(ValueError, 'EPSG:25830'):
+                binding.panel.context_getter()
 
     def test_independent_d8_dialog_preserves_native_layout_and_reopens(self):
         original = [self.dialog.layout().itemAt(i)
