@@ -10,7 +10,7 @@ from osgeo import gdal, osr
 
 from caumax_consulta.rational_grid_validation import verify_fine_rational_pair
 from caumax_consulta.rational_inputs import (_fine_preflight, _safe_secondary_sample,
-                                             _configured_pair_hint)
+                                             _configured_pair_hint, _qgis_drainage_pair_hint)
 
 
 class RationalGridValidationTests(unittest.TestCase):
@@ -187,6 +187,33 @@ class RationalGridValidationTests(unittest.TestCase):
         self.assertIsNone(_safe_secondary_sample(calc, 200, 550, 'P0'))
         self.assertEqual(_safe_secondary_sample(calc, 150, 450, 'P0'), 0.)
         self.assertEqual(_safe_secondary_sample(calc, 250, 350, 'P0'), 4.)
+
+    def test_configured_raster_differs_from_displayed_valid_qgis_drainage_pair(self):
+        from qgis.core import QgsApplication, QgsProject, QgsRasterLayer
+        from caumax_consulta.drainage_layers import OWNER_PROPERTY, ROLE_PROPERTY
+        app = QgsApplication.instance() or QgsApplication([], False)
+        app.initQgis()
+        project = QgsProject.instance()
+        dem, d8 = self.pair(25)
+        layers = []
+        for role, path in (('dem', dem), ('directions', d8)):
+            layer = QgsRasterLayer(str(path), role, 'gdal')
+            self.assertTrue(layer.isValid())
+            layer.setCustomProperty(OWNER_PROPERTY, 'same-rational-result')
+            layer.setCustomProperty(ROLE_PROPERTY, role)
+            project.addMapLayer(layer)
+            layers.append(layer)
+        self.addCleanup(lambda: project.removeMapLayers(
+            [layer.id() for layer in layers if project.mapLayer(layer.id())]))
+        foreign = (str(self.root / 'wrong_mdt.tif'), str(self.root / 'wrong_d8.tif'))
+        hint = _qgis_drainage_pair_hint(foreign, self.default_x, self.default_y)
+        self.assertIn('Método racional tiene configurados otros archivos', hint)
+        self.assertIn(str(dem), hint)
+        self.assertIn(str(d8), hint)
+        self.assertFalse(_qgis_drainage_pair_hint((str(dem), str(d8)),
+                                                  self.default_x, self.default_y))
+        self.assertFalse(_qgis_drainage_pair_hint(foreign,
+                                                  self.default_x, self.default_y + 100000))
 
     def test_existing_matching_export_is_suggested_without_reconfiguring_native_layers(self):
         dem, d8 = self.pair(25)
