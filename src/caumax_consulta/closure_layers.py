@@ -74,6 +74,39 @@ def analysis_closure_layer(analysis):
         crs, accepted_x=analysis.outlet_x, accepted_y=analysis.outlet_y)
 
 
+def persist_generated_closure(layer):
+    """Materialize the automatic D8 closure as SHP in ResolucionMejorada.
+
+    Unlike a temporary memory marker, this one-point layer is portable and
+    registered for the explicit Limpiar capas operation.
+    """
+    from uuid import uuid4
+    from .improved_storage import export_directory
+    from .generated_cleanup import register_dataset
+    if not isinstance(layer, QgsVectorLayer) or layer.featureCount() != 1:
+        raise ValueError('No existe una selección de cierre única para exportar.')
+    feature = next(layer.getFeatures())
+    x, y = feature.geometry().asPoint().x(), feature.geometry().asPoint().y()
+    destination = export_directory() / (
+        f'Cierre_D8_{round(x)}_{round(y)}_{uuid4().hex[:10]}.shp')
+    options = QgsVectorFileWriter.SaveVectorOptions()
+    options.driverName = 'ESRI Shapefile'
+    options.fileEncoding = 'UTF-8'
+    result = QgsVectorFileWriter.writeAsVectorFormatV3(
+        layer, str(destination), QgsCoordinateTransformContext(), options)
+    if result[0] != QgsVectorFileWriter.NoError:
+        raise ValueError('No se pudo guardar el SHP automático del cierre: ' + str(result[1]))
+    saved = QgsVectorLayer(str(destination), layer.name(), 'ogr')
+    if not saved.isValid() or saved.featureCount() != 1:
+        raise ValueError('No se pudo verificar el SHP automático del cierre.')
+    saved.renderer().setSymbol(closure_symbol())
+    for key in layer.customPropertyKeys():
+        if key.startswith('HidroCAUMAX/'):
+            saved.setCustomProperty(key, layer.customProperty(key))
+    register_dataset(destination)
+    return saved
+
+
 def export_closure(x, y, crs, destination, *, label=SHAPE_LABEL):
     """Write an exact one-point SHP and register it in QGIS; no overwrite."""
     from .watershed_export import _check_new_destination
