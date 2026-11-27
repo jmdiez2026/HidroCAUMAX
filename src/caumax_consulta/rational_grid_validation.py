@@ -87,6 +87,32 @@ def _inflow_at_closure(directions, col, row):
     return False
 
 
+def verify_rational_climate_crs(dem_path, climate_paths):
+    """Reject mixed-reference P0/I1Id/rainfall maps used without reprojection.
+
+    The native BasinCalculator samples climatic rasters with raw UTM X/Y and
+    their own geotransforms; it never reprojects between their source CRSs.
+    Different pixel sizes/extents are legitimate, different CRSs are not.
+    """
+    sources = tuple(climate_paths or ())
+    if not sources:
+        return
+    dem = _open(dem_path, 'MDT')
+    _, dem_crs = _grid(dem, 'MDT')
+    dem = None
+    for path in sources:
+        raster = _open(path, 'capa climática')
+        _, raster_crs = _grid(raster, 'capa climática')
+        raster = None
+        if not raster_crs.IsSame(dem_crs):
+            raise ValueError(
+                'El ráster climático ' + Path(path).name +
+                ' tiene un CRS diferente del MDT. CAUMAX usa las coordenadas '
+                'UTM EPSG:25830 sin reproyección en P₀, I1/Id y precipitaciones. '
+                'Configura fuentes climáticas en EPSG:25830 antes de calcular.')
+
+
+
 def verify_fine_rational_pair(dem_path, d8_path, x, y):
     """Verify real 25/5 m sources and the exact rational calculation outlet.
 
