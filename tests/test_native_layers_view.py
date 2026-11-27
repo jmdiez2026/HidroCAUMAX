@@ -8,7 +8,9 @@ from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtGui import QColor
 from qgis.PyQt.QtWidgets import QAction
 from qgis.core import (QgsApplication, QgsCoordinateReferenceSystem, QgsCoordinateTransform,
-                       QgsProject, QgsRectangle, QgsVectorLayer, QgsUnitTypes)
+                       QgsProject, QgsRectangle, QgsVectorLayer, QgsUnitTypes,
+                       QgsCategorizedSymbolRenderer, QgsRendererCategory,
+                       QgsLineSymbol, QgsRenderContext)
 from qgis.gui import QgsMapCanvas
 import qgis.utils
 
@@ -155,6 +157,78 @@ class NativeLayersViewTests(unittest.TestCase):
         terrain_background(self.project,self.group)
         self.assertEqual(len([n for n in root.findLayers() if n.layerId()==satellite.id()]),1)
 
+    @staticmethod
+    def _categorized_native_network(name='Red 10 km²'):
+        """CAUMAX red10km.qml: sup=1 is 10–50, sup=2 is >50 km²."""
+        layer = QgsVectorLayer('MultiLineString?crs=EPSG:25830', name, 'memory')
+        below = QgsLineSymbol.createSimple({
+            'line_color': '35,35,35,255', 'line_width': '0.5',
+            'line_width_unit': 'MM'})
+        above = QgsLineSymbol.createSimple({
+            'line_color': '192,223,255,255', 'line_width': '0.5',
+            'line_width_unit': 'MM'})
+        layer.setRenderer(QgsCategorizedSymbolRenderer('sup', [
+            QgsRendererCategory('1', below, 'Red 10  - 50 km²'),
+            QgsRendererCategory('2', above, 'Red > 50 km²'),
+        ]))
+        return layer
+
+    def test_real_caumax_categorized_red50_is_only_one_styled_at_150_percent(self):
+        official = self._categorized_native_network()
+        other = QgsVectorLayer('LineString?crs=EPSG:25830', 'Ríos', 'memory')
+        self.project.addMapLayer(official)
+        self.project.addMapLayer(other)
+        untouched = official.renderer().categories()[0].symbol()
+        original_color = untouched.color().name()
+        original_width = untouched.width()
+        original_other_color = other.renderer().symbol().color().name()
+        target_width = official.renderer().categories()[1].symbol().width()
+        self.assertAlmostEqual(target_width, 0.50)
+        style_query_network(self.project)
+        renderer = official.renderer()
+        self.assertIsInstance(renderer, QgsCategorizedSymbolRenderer)
+        self.assertEqual(renderer.classAttribute(), 'sup')
+        self.assertEqual(len(renderer.categories()), 2)
+        first, second = [entry.symbol() for entry in renderer.categories()]
+        self.assertEqual(first.color().name(), original_color)
+        self.assertAlmostEqual(first.width(), original_width)
+        self.assertEqual(second.color().name(), NETWORK_PINK)
+        self.assertAlmostEqual(second.width(), target_width * 1.5)
+        self.assertEqual(second.symbolLayer(0).widthUnit(),
+                         QgsUnitTypes.RenderMillimeters)
+        self.assertEqual(other.renderer().symbol().color().name(), original_other_color)
+        self.assertEqual(official.customProperty('HidroCAUMAX/query_network_style'),
+                         NETWORK_STYLE_REVISION)
+        style_query_network(self.project)
+        self.assertAlmostEqual(official.renderer().categories()[1].symbol().width(),
+                               target_width * 1.5)
+        # Native loader may replace renderer while leaving customProperties.
+        reset = official.renderer().clone()
+        reset.updateCategorySymbol(1, QgsLineSymbol.createSimple({
+            'line_color':'192,223,255,255', 'line_width':'0.5',
+            'line_width_unit':'MM'}))
+        official.setRenderer(reset)
+        style_query_network(self.project)
+        first, second = [entry.symbol() for entry in official.renderer().categories()]
+        self.assertEqual(first.color().name(), original_color)
+        self.assertAlmostEqual(first.width(), original_width)
+        self.assertEqual(second.color().name(), NETWORK_PINK)
+        self.assertAlmostEqual(second.width(), target_width * 1.5)
+
+    def test_caumax_red50_category_is_styled_on_layer_load(self):
+        self.bridge.start()
+        self.project.addMapLayer(self._categorized_native_network('Red 10 km2'))
+        self.app.processEvents()
+        actual = next(layer for layer in self.project.mapLayers().values()
+                      if layer.name() == 'Red 10 km2')
+        first, second = [item.symbol() for item in actual.renderer().categories()]
+        self.assertAlmostEqual(first.width(), 0.5)
+        self.assertEqual(first.color().name(), '#232323')
+        self.assertEqual(second.color().name(), NETWORK_PINK)
+        self.assertAlmostEqual(second.width(), 0.75)
+        self.assertEqual(actual.customProperty('HidroCAUMAX/query_network_style'),
+                         NETWORK_STYLE_REVISION)
+
     def test_only_named_50km_network_gets_pink_and_keeps_width_and_geometry(self):
         pink=QgsVectorLayer('LineString?crs=EPSG:25830','Red > 50 km²','memory')
         other=QgsVectorLayer('LineString?crs=EPSG:25830','Red 10 km²','memory')
@@ -177,9 +251,9 @@ class NativeLayersViewTests(unittest.TestCase):
         pink.setCustomProperty('HidroCAUMAX/query_network_pink', True)
         pink.renderer().symbol().setWidth(.26)
         style_query_network(self.project)
-        self.assertAlmostEqual(pink.renderer().symbol().width(), 1.30)
+        self.assertAlmostEqual(pink.renderer().symbol().width(), NETWORK_LINE_WIDTH_MM)
         style_query_network(self.project)
-        self.assertAlmostEqual(pink.renderer().symbol().width(), 1.30)
+        self.assertAlmostEqual(pink.renderer().symbol().width(), NETWORK_LINE_WIDTH_MM)
         # Native CAUMAX/QLR loading can overwrite a layer's renderer while its
         # HidroCAUMAX customProperty marker remains intact.
         renderer = pink.renderer().clone()
@@ -188,16 +262,16 @@ class NativeLayersViewTests(unittest.TestCase):
         pink.setRenderer(renderer)
         style_query_network(self.project)
         self.assertEqual(pink.renderer().symbol().color().name(), NETWORK_PINK)
-        self.assertAlmostEqual(pink.renderer().symbol().width(), 1.30)
+        self.assertAlmostEqual(pink.renderer().symbol().width(), NETWORK_LINE_WIDTH_MM)
 
-    def test_network_added_after_plugin_start_gets_pink_and_1_30_mm(self):
+    def test_standalone_network_added_after_plugin_start_gets_violet_pink_075_mm(self):
         self.bridge.start()
         network = QgsVectorLayer('LineString?crs=EPSG:25830',
                                  'Red > 50 km2', 'memory')
         self.project.addMapLayer(network)
         self.app.processEvents()
         self.assertEqual(network.renderer().symbol().color().name(), NETWORK_PINK)
-        self.assertAlmostEqual(network.renderer().symbol().width(), 1.30)
+        self.assertAlmostEqual(network.renderer().symbol().width(), NETWORK_LINE_WIDTH_MM)
         self.assertEqual(network.renderer().symbol().symbolLayer(0).widthUnit(),
                          QgsUnitTypes.RenderMillimeters)
         self.assertEqual(network.customProperty('HidroCAUMAX/query_network_style'),
