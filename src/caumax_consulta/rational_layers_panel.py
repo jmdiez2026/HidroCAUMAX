@@ -135,6 +135,10 @@ class RationalLayersPanel(DrainageControls):
         """An unchanged point never restarts work, including after Clear."""
         if self._disposed:
             return False
+        # A destructive disk purge releases the complete controller and must
+        # not silently start a new task on the next 400 ms bridge scan.
+        if self._cleared and self._controller.query is None:
+            return False
         try:
             query = self._context_getter()
             if query is None:
@@ -301,7 +305,8 @@ class RationalLayersPanel(DrainageControls):
         # If official fine coverage is temporarily unavailable, keep the
         # existing Generate action usable to retry its discovery from 500 m.
         self.drainage_prepare_button.setEnabled(
-            context and not busy and (refined or no_fine_coverage))
+            (context and not busy and (refined or no_fine_coverage))
+            or (self._cleared and self._controller.query is None and not busy))
         self.drainage_threshold.setEnabled(ready and not busy and refined)
         self.drainage_auto.setEnabled(ready and not busy and refined)
         self.drainage_visible.setEnabled(self._state is not None and not busy)
@@ -372,6 +377,14 @@ class RationalLayersPanel(DrainageControls):
         if self._disposed:
             return
         self._threshold_timer.stop()
+        if self._cleared and self._controller.query is None:
+            # Explicit new generation restores a fresh reference; clearing
+            # never retains arrays, variants, D8 products or cached results.
+            self._cleared = False
+            self.refresh_context()
+            self._queued_prepare = self._controller.query is not None
+            self._update_controls()
+            return
         if self._selected_key() == '500':
             resolution = self._controller.resolution
             if (resolution is not None and not self._controller.busy and
@@ -709,6 +722,21 @@ class RationalLayersPanel(DrainageControls):
         self._controller.cancel()
         self._discard_result(clear_boundary=True, remove_boundaries=True)
         self._status('Delineado borrado. Selecciona otra resolución o pulsa Generar capas D8.', 0)
+
+    def purge_generated_memory(self):
+        """Only explicit destructive Clear drops all cached basin/D8 arrays."""
+        if self._disposed:
+            return
+        self._threshold_timer.stop()
+        self._outline_timer.stop()
+        self._controller.set_context(None)
+        self._products = self._state = self._basin = None
+        self._outlines.clear()
+        self._outline_choices.clear()
+        self._cleared = True
+        self._queued_prepare = self._generation_running = False
+        self.context_label.setText('Resultados borrados del disco y memoria.')
+        self._status('Resultados eliminados. Pulsa Generar capas D8 para una nueva consulta.', 0)
 
     def dispose(self, *args):
         if self._disposed:
