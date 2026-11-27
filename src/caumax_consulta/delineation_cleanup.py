@@ -144,7 +144,7 @@ def _owned(item):
                for key in OWNER_PROPERTIES)
 
 
-def clear_delineation_layers(project=None):
+def clear_delineation_layers(project=None, *, preserve_published_drainage=False):
     """Remove all tool-owned result layers and only empty owned groups.
 
     Do not match display names, delete files, or remove foreign layers placed
@@ -152,8 +152,11 @@ def clear_delineation_layers(project=None):
     of the basin that generated them.
     """
     project = QgsProject.instance() if project is None else project
+    from .drainage_layers import PIN_PROPERTY
     layer_ids = [layer.id() for layer in project.mapLayers().values()
-                 if _owned(layer)]
+                 if _owned(layer) and not
+                 (preserve_published_drainage and
+                  layer.customProperty(PIN_PROPERTY, False))]
     if layer_ids:
         project.removeMapLayers(layer_ids)
     for group in reversed(project.layerTreeRoot().findGroups(recursive=True)):
@@ -165,7 +168,7 @@ def clear_delineation_layers(project=None):
 
 
 def clear_delineations(*, close_dialogs=False, project=None, include_exports=False,
-                       include_references=False):
+                       include_references=False, preserve_published_drainage=False):
     """Clear every query, keeping dialogs open unless a new red point begins."""
     project = QgsProject.instance() if project is None else project
     before = set(project.mapLayers())
@@ -195,7 +198,8 @@ def clear_delineations(*, close_dialogs=False, project=None, include_exports=Fal
             # still referenced by an asynchronous task.
             _dialogs.discard(dialog)
     clear_canvas_overlays()
-    clear_delineation_layers(project)
+    clear_delineation_layers(
+        project, preserve_published_drainage=preserve_published_drainage)
     if include_exports:
         from .layer_order import EXPORT_OWNER_PROPERTY
         project.removeMapLayers([layer.id() for layer in project.mapLayers().values()
