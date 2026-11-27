@@ -1,3 +1,13 @@
+# HidroCAUMAX v.1.0 — reparar método racional con capas configuradas (revisión 1.0.22, 2026-11-27)
+
+- Validación previa GDAL del MDT y D8 ESRI de 25 m o 5 m seleccionados en «Configurar capas de cálculo»: mismo origen, tamaño y CRS EPSG:25830, cobertura real del punto de cierre, máscara NoData coherente y ocho códigos ESRI-D8. No se combinan rásteres de zonas diferentes.
+- Cota del MDT leída de un archivo validado en un contexto privado y reversible cuando el proveedor ráster QGIS conserva una versión anterior y devuelve nulo. Se aplica tanto a «Calcular variables intermedias» como al cálculo posterior del caudal, solo para el punto comprobado.
+- Recarga obligatoria de BasinCalculator al cambiar MDT, FLOWDIRS, I1ID, P0 o precipitaciones configuradas para Método racional. Los accesos a rásteres climáticos finos no utilizan índices negativos fuera de sus coberturas.
+- Mensaje accionable en el propio diálogo racional: coordenadas del punto y extensión del MDT, o motivo de incompatibilidad D8, sin desplazamientos de cierre ni valores de Tc/Q inventados. Un error no permite reutilizar informes antiguos.
+- Se preserva el aislamiento total de Mapa de caudales máximos, el rosa de 1,30 mm para Red > 50 km² y la política de divisoria única por resolución. No se introduce la resolución 2 m.
+
+---
+
 # HidroCAUMAX v.1.0 — estilo rosa/violeta y divisoria única 500 m (revisión 1.0.21, 2026-11-27)
 
 - «Red > 50 km²» mantiene el color rosa-violeta `#FF1493` y el grosor **1,30 mm** al cargar o reabrir el proyecto, incluso si CAUMAX/QGIS recrean su renderizador sin borrar la propiedad de estilo anterior.
