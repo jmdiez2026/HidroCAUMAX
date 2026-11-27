@@ -188,6 +188,18 @@ class RationalGridValidationTests(unittest.TestCase):
         self.assertEqual(_safe_secondary_sample(calc, 150, 450, 'P0'), 0.)
         self.assertEqual(_safe_secondary_sample(calc, 250, 350, 'P0'), 4.)
 
+    def test_spanish_comma_coordinates_are_preflighted_not_silently_skipped(self):
+        dem, d8 = self.pair(25)
+        dialog = SimpleNamespace(
+            txtX=SimpleNamespace(text=lambda: '355.900,00'),
+            txtY=SimpleNamespace(text=lambda: '4.616.710,00'))
+        verified = _fine_preflight(dialog, (str(dem), str(d8)))
+        self.assertEqual(verified['resolution_m'], 25)
+        self.assertEqual((verified['col'], verified['row']), (2, 2))
+        dialog.txtY = SimpleNamespace(text=lambda: '4.717.759,20')
+        with self.assertRaisesRegex(ValueError, 'no está cubierto por el MDT'):
+            _fine_preflight(dialog, (str(dem), str(d8)))
+
     def test_configured_raster_differs_from_displayed_valid_qgis_drainage_pair(self):
         from qgis.core import QgsApplication, QgsProject, QgsRasterLayer
         from caumax_consulta.drainage_layers import OWNER_PROPERTY, ROLE_PROPERTY
