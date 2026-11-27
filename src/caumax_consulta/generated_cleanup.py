@@ -138,11 +138,16 @@ def _private_files(root):
                 (hasattr(parent, 'is_junction') and parent.is_junction())
                 for parent in root.parents)):
         return
-    # rglob does not follow directory symlinks; _plain_file rejects symlinks
-    # again before any file is ever recorded or removed.
-    for path in root.rglob('*'):
-        if _plain_file(path):
-            yield path
+    for current, dirs, names in os.walk(root, topdown=True, followlinks=False):
+        # Windows junctions must not let cleanup escape a private cache.
+        dirs[:] = [name for name in dirs if not (
+            (Path(current) / name).is_symlink() or
+            (hasattr(Path(current) / name, 'is_junction') and
+             (Path(current) / name).is_junction()))]
+        for name in names:
+            path = Path(current) / name
+            if _plain_file(path):
+                yield path
 
 
 def _retire_native_rational_results():
@@ -223,7 +228,6 @@ def _cancel_plugin_tasks():
 
 
 def _remove_empty_owned_directories(roots):
-    errors = []
     for root in roots:
         root = Path(root)
         if (not root.is_dir() or root.is_symlink() or
@@ -231,16 +235,21 @@ def _remove_empty_owned_directories(roots):
             continue
         # Never delete a parent like %TEMP%, QGIS profile, or plugin sources:
         # remove only empty subfolders and the exact owned root.
-        directories = sorted((p for p in root.rglob('*') if p.is_dir()
-                             and not p.is_symlink()), key=lambda p: len(p.parts),
-                             reverse=True)
+        directories = []
+        for current, subdirs, names in os.walk(root, topdown=True, followlinks=False):
+            subdirs[:] = [name for name in subdirs if not (
+                (Path(current) / name).is_symlink() or
+                (hasattr(Path(current) / name, 'is_junction') and
+                 (Path(current) / name).is_junction()))]
+            directories.extend(Path(current) / name for name in subdirs)
+        directories.sort(key=lambda p: len(p.parts), reverse=True)
         for directory in (*directories, root):
             try:
                 directory.rmdir()
             except OSError:
                 # A nonempty root (notably the bundled P0) is expected.
                 pass
-    return errors
+    return None
 
 
 def deletion_plan(project=None, roots=None):
@@ -314,9 +323,22 @@ def delete_generated(plan, project=None, canvas=None):
     selected = set(plan['files']) - protected
     # Cancel producers BEFORE removing providers. Worker callbacks are
     # invalidated by the controllers so late task completion cannot redraw.
-    clear_delineations(project=project, include_exports=True,
+    clear_delineations(close_dialogs=True, project=project, include_exports=True,
                        include_references=plan.get('include_references', False))
     _cancel_plugin_tasks()
+    # Workers can finish staging a file between the initial review and their
+    # cancellation. A second scan is confined to the same *approved private*
+    # directories; never extend to arbitrary external files after confirmation.
+    files = dict(plan['files'])
+    for root in plan.get('owned_roots', ()):
+        for path in _private_files(root):
+            key = str(path.resolve())
+            if key not in files and key not in protected:
+                try:
+                    files[key] = _stamp(path)
+                except OSError:
+                    pass
+    selected = set(files) - protected
     if project is QgsProject.instance():
         _retire_native_rational_results()
         _reset_deleted_native_sources(selected)
@@ -325,7 +347,7 @@ def delete_generated(plan, project=None, canvas=None):
     project.removeMapLayers([key for key in plan['layers'] if project.mapLayer(key)])
     gc.collect()  # Release Python-held GDAL/OGR providers before Windows unlink.
     removed, failed = [], []
-    for name, stamp in plan['files'].items():
+    for name, stamp in files.items():
         if name in protected:
             continue
         path = Path(name)
