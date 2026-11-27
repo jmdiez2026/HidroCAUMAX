@@ -8,7 +8,8 @@ import unittest
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 from qgis.core import QgsApplication, QgsCoordinateReferenceSystem, QgsProject
 from caumax_consulta.closure_layers import (
-    CLOSURE_ROLE, analysis_closure_layer, export_closure, make_closure_layer)
+    CLOSURE_ROLE, GREEN_CLOSURE_ROLE, analysis_closure_layer, export_closure,
+    export_green_course_closure, make_closure_layer)
 
 
 class ClosureLayersTests(unittest.TestCase):
@@ -64,6 +65,35 @@ class ClosureLayersTests(unittest.TestCase):
         self.assertTrue(saved.customProperty(CLOSURE_ROLE, False))
         with self.assertRaisesRegex(ValueError, 'existe'):
             export_closure(353387.1465, 4725249.11019, self.crs, target)
+
+    def test_exportar_cierre_green_circle_uses_exact_blue_cross_and_saved_qml(self):
+        analysis = SimpleNamespace(
+            crs_wkt=self.crs.toWkt(), selected_x=353387.1465,
+            selected_y=4725249.11019, outlet_x=353362.5,
+            outlet_y=4725237.5)
+        destination = self.folder / 'Cierre_CursoPrincipal.shp'
+        target, layer = export_green_course_closure(analysis, destination)
+        self.assertEqual(target, destination)
+        self.assertEqual(layer.renderer().symbol().color().name(), '#23e733')
+        self.assertEqual(layer.customProperty(GREEN_CLOSURE_ROLE), True)
+        self.assertFalse(layer.customProperty(CLOSURE_ROLE, False))
+        point = next(layer.getFeatures()).geometry().asPoint()
+        # The blue cross is at the accepted outlet, not the original
+        # mouse click stored in analysis.selected_x/selected_y.
+        self.assertAlmostEqual(point.x(), analysis.outlet_x, places=6)
+        self.assertAlmostEqual(point.y(), analysis.outlet_y, places=6)
+        self.assertNotEqual(point.x(), analysis.selected_x)
+        self.assertTrue(destination.with_suffix('.qml').is_file())
+        self.assertTrue(all(destination.with_suffix(s).is_file()
+                            for s in ('.shp', '.shx', '.dbf', '.prj')))
+        from qgis.core import QgsVectorLayer
+        reloaded = QgsVectorLayer(str(target), 'Cierre reabierto', 'ogr')
+        success, reason = reloaded.loadNamedStyle(str(target.with_suffix('.qml')))
+        self.assertTrue(success, reason)
+        self.assertEqual(reloaded.renderer().symbol().color().name(), '#23e733')
+        self.assertAlmostEqual(reloaded.renderer().symbol().size(), 5.)
+        with self.assertRaisesRegex(ValueError, 'existe'):
+            export_green_course_closure(analysis, destination)
 
     def test_rejects_nonprojected_or_nonnumeric_coordinates(self):
         with self.assertRaisesRegex(ValueError, 'CRS proyectado'):
