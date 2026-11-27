@@ -15,9 +15,15 @@ from osgeo import gdal, ogr, osr
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from caumax_consulta import hydro_export as export
+from qgis.core import QgsApplication
 
 
 class HydroExportTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QgsApplication.instance() or QgsApplication([], False)
+        cls.app.initQgis()
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='hydro_export_')
         self.folder = Path(self.temp.name)
