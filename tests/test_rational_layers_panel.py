@@ -365,8 +365,11 @@ class RationalLayersPanelTests(unittest.TestCase):
         self.query = replace(self.query, y=self.query.y + 500.)
         panel.refresh_context()
         self.assertFalse(panel._threshold_timer.isActive())
-        self.assertFalse(any(layer.customProperty('HidroCAUMAX/drainage_owner')
-                             for layer in QgsProject.instance().mapLayers().values()))
+        from caumax_consulta.drainage_layers import PIN_PROPERTY
+        self.assertTrue(any(
+            layer.customProperty('HidroCAUMAX/drainage_owner', '')
+            and layer.customProperty(PIN_PROPERTY, False)
+            for layer in QgsProject.instance().mapLayers().values()))
         self.assertIsNotNone(next((layer for layer in QgsProject.instance().mapLayers().values()
                                    if layer.customProperty('HidroCAUMAX/boundary_owner')), None))
         self.assertIsNone(panel._products)
