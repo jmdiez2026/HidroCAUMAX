@@ -350,6 +350,12 @@ class CourseFlowProfile(QWidget):
         self.graph = _ProfilePlot(self)
         self.graph.chosen.connect(self.select_index)
         layout.addWidget(self.graph)
+        self.coverage_label = QLabel('', self)
+        self.coverage_label.setWordWrap(True)
+        self.coverage_label.setToolTip(
+            'Cada posición corresponde a una celda D8. Solo se representan '
+            'los caudales válidos de los rásteres oficiales SNCZI.')
+        layout.addWidget(self.coverage_label)
         row = QHBoxLayout()
         self.map_button = QPushButton('Elegir celda en el mapa', self)
         # 95% of the native button height, preserving font and interactions.
@@ -382,6 +388,7 @@ class CourseFlowProfile(QWidget):
         self._rows, self._flows = [], []
         self._selected = None
         self.graph.show_profile([], [], None)
+        self.coverage_label.clear()
         self.hide()
 
     def configure(self, analysis, state, iface):
@@ -410,12 +417,14 @@ class CourseFlowProfile(QWidget):
         self._rows, self._flows = [], []
         self._key = key
         self.graph.show_profile([], [], None)
+        self.coverage_label.setText('Recuento de celdas: pendiente de lectura SNCZI.')
         if not any((Path(path.split('|', 1)[0]).is_file() or
                     path.startswith('/vsi')) for path in paths if path):
             # Portable saved consultations may lack the native source rasters.
             # Do not start a pointless background task or fabricate Q from
             # morphometry; allow a later source restore to retry this profile.
             self._key = None
+            self.coverage_label.setText('Recuento no disponible: faltan los rásteres oficiales.')
             self.label.setText(
                 'Rásteres de caudal SNCZI no disponibles; no es posible '
                 'construir el perfil del curso principal.')
@@ -431,6 +440,7 @@ class CourseFlowProfile(QWidget):
         self._task = None
         if not success:
             self.label.setText(task.error or 'No se ha podido generar el perfil SNCZI.')
+            self.coverage_label.setText('Recuento no disponible: error de lectura.')
             return
         self._rows = task.result
         self._refresh()
@@ -450,17 +460,28 @@ class CourseFlowProfile(QWidget):
         self._flows = [estimate_flow(self._period, item[3], self._extrapolate)['flow']
                        for item in self._rows]
         self.graph.show_profile(self._rows, self._flows, self._selected)
+        self._update_coverage()
         self._selection_text()
         self._update_marker()
+
+    def _update_coverage(self):
+        counts = profile_counts(self._flows)
+        self.coverage_label.setText(
+            f'T={self._period:g} años · Celdas del curso: {counts["total"]} · '
+            f'Con caudal válido: {counts["valid"]} '
+            f'(Q=0 en {counts["zeros"]}) · '
+            f'Sin dato SNCZI: {counts["missing"]}. '
+            'Azul: Q>0 · Verde: Q=0 válido · Gris: NoData (sin interpolar).')
 
     def _selection_text(self):
         if self._selected is not None and 0 <= self._selected < len(self._rows):
             station = self._rows[self._selected][0]
             flow = self._flows[self._selected]
             self.label.setText(
-                f"Abscisado: {station:.2f} km · "
-                + (f"Q máx. T={self._period:g}: {flow:.2f} m³/s"
-                   if flow is not None else 'Q: sin dato SNCZI'))
+                f"Abscisado desde el cierre: {station:.2f} km · "
+                + ('Q: sin dato SNCZI (NoData)' if flow is None else
+                   f'Q máx. T={self._period:g}: {flow:.2f} m³/s'
+                   + (' (dato válido)' if flow == 0 else '')))
         elif self._rows:
             good = sum(q is not None for q in self._flows)
             self.label.setText(
@@ -563,8 +584,10 @@ class CourseFlowProfile(QWidget):
             marker.setIconSize(17)
             marker.setPenWidth(3)
             q = self._flows[self._selected]
-            marker.setToolTip('Abscisado: ' + f'{station:.2f}' + ' km · Q: '
-                              + (f'{q:.2f} m³/s' if q is not None else 'sin dato'))
+            marker.setToolTip(
+                'Abscisado desde el cierre: ' + f'{station:.2f} km · Q: '
+                + ('sin dato SNCZI (NoData)' if q is None else
+                   f'{q:.2f} m³/s' + (' (dato válido)' if q == 0 else '')))
             self._marker = marker
             outline = register_overlay(
                 self._canvas, QgsRubberBand(self._canvas, QgsWkbTypes.PolygonGeometry))
