@@ -19,7 +19,7 @@ from caumax_consulta.basin import BasinResult
 from caumax_consulta.metrics import shape_metrics
 from caumax_consulta.smooth_export import (
     SmoothExportDialog, smoothed_geometry, smoothing_settings, suggested_iterations, export_layer,
-    export_previewed, choose_export_destination,
+    export_previewed, choose_export_destination, _suggested_basin_destination,
 )
 from caumax_consulta.watershed_export import write_layer
 
@@ -273,6 +273,21 @@ class SmoothExportTests(unittest.TestCase):
         self.assertEqual(list(self.folder.iterdir()),[existing])
         self.assertEqual(existing.read_bytes(),b'keep existing')
         self.assertEqual(set(QgsProject.instance().mapLayers()),self.initial_ids)
+
+    def test_default_caumax_divisoria_name_uses_query_coords_period_and_profile(self):
+        analysis = SimpleNamespace(outlet_x=334825.0, outlet_y=4729200.0)
+        query = SimpleNamespace(source_kind='caumax_raster', period=100)
+        with patch('caumax_consulta.improved_storage.generated_layers_directory',
+                   return_value=self.folder):
+            suggested = _suggested_basin_destination(analysis, query)
+            self.assertEqual(suggested, self.folder /
+                             'CONSULTA_Divisoria_X334825_Y4729200_T100.shp')
+            query.period = 500
+            self.assertEqual(_suggested_basin_destination(analysis, query).name,
+                             'CONSULTA_Divisoria_X334825_Y4729200_T500.shp')
+            query.period = None
+            self.assertEqual(_suggested_basin_destination(analysis, query).name,
+                             'CONSULTA_Divisoria_X334825_Y4729200.shp')
 
     def test_map_destination_cancel_leaves_project_and_files_unchanged(self):
         geometry=QgsGeometry()
