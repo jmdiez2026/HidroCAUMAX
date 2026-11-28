@@ -276,6 +276,23 @@ class OutletSelectionTests(unittest.TestCase):
         self.assertFalse(dialog.apply_button.isEnabled())
         self.assertIn('extensión',dialog.status_label.text())
 
+    def test_fine_reference_mismatch_requires_explicit_manual_override(self):
+        dialog = self.make_dialog(persistent=True, verify_reference_overlap=True)
+        self.assertTrue(dialog.allow_different_check.isVisible())
+        self.assertFalse(dialog.allow_different_check.isChecked())
+        self.assertNotIn('allow_reference_mismatch', dialog.context)
+        self.assertTrue(dialog.apply_button.isEnabled())
+        dialog.accept()
+        self.assertFalse(dialog.context['allow_reference_mismatch'])
+        dialog.rebind(dict(self.context, verify_reference_overlap=True))
+        self.assertFalse(dialog.allow_different_check.isChecked())
+        dialog.allow_different_check.setChecked(True)
+        dialog.accept()
+        self.assertTrue(dialog.context['allow_reference_mismatch'])
+        dialog.rebind(dict(self.context))
+        self.assertFalse(dialog.allow_different_check.isVisible())
+        self.assertFalse(dialog.allow_different_check.isChecked())
+
     def test_persistent_apply_rebinds_new_outlet_and_original_reference_for_next_apply(self):
         dialog = self.make_dialog(persistent=True,manual_selection_scope='raster_extent')
         applied = []
