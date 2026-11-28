@@ -133,6 +133,18 @@ class RationalBasinDialogTests(unittest.TestCase):
         closing_group = controls.itemAt(controls.count() - 1).widget()
         self.assertIsInstance(closing_group, QDialogButtonBox)
         self.assertIs(dialog.close_button.parentWidget(), closing_group)
+        # Compare with native, unmodified QGIS button hints to verify that all
+        # four actions are scaled independently (including the red Cerrar).
+        from qgis.PyQt.QtWidgets import QPushButton
+        for button in (dialog.save_project_button, dialog.open_project_button,
+                       dialog.report_button, dialog.close_button):
+            native = QPushButton(button.text(), button.parentWidget())
+            native.setFont(button.font())
+            native.ensurePolished()
+            expected = max(1, round(native.sizeHint().height() * 0.90))
+            self.assertEqual(button.minimumHeight(), expected)
+            self.assertEqual(button.maximumHeight(), expected)
+            native.deleteLater()
 
     def test_initial_task_checks_exact_native_basin_before_publishing(self):
         task = AnalysisTask(self.fixture.query, lambda *args: None)
