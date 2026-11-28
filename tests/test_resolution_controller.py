@@ -598,7 +598,7 @@ class ResolutionControllerTests(unittest.TestCase):
         self.assertFalse(next(o for o in c.options if o['key']=='25')['available'])
         self.assertIn('Servidor no disponible',self.errors[-1])
 
-    def test_truncated_basin_retries_twice_and_retains_an_explicit_warning(self):
+    def test_truncated_basin_retries_twice_then_refuses_to_publish(self):
         c=self.controller()
         self.discover(c)
         normal=self.fake_analyze
@@ -613,8 +613,10 @@ class ResolutionControllerTests(unittest.TestCase):
         widths=[b[2]-b[0] for _,b,_ in self.downloads]
         self.assertAlmostEqual(widths[1]/widths[0],1.5)
         self.assertAlmostEqual(widths[2]/widths[1],1.5)
-        self.assertTrue(any('dos ampliaciones' in note for note in c.variants['5']['analysis'].notes))
-        self.assertEqual(c.variants['5']['metadata']['coverage_attempts'],3)
+        # Never mistake the rectangular DEM edge for a physical divide.
+        self.assertNotIn('5', c.variants)
+        self.assertEqual(c.active_key, c._base_key)
+        self.assertTrue(any('tocando el borde' in error for error in self.errors))
 
     def test_reference_outside_download_retries_coverage_before_requiring_manual_choice(self):
         c=self.controller()
