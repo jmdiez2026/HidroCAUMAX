@@ -428,26 +428,44 @@ class ResolutionController(QObject):
         self._start_build(key,'select')
         return True
 
+    def _manual_reference_context(self, context):
+        """Supply the coarse footprint for explicit fine-resolution review.
+
+        Only the transient selection context contains this geometry; user
+        datasets, query coordinates and saved CAUMAX sessions stay unchanged.
+        """
+        context=dict(context,manual_selection_scope='raster_extent')
+        key=str(context.get('resolution_key',self.active_key))
+        if key!=self._base_key:
+            context['require_complete_coverage']=True
+            reference,geometry=self._current_reference()
+            if geometry:
+                context.update(
+                    reference_geometry_wkb_hex=bytes(geometry).hex(),
+                    reference_crs_wkt=str(reference.crs_wkt),
+                    verify_reference_overlap=True)
+        return context
+
     def selection_context(self):
         """Return the unresolved DEM, or the active calculation, for user review."""
         if self.outlet_selection_context:
-            return dict(deepcopy(self.outlet_selection_context),manual_selection_scope='raster_extent')
+            return self._manual_reference_context(deepcopy(self.outlet_selection_context))
         variant=self.variants[self.active_key]
         analysis,query=variant['analysis'],variant['query']
         x,y=_dem_point(query.dem_path,self._query_crs,self._query_x,self._query_y)
-        return dict(resolution_key=self.active_key,dem_path=str(query.dem_path),
+        return self._manual_reference_context(dict(resolution_key=self.active_key,dem_path=str(query.dem_path),
             directions_path=str(query.directions_path),crs_wkt=analysis.crs_wkt,
             original_x=x,original_y=y,search_radius_m=self.snap_radius_m,
             initial_x=float(analysis.outlet_x),initial_y=float(analysis.outlet_y),
             manual_selection_scope='raster_extent',
             reference_area_m2=self.reference_area_m2,
             metadata=deepcopy(variant.get('metadata') or {}),
-            reason='Elige el centro de cierre para esta resolución. Se recalculará toda la cuenca.')
+            reason='Elige el centro de cierre para esta resolución. Se recalculará toda la cuenca.'))
 
     def select_outlet(self,context,x,y):
         """Apply an explicitly reviewed cell without changing the CAUMAX query."""
         if self._disposed:return False
-        context=deepcopy(context)
+        context=self._manual_reference_context(deepcopy(context))
         key=_key(context.get('resolution_key'))
         if not any(item['key']==key for item in self.options):
             raise ValueError('La resolución del cierre elegido ya no está disponible.')
