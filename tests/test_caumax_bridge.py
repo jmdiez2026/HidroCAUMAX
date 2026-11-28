@@ -21,7 +21,8 @@ from qgis.PyQt.QtWidgets import (
     QRadioButton, QVBoxLayout,
 )
 from qgis.core import QgsApplication, QgsPointXY, QgsRasterLayer
-from qgis.gui import QgsMapCanvas
+from qgis.PyQt.QtCore import Qt
+from qgis.gui import QgsMapCanvas, QgsMapToolEmitPoint
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from caumax_consulta import caumax_bridge as bridge_module
@@ -237,6 +238,76 @@ class BridgeTests(unittest.TestCase):
         band.Fill(128 if 'd8' in name else 250)
         ds = None
         return str(path)
+
+    def test_new_selection_uses_original_caumax_map_tool_then_reopens_after_valid_flow(self):
+        self.valid_query()
+        self.bridge.start()
+        self.dialog.btnGetPoint = QPushButton('Seleccionar en mapa', self.dialog)
+        self.dialog.btnGetPoint.setCheckable(True)
+        self.dialog.tool = QgsMapToolEmitPoint(self.canvas)
+        previous = self.canvas.mapTool()
+        self.dialog.btnGetPoint.clicked.connect(
+            lambda checked: self.canvas.setMapTool(self.dialog.tool)
+            if checked else self.canvas.setMapTool(previous))
+        seen = []
+        def native_point(point, button):
+            seen.append((point.x(), point.y()))
+            self.dialog.txtX.setText(f'{point.x():.1f}')
+            self.dialog.txtY.setText(f'{point.y():.1f}')
+            self.dialog.btnReport.setEnabled(False)
+            self.dialog.txtResultReturnPeriod.setText('5')
+            self.dialog.txtResultFlow.setText('35.2')
+            self.dialog.lastValidPoint = QgsPointXY(point)
+            self.dialog.btnReport.setEnabled(True)
+        self.dialog.tool.canvasClicked.connect(native_point)
+        started = []
+        self.bridge.on_query_started = started.append
+        self.assertTrue(self.bridge.start_auto_reselection(self.dialog))
+        self.assertTrue(self.dialog.btnGetPoint.isChecked())
+        self.assertIs(self.canvas.mapTool(), self.dialog.tool)
+        self.assertTrue(self.bridge.auto_reselection_pending(self.dialog))
+        self.assertFalse(started)
+        self.assertFalse(self.calls)
+        # The point signal comes from native CAUMAX; no synthetic new-Q
+        # computation is allowed in the HidroCAUMAX integration.
+        self.dialog.tool.canvasClicked.emit(QgsPointXY(341325, 4646200), Qt.LeftButton)
+        self.app.processEvents()
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(started, [self.dialog])
+        self.assertEqual(len(self.calls), 1)
+        native, query = self.calls[0]
+        self.assertIs(native, self.dialog)
+        self.assertEqual((query.x, query.y, query.period, query.flow),
+                         (341325, 4646200, 5, 35.2))
+        self.assertFalse(self.bridge.auto_reselection_pending(self.dialog))
+        # A second ordinary CAUMAX point must not trigger the one-shot handoff.
+        self.dialog.tool.canvasClicked.emit(QgsPointXY(341825, 4646700), Qt.LeftButton)
+        self.app.processEvents()
+        self.assertEqual(len(self.calls), 1)
+
+    def test_new_selection_keeps_previous_basin_when_caumax_has_no_valid_flow(self):
+        self.valid_query()
+        self.bridge.start()
+        self.dialog.btnGetPoint = QPushButton('Seleccionar en mapa', self.dialog)
+        self.dialog.btnGetPoint.setCheckable(True)
+        self.dialog.tool = QgsMapToolEmitPoint(self.canvas)
+        self.dialog.btnGetPoint.clicked.connect(
+            lambda checked: self.canvas.setMapTool(self.dialog.tool) if checked else None)
+        def invalid_point(point, button):
+            self.dialog.txtX.setText(f'{point.x():.1f}')
+            self.dialog.txtY.setText(f'{point.y():.1f}')
+            self.dialog.btnReport.setEnabled(False)
+        self.dialog.tool.canvasClicked.connect(invalid_point)
+        self.assertTrue(self.bridge.start_auto_reselection(self.dialog))
+        self.dialog.tool.canvasClicked.emit(QgsPointXY(342325, 4646200), Qt.LeftButton)
+        self.app.processEvents()
+        self.assertFalse(self.calls)
+        self.assertTrue(self.bridge.auto_reselection_pending(self.dialog))
+        self.dialog.btnGetPoint.click()
+        self.assertFalse(self.bridge.auto_reselection_pending(self.dialog))
+        self.assertFalse(self.calls)
+        self.bridge.stop()
+        self.assertFalse(self.bridge._bindings)
 
     def test_native_map_query_recovers_official_500m_when_fine_grid_outside(self):
         """Regression: 25/5 m rational custom settings must not strand Q(T)."""
