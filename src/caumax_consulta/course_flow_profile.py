@@ -7,6 +7,7 @@ readout is cancellable and off the Qt GUI thread; missing cells remain missing.
 import hashlib
 import math
 from bisect import bisect_left
+from pathlib import Path
 
 from osgeo import gdal, ogr, osr
 from qgis.PyQt import sip
@@ -366,6 +367,16 @@ class CourseFlowProfile(QWidget):
         self._rows, self._flows = [], []
         self._key = key
         self.graph.show_profile([], [], None)
+        if not any((Path(path.split('|', 1)[0]).is_file() or
+                    path.startswith('/vsi')) for path in paths if path):
+            # Portable saved consultations may lack the native source rasters.
+            # Do not start a pointless background task or fabricate Q from
+            # morphometry; allow a later source restore to retry this profile.
+            self._key = None
+            self.label.setText(
+                'Rásteres de caudal SNCZI no disponibles; no es posible '
+                'construir el perfil del curso principal.')
+            return
         self.label.setText('Leyendo los caudales SNCZI a lo largo del curso…')
         task = _ProfileTask(self._generation, wkb, crs, paths, self._finished)
         self._task = task
