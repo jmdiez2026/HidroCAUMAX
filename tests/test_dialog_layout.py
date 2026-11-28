@@ -42,8 +42,8 @@ class DialogLayoutTests(unittest.TestCase):
         self.assertTrue(dialog.status.isReadOnly())
         closure, button = dialog.export_closure_button, dialog.export_button
         row = button.parentWidget().layout().itemAt(0).layout()
-        self.assertEqual(closure.text(), 'Exportar Cierre')
-        self.assertEqual(button.text(), 'Exportar Cuenca')
+        self.assertEqual(closure.text(), 'Guardar Cierre')
+        self.assertEqual(button.text(), 'Guardar Divisoria')
         self.assertEqual(row.indexOf(closure), row.indexOf(dialog.smoothing_degree)+1)
         self.assertEqual(row.indexOf(button), row.indexOf(closure)+1)
         for width in (520,650,900):
@@ -63,8 +63,20 @@ class DialogLayoutTests(unittest.TestCase):
                     self.assertLessEqual(
                         current.mapTo(dialog.body_scroll.viewport(),QPoint()).x()+
                         current.width(),dialog.body_scroll.viewport().width())
-                    self.assertLess(current.height(),30)
-                    self.assertLess(current.width(),160)
+                    # Both controls are exactly 105% of the compact
+                    # native height at their actual fitted QGIS font.
+                    baseline=QPushButton(current.text(),current.parentWidget())
+                    baseline.setFont(current.font())
+                    baseline.setStyleSheet(current.styleSheet())
+                    baseline.setIcon(current.icon())
+                    baseline.setIconSize(current.iconSize())
+                    baseline.ensurePolished()
+                    expected=max(current.fontMetrics().height()+4,
+                                 round(baseline.sizeHint().height()*1.05))
+                    self.assertEqual(current.height(),expected)
+                    baseline.setParent(None)
+                    baseline.deleteLater()
+                    self.assertLess(current.width(),170)
 
     def test_report_buttons_are_compact_left_aligned_with_close_at_right_in_one_row(self):
         dialog=self.dialog
