@@ -39,6 +39,10 @@ jobs:
               missing = sorted(required - names)
               if missing:
                   raise SystemExit('Faltan archivos en el instalable: ' + str(missing))
+              query_bridge = archive.read('caumax_consulta/caumax_bridge.py').decode()
+              rational_bridge = archive.read('caumax_consulta/rational_layers_bridge.py').decode()
+              assert "_LogoBasinButton('SNZI-Análisis Cuenca', dialog)" in query_bridge
+              assert "QPushButton('IC-5.2 Análisis Cuenca', frame)" in rational_bridge
               metadata = archive.read('caumax_consulta/metadata.txt').decode()
               assert 'version=1.0.31' in metadata
               print('Vista previa v1.0.31: archivos y versión verificados')
@@ -78,3 +82,5 @@ jobs:
           /usr/bin/python3 -m unittest discover -s tests -p 'test_session_store.py' -v
           /usr/bin/python3 -m unittest discover -s tests -p 'test_native_toolbar.py' -v
           /usr/bin/python3 -m unittest discover -s tests -p 'test_native_caumax_toolbar_shortcut.py' -v
+          /usr/bin/python3 -m unittest discover -s tests -p 'test_caumax_bridge.py' -v
+          /usr/bin/python3 -m unittest discover -s tests -p 'test_rational_layers_bridge.py' -v
