@@ -466,7 +466,11 @@ class RationalLayersBridge(QObject):
         frame.setObjectName(ACTION_FRAME_NAME)
         frame.setStyleSheet(f'QFrame#{ACTION_FRAME_NAME} {{ border: 1px solid #7EB4D0; '
                            'border-radius: 3px; background-color: #F2F9FD; }}')
-        # Use two rows rather than shrinking buttons to fit a single strip.
+        # Exactly three analytical actions on the upper row (beside the logo),
+        # and three save actions on the lower row. The separately owned
+        # "Guardar Divisoria" button is inserted between Cierre and IC-5.2
+        # by rational_export, independently of plugin load order. The red
+        # cleanup action remains on the far right, outside the six blue buttons.
         # Original 5x9 px button padding and the native UI font are retained.
         rows = QVBoxLayout(frame)
         rows.setContentsMargins(8, 7, 8, 7)
@@ -489,7 +493,7 @@ class RationalLayersBridge(QObject):
             logo.setPixmap(pixmap.scaledToHeight(28, Qt.SmoothTransformation))
         logo.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         row.addWidget(logo, 0, Qt.AlignVCenter)
-        frequency_button = QPushButton('Calcular', frame)
+        frequency_button = QPushButton('Calcular Q vs. T', frame)
         frequency_button.setObjectName(FREQUENCY_BUTTON_NAME)
         frequency_button.setStyleSheet(ACTION_BUTTON_STYLE)
         frequency_button.setToolTip('Calcular y mostrar la tabla y el gráfico de caudales '
@@ -500,22 +504,22 @@ class RationalLayersBridge(QObject):
         closure_button.setObjectName(SAVE_CLOSURE_NAME)
         closure_button.setStyleSheet(ACTION_BUTTON_STYLE)
         closure_button.setToolTip('Guardar el punto exacto seleccionado en un SHP amarillo y cargarlo en QGIS.')
-        row.addWidget(closure_button, 0, Qt.AlignLeft)
-        complete_button = QPushButton('Guardar CUENCA', frame)
+        lower_row.addWidget(closure_button, 0, Qt.AlignLeft)
+        complete_button = QPushButton('Guardar IC-5.2', frame)
         complete_button.setObjectName(SAVE_COMPLETE_NAME)
         complete_button.setStyleSheet(ACTION_BUTTON_STYLE)
-        complete_button.setToolTip('Guardar capas, estilos, MDT/D8, archivos mejorados y coordenadas en .hidrocuenca.')
-        row.addWidget(complete_button, 0, Qt.AlignLeft)
+        complete_button.setToolTip('Guardar el análisis completo IC-5.2, sus capas, estilos, MDT/D8 y coordenadas en .hidrocuenca.')
+        lower_row.addWidget(complete_button, 0, Qt.AlignLeft)
         basin_button = QPushButton('IC-5.2 Análisis Cuenca', frame)
         basin_button.setObjectName(BASIN_BUTTON_NAME)
         basin_button.setStyleSheet(ACTION_BUTTON_STYLE)
         basin_button.setEnabled(False)
-        lower_row.addWidget(basin_button, 0, Qt.AlignLeft)
-        button = QPushButton('Mejorar resolución', frame)
+        row.addWidget(basin_button, 0, Qt.AlignLeft)
+        button = QPushButton('Mejorar resolución MDT', frame)
         button.setObjectName(BUTTON_NAME)
         button.setStyleSheet(ACTION_BUTTON_STYLE)
         button.setToolTip('Abrir en una ventana independiente las opciones de generación para el punto actual.')
-        lower_row.addWidget(button, 0, Qt.AlignLeft)
+        row.addWidget(button, 0, Qt.AlignLeft)
         row.addStretch()
         lower_row.addStretch()
         from .clean_layers_ui import clean_button
