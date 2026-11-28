@@ -374,6 +374,10 @@ class FlowQuantileWidget(QWidget):
         super().__init__(parent)
         self._state=None;self._updating=False
         layout=QVBoxLayout(self);layout.setContentsMargins(0,0,0,0)
+        self.section_title=QLabel('Caudales máximos régimen natural SNCZI',self)
+        title_font=self.section_title.font();title_font.setBold(True)
+        self.section_title.setFont(title_font)
+        layout.addWidget(self.section_title)
         self.rational_label=QLabel(self)
         self.rational_label.setTextFormat(Qt.PlainText)
         self.rational_label.setWordWrap(True)
@@ -425,6 +429,7 @@ class FlowQuantileWidget(QWidget):
 
     def _set_rational_mode(self, active):
         self.rational_label.setVisible(active)
+        self.section_title.setVisible(not active)
         self.table.setVisible(not active)
         self.plots.setVisible(not active)
         self.course_profile.setVisible(not active)
