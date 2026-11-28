@@ -58,7 +58,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
   smoke:
-    name: Recortes, curva hipsométrica y perfiles Qci-n en PyQGIS
+    name: Regresiones QGIS de recortes, sesiones, D8 y PDF
     runs-on: ubuntu-24.04
     timeout-minutes: 18
     steps:
@@ -66,7 +66,7 @@ jobs:
       - name: Instalar PyQGIS y GDAL nativos
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends python3-qgis python3-gdal
+          sudo apt-get install -y --no-install-recommends python3-qgis python3-gdal python3-pypdf
       - name: Verificar interfaz y recortes reales de P0 y Pd-T
         env:
           QT_QPA_PLATFORM: offscreen
@@ -84,3 +84,6 @@ jobs:
           /usr/bin/python3 -m unittest discover -s tests -p 'test_native_caumax_toolbar_shortcut.py' -v
           /usr/bin/python3 -m unittest discover -s tests -p 'test_caumax_bridge.py' -v
           /usr/bin/python3 -m unittest discover -s tests -p 'test_rational_layers_bridge.py' -v
+          /usr/bin/python3 -m unittest discover -s tests -p 'test_legacy_course_areas.py' -v
+          /usr/bin/python3 -m unittest discover -s tests -p 'test_basin_hydrology_dialog.py' -v
+          /usr/bin/python3 -m unittest discover -s tests -p 'test_reports.py' -v
