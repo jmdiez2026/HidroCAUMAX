@@ -319,6 +319,13 @@ class NativeCaumaxPlugin(QObject):
                 str(query.directions_path), str(query.dem_path), query.crs.toWkt())
 
     def _new_query_started(self, native_dialog):
+        # A map pick launched inside HidroCAUMAX must keep the previous basin
+        # on screen until CAUMAX confirms a *valid* new Qci query. Invalid
+        # clicks leave the original consultation intact.
+        bridge = getattr(self, '_bridge', None)
+        if (bridge is not None
+                and bridge.auto_reselection_pending(native_dialog)):
+            return
         if self._enabled:
             clear_delineations(close_dialogs=True,
                                preserve_published_drainage=True)
@@ -362,6 +369,14 @@ class NativeCaumaxPlugin(QObject):
                                preserve_published_drainage=True)
         dialog = BasinDialog(query, self.iface, native_dialog)
         dialog._native_query = query
+        # New selection invokes the original native CAUMAX map tool. Never
+        # substitute a locally computed flow for CAUMAX's validated result.
+        bridge = getattr(self, '_bridge', None)
+        if (getattr(query, 'source_kind', 'caumax_raster') != 'rational'
+                and bridge is not None
+                and hasattr(dialog, 'set_new_selection_handler')):
+            dialog.set_new_selection_handler(
+                lambda native=native_dialog: bridge.start_auto_reselection(native))
         self._dialogs[native_dialog] = dialog
         if getattr(query, 'source_kind', None) == 'rational':
             binding = self._rational_layers._bindings.get(id(native_dialog))
