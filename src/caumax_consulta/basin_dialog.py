@@ -1146,7 +1146,7 @@ class BasinDialog(QDialog):
             if profile._rows:
                 profile._update_coverage()
             return
-        from .course_flow_profile import main_course_areas
+        from .course_flow_profile import course_centres, main_course_areas
         from types import SimpleNamespace
         # The worker has verified every native D8 centre. Preserve all old
         # morphometry, Qci rasters/samples and saved statistics byte-for-byte.
@@ -1154,8 +1154,7 @@ class BasinDialog(QDialog):
         diagnostics['main_course_areas_b64'] = task.result
         proposed = SimpleNamespace(diagnostics=diagnostics)
         if len(main_course_areas(proposed)) != len(
-                __import__('osgeo').ogr.CreateGeometryFromWkb(
-                    bytes(self.analysis.main_course_wkb)).GetPoints()):
+                course_centres(self.analysis.main_course_wkb, self.analysis.crs_wkt)):
             profile._area_note = 'Las áreas D8 recuperadas no coinciden con el curso.'
             return
         self.analysis = replace(self.analysis, diagnostics=diagnostics)
@@ -2053,8 +2052,6 @@ class BasinDialog(QDialog):
         self._resolution_options(controller.options)
         self.resolution_progress.hide()
         self._cache_variant_state()
-        if state:
-            self._start_legacy_area_recovery()
         if not self._resolution_loading:
             self._queue_smoothing()
         self._resume_outlet_selection()
