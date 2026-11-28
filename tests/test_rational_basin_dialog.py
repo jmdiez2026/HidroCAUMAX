@@ -1,12 +1,13 @@
 """Real Qt/GDAL rational-basin controls, surface variants and portable state."""
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 import numpy as np
 from qgis.PyQt import sip
-from qgis.PyQt.QtCore import QCoreApplication, QEvent, Qt
+from qgis.PyQt.QtCore import QCoreApplication, QEvent, Qt, QSize
 from qgis.core import QgsGeometry, QgsPointXY, QgsProject
 from qgis.gui import QgsMapCanvas
 
@@ -133,6 +134,17 @@ class RationalBasinDialogTests(unittest.TestCase):
         closing_group = controls.itemAt(controls.count() - 1).widget()
         self.assertIsInstance(closing_group, QDialogButtonBox)
         self.assertIs(dialog.close_button.parentWidget(), closing_group)
+        # Confirm the chosen vector assets are available and Qt can render them.
+        icon_folder = Path(__file__).resolve().parents[1] / 'src' / 'caumax_consulta' / 'assets'
+        for button, icon_filename in (
+                (dialog.save_project_button, 'guardar_consulta_modelo3.svg'),
+                (dialog.open_project_button, 'abrir_consulta_modelo2.svg'),
+                (dialog.report_button, 'informe_pdf_modelo1.svg')):
+            self.assertTrue((icon_folder / icon_filename).is_file())
+            self.assertEqual(button.iconSize(), QSize(16, 16))
+            self.assertFalse(button.icon().isNull())
+            self.assertFalse(button.icon().pixmap(QSize(16, 16)).isNull())
+        self.assertTrue(dialog.close_button.icon().isNull())
         # Compare with native, unmodified QGIS button hints to verify that all
         # four actions are scaled independently (including the red Cerrar).
         from qgis.PyQt.QtWidgets import QPushButton
@@ -140,6 +152,8 @@ class RationalBasinDialogTests(unittest.TestCase):
                        dialog.report_button, dialog.close_button):
             native = QPushButton(button.text(), button.parentWidget())
             native.setFont(button.font())
+            native.setIcon(button.icon())
+            native.setIconSize(button.iconSize())
             native.ensurePolished()
             expected = max(1, round(native.sizeHint().height() * 0.90))
             self.assertEqual(button.minimumHeight(), expected)
