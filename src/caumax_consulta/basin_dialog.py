@@ -585,6 +585,26 @@ class BasinDialog(QDialog):
         """Keep three equally sized buttons complete on narrow QGIS windows."""
         layout = self._resolution_actions_layout
         buttons = self._resolution_action_buttons
+        # QGIS may change the inherited font after the dialog is first shown.
+        # Compare *native* button sizeHints in the current font/style, never
+        # multiply the already enlarged fixed height on successive resizes.
+        natural = []
+        for button in buttons:
+            sample = QPushButton(button.text(), self.resolution_group)
+            sample.setFont(button.font())
+            sample.setStyleSheet(button.styleSheet())
+            sample.setIcon(button.icon())
+            sample.setIconSize(button.iconSize())
+            sample.ensurePolished()
+            natural.append(sample.sizeHint())
+            sample.setParent(None)
+            sample.deleteLater()
+        width = max(hint.width() for hint in natural)
+        height = max(round(max(hint.height() for hint in natural) * 1.05),
+                     max(button.fontMetrics().height() + 4 for button in buttons))
+        for button in buttons:
+            if button.width() != width or button.height() != height:
+                button.setFixedSize(width, height)
         cell = self.cell_grid_check
         margins = self.body_scroll.widget().layout().contentsMargins()
         section = self.resolution_group.layout().contentsMargins()
