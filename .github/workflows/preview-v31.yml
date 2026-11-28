@@ -1,0 +1,75 @@
+name: Comprobar recortes y empaquetar vista previa v1.0.31
+
+on:
+  push:
+    branches:
+      - mejora-icono-cargar-capas-caumax-v31
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: ZIP QGIS instalable (vista previa)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validar sintaxis de todo el complemento
+        run: python -m compileall -q src/caumax_consulta
+      - name: Construir y comprobar ZIP QGIS con iconos y recortes
+        run: |
+          python scripts/build_release.py --output dist --tag v1.0.31
+          python - <<'PY'
+          import zipfile
+          with zipfile.ZipFile('dist/HidroCAUMAX_v1_0_31.zip') as archive:
+              names = set(archive.namelist())
+              required = {
+                  'caumax_consulta/metadata.txt',
+                  'caumax_consulta/po_clip.py',
+                  'caumax_consulta/basin_hydrology_widget.py',
+                  'caumax_consulta/basin_dialog.py',
+                  'caumax_consulta/assets/recorte_po_modelo2.svg',
+                  'caumax_consulta/assets/exportar_po_modelo2.svg',
+              }
+              missing = sorted(required - names)
+              if missing:
+                  raise SystemExit('Faltan archivos en el instalable: ' + str(missing))
+              metadata = archive.read('caumax_consulta/metadata.txt').decode()
+              assert 'version=1.0.31' in metadata
+              print('Vista previa v1.0.31: archivos y versión verificados')
+          PY
+      - name: Conservar ZIP instalable de la revisión
+        uses: actions/upload-artifact@v4
+        with:
+          name: HidroCAUMAX_v1_0_31_preview_QGIS
+          path: |
+            dist/HidroCAUMAX_v1_0_31.zip
+            dist/release_manifest.json
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
+  smoke:
+    name: Recortes GDAL y visibilidad PyQGIS
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Instalar PyQGIS y GDAL nativos
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends python3-qgis python3-gdal
+      - name: Verificar interfaz y recortes reales de P0 y Pd-T
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          mkdir -p "$RUNNER_TEMP/xdg-runtime"
+          chmod 700 "$RUNNER_TEMP/xdg-runtime"
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdg-runtime"
+          export PYTHONPATH="$GITHUB_WORKSPACE/src:$GITHUB_WORKSPACE/tests"
+          /usr/bin/python3 -m unittest discover -s tests -p 'test_po_clip.py' -v
+          /usr/bin/python3 -m unittest discover -s tests -p 'test_pd_clip.py' -v
