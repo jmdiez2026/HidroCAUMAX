@@ -4,6 +4,7 @@ Never edits the native CAUMAX Po raster or any other official source. The
 clipped GeoTIFF has the original pixel alignment and NoData outside the basin.
 """
 import math
+import hashlib
 import os
 from pathlib import Path
 import shutil
@@ -24,6 +25,15 @@ def _reference(wkt, label):
         raise ValueError('CRS no válido: ' + label)
     reference.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
     return reference
+
+
+def basin_clip_fingerprint(geometry_wkb, basin_crs_wkt):
+    """Same identity as basin_hydrology.basin_fingerprint, without QGIS I/O."""
+    digest = hashlib.sha256()
+    for part in (bytes(geometry_wkb), str(basin_crs_wkt).encode('utf-8')):
+        digest.update(len(part).to_bytes(8, 'big'))
+        digest.update(part)
+    return digest.hexdigest()
 
 
 def clip_po_to_basin(source_path, geometry_wkb, basin_crs_wkt, destination,
@@ -118,6 +128,8 @@ def clip_po_to_basin(source_path, geometry_wkb, basin_crs_wkt, destination,
             result.GetRasterBand(1).SetNoDataValue(-9999.)
             result.SetMetadataItem('HIDROCAUMAX_PRODUCT', 'PO_BASIN_CLIP' if kind == 'po' else 'PD_BASIN_CLIP')
             result.SetMetadataItem('HIDROCAUMAX_SOURCE', source)
+            result.SetMetadataItem('HIDROCAUMAX_BASIN_FINGERPRINT',
+                                   basin_clip_fingerprint(geometry_wkb, basin_crs_wkt))
             result.FlushCache()
             result = None
         if cancelled():
@@ -164,7 +176,7 @@ def export_pd_clip(source_path, destination):
     return export_po_clip(source_path, destination)
 
 
-def inspect_clipped_raster(path, kind, source_path):
+def inspect_clipped_raster(path, kind, source_path, *, fingerprint=None):
     """Check a saved clipped TIFF before restoring it, without modifying it.
 
     A JSON path is a reference, never proof that the original file still
@@ -185,6 +197,9 @@ def inspect_clipped_raster(path, kind, source_path):
             raise ValueError('El TIFF guardado no corresponde al recorte solicitado.')
         if dataset.GetMetadataItem('HIDROCAUMAX_SOURCE') != str(source_path):
             raise ValueError('El recorte no procede del ráster original indicado.')
+        if (fingerprint is not None
+                and dataset.GetMetadataItem('HIDROCAUMAX_BASIN_FINGERPRINT') != fingerprint):
+            raise ValueError('El ráster recortado pertenece a otra divisoria.')
         if dataset.RasterXSize < 1 or dataset.RasterYSize < 1:
             raise ValueError('El recorte guardado carece de datos espaciales.')
     finally:
