@@ -157,6 +157,43 @@ class SessionStoreTests(unittest.TestCase):
                     input_period=12.5, input_precipitation=75.25, extrapolate=False,
                     method='piecewise_linear_p_log_t')
 
+    def test_p0_and_pd_clip_references_survive_json_and_reject_wrong_basin_or_source(self):
+        from caumax_consulta.basin_hydrology import basin_fingerprint
+        fingerprint = basin_fingerprint(self.analysis)
+        source = str(self.folder / 'original-hydrology.tif')
+        state = {**self.state, 'basin_hydrology':self.basin_hydrology_fixture(),
+                 'pd_clip_period': 5,
+                 'hydrology_clips': {
+                     'po': dict(path=str(self.folder / 'PoRecortes' / 'p0.tif'),
+                                source_path=source, basin_fingerprint=fingerprint),
+                     'pd': dict(path=str(self.folder / 'PdRecortes' / 't5.tif'),
+                                source_path=source, basin_fingerprint=fingerprint,
+                                period=5),
+                 }}
+        self.save(state=state)
+        restored = session_store.load_session(self.path)
+        self.assertEqual(restored.smoothing_state['hydrology_clips'],
+                         state['hydrology_clips'])
+        # Missing TIFF files are allowed in validated JSON; the QGIS dialog
+        # reports missing files and leaves the consultation usable.
+        self.assertFalse(Path(state['hydrology_clips']['po']['path']).exists())
+        self.save(state={**state, 'hydrology_clips':{'po':None,'pd':None}})
+        self.assertEqual(session_store.load_session(self.path).smoothing_state[
+            'hydrology_clips'], {'po':None,'pd':None})
+        for change in (
+                lambda clips: clips['po'].update(basin_fingerprint='f'*64),
+                lambda clips: clips['po'].update(source_path='wrong.tif'),
+                lambda clips: clips['po'].update(path='relative.tif'),
+                lambda clips: clips['pd'].update(period=25),
+                lambda clips: clips['pd'].update(period=17)):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                invalid = json.loads(json.dumps(state['hydrology_clips']))
+                change(invalid)
+                self.save(state={**state,'hydrology_clips':invalid})
+        with self.assertRaises(ValueError):
+            self.save(state={**self.state,
+                             'hydrology_clips':state['hydrology_clips']})
+
     def test_basin_hydrology_roundtrips_zero_partial_nodata_and_original_means_offline(self):
         state = {**self.state, 'basin_hydrology': self.basin_hydrology_fixture()}
         self.save(state=state)
