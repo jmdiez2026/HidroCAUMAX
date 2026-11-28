@@ -80,7 +80,7 @@ jobs:
           export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdg-runtime"
           export PYTHONPATH="$GITHUB_WORKSPACE/src:$GITHUB_WORKSPACE/tests"
           result=0
-          for pattern in 'test_po_clip.py' 'test_pd_clip.py' 'test_course_flow_profile.py' 'test_hypsometric_selection.py' 'test_session_store.py' 'test_native_toolbar.py' 'test_native_caumax_toolbar_shortcut.py' 'test_caumax_bridge.py' 'test_rational_layers_bridge.py' 'test_legacy_course_areas.py' 'test_basin_hydrology_dialog.py' 'test_reports.py'; do
+          for pattern in 'test_po_clip.py' 'test_pd_clip.py' 'test_course_flow_profile.py' 'test_hypsometric_selection.py' 'test_session_store.py' 'test_native_toolbar.py' 'test_native_caumax_toolbar_shortcut.py' 'test_caumax_bridge.py' 'test_rational_layers_bridge.py' 'test_legacy_course_areas.py' 'test_basin_hydrology_dialog.py' 'test_reports.py' 'test_report_charts.py'; do
             echo "::group::Pruebas $pattern"
             if timeout --signal=TERM --kill-after=5s 120s /usr/bin/python3 -m unittest discover -s tests -p "$pattern" -v; then
               echo "PASS: $pattern"
