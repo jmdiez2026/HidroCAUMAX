@@ -2170,13 +2170,10 @@ class BasinDialog(QDialog):
                 or self._resolution_pending or not self._surface_valid
                 or self._basin_hydrology_busy() or self._saving_project):
             return
-        from .closure_layers import export_green_course_closure
-        from .improved_storage import generated_layers_directory
+        from .closure_layers import export_green_course_closure, suggested_course_closure_path
         analysis = self.analysis
         try:
-            suggested = generated_layers_directory() / (
-                f'Cierre_CursoPrincipal_CONSULTA_X{round(analysis.outlet_x)}_'
-                f'Y{round(analysis.outlet_y)}.shp')
+            suggested = suggested_course_closure_path(analysis)
         except OSError as error:
             QMessageBox.critical(self, 'Guardar Cierre',
                                  'No se pudo crear Capas_Generadas: ' + str(error))
@@ -2519,17 +2516,13 @@ class BasinDialog(QDialog):
         because an optional SHP could not be written. Existing files are never
         overwritten; callers receive separate warnings for each export.
         """
-        from .closure_layers import export_green_course_closure
+        from .closure_layers import export_green_course_closure, suggested_course_closure_path
         from .smooth_export import export_previewed, _suggested_basin_destination, basin_geometry
-        from .improved_storage import generated_layers_directory
         from qgis.core import QgsGeometry
 
         errors, saved = [], []
         analysis, query = self.analysis, self.query
-        directory = generated_layers_directory()
-        closure = directory / (
-            f'Cierre_CursoPrincipal_CONSULTA_X{round(analysis.outlet_x)}_'
-            f'Y{round(analysis.outlet_y)}.shp')
+        closure = suggested_course_closure_path(analysis)
         try:
             if closure.exists():
                 errors.append('Guardar Cierre: ya existe ' + closure.name)
