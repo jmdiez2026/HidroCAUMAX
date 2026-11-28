@@ -96,7 +96,7 @@ class BasinHydrologyDialogTests(unittest.TestCase):
         self.assertEqual(expected.name, CONSULTATION_FOLDER)
         self.assertEqual(destination.parent, expected)
         self.assertEqual(destination.name,
-                         'Consulta_Mapas_Caudales_Máximos_naturales (Qci).json')
+                         'Consulta_Mapas_Caudales_Máximos_naturales (Qci-n).json')
         self.assertEqual(destination.name, DEFAULT_CONSULTATION_FILENAME)
 
     def test_save_and_open_consultation_choosers_use_same_default_json_folder(self):
@@ -159,7 +159,7 @@ class BasinHydrologyDialogTests(unittest.TestCase):
         self.assertEqual(expected.name, REPORT_FOLDER)
         self.assertEqual(destination.parent, expected)
         self.assertEqual(destination.name,
-                         'Informe_Consulta_Máximos_Naturales (Qcin).pdf')
+                         'Informe_Consulta_Máximos_Naturales (Qci-n).pdf')
         self.assertEqual(destination.name, DEFAULT_REPORT_FILENAME)
 
     def test_informe_pdf_chooser_suggests_qcin_filename_and_keeps_generation(self):
