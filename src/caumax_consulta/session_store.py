@@ -51,7 +51,7 @@ _STATE_OPTIONAL = {'geometry_wkb', 'stats', 'map_png', 'map_caption', 'map_exten
                    'hypsometric_dimensionless', 'flow_quantiles', 'basin_hydrology',
                    'base_geometry_wkb', 'cell_grid_visible', 'base_drainage_state',
                    'chart_snapshots', 'course_flow_profile', 'contour_transparency', 'pd_clip_period',
-                   'hypsometric_selected_index', 'hypsometric_opacity'}
+                   'hypsometric_selected_index', 'hypsometric_opacity', 'hydrology_clips'}
 
 
 @dataclass(frozen=True)
@@ -1202,6 +1202,55 @@ def _stats(geometry, area, perimeter):
                 delta_perimeter_pct=100 * (measured_perimeter / perimeter - 1))
 
 
+def _hydrology_clips(value, analysis, hydro_state):
+    """Validate portable clip references against the saved source and basin.
+
+    This intentionally does not open files during untrusted JSON parsing: a
+    missing/moved TIFF is handled safely when the QGIS dialog restores it.
+    """
+    from pathlib import Path, PureWindowsPath
+    from .basin_hydrology import basin_fingerprint
+
+    _keys(value, {'po', 'pd'}, 'referencias de recortes hidrológicos')
+    fingerprint = basin_fingerprint(analysis)
+
+    def verify(record, kind):
+        if record is None:
+            return None
+        label = 'recorte P₀' if kind == 'po' else 'recorte Pd-T CEDEX'
+        required = {'path', 'source_path', 'basin_fingerprint'}
+        if kind == 'pd':
+            required.add('period')
+        _keys(record, required, label)
+        path = _text(record['path'], 'ruta de ' + label, 4096)
+        source = _text(record['source_path'], 'fuente de ' + label, 4096)
+        stamped = _text(record['basin_fingerprint'], 'cuenca de ' + label, 64)
+        if not path or not (Path(path).is_absolute() or PureWindowsPath(path).is_absolute()):
+            _fail(label, 'el GeoTIFF debe tener una ruta absoluta')
+        if not path.lower().endswith(('.tif', '.tiff')) or not source:
+            _fail(label, 'ruta de GeoTIFF o fuente original inválida')
+        if stamped != fingerprint:
+            _fail(label, 'el recorte no pertenece a la divisoria activa')
+        period = None
+        if kind == 'pd':
+            period = _int(record['period'], 'T de recorte Pd-T', maximum=500)
+            if period not in (2, 5, 10, 25, 100, 500):
+                _fail(label, 'período de retorno no oficial')
+        expected = ((hydro_state or {}).get('p0_result')
+                    if kind == 'po' else
+                    (hydro_state or {}).get('rainfall_results', {}).get(str(period)))
+        if not expected or expected.get('status') not in ('ok', 'partial'):
+            _fail(label, 'no hay estadísticos compatibles de la capa original')
+        if source != str(expected.get('source_path') or '').split('|', 1)[0]:
+            _fail(label, 'la fuente no corresponde al cálculo hidrológico')
+        result = dict(path=path, source_path=source, basin_fingerprint=stamped)
+        if kind == 'pd':
+            result['period'] = period
+        return result
+
+    return {'po': verify(value['po'], 'po'), 'pd': verify(value['pd'], 'pd')}
+
+
 def _chart_snapshots(items, *, encode=False):
     """Validate a bounded collection of PNGs captured from visible charts."""
     if not isinstance(items, list) or len(items) > 8:
@@ -1621,6 +1670,9 @@ def _decode_single(document):
         state['flow_quantiles'] = _flow_quantiles(state['flow_quantiles'], query)
     if 'basin_hydrology' in state:
         state['basin_hydrology'] = _basin_hydrology(state['basin_hydrology'], analysis)
+    if 'hydrology_clips' in state:
+        state['hydrology_clips'] = _hydrology_clips(
+            state['hydrology_clips'], analysis, state.get('basin_hydrology'))
     if 'chart_snapshots' in state:
         state['chart_snapshots'] = _chart_snapshots(state['chart_snapshots'])
     if 'course_flow_profile' in state:
