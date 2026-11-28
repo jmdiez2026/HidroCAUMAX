@@ -1,7 +1,7 @@
-"""Display basin-mean P0 and daily-rainfall quantiles without reading rasters.
+"""Display automatic basin-mean P0 and daily-rainfall spatial quantiles.
 
-The controller computes spatial statistics only after a button request. This
-widget owns portable presentation state, tied to the original basin geometry,
+The controller computes statistics in background after the basin is resolved.
+This widget owns portable presentation state, tied to the actual basin geometry,
 and the screen/PDF interpolation of its six spatially averaged quantiles.
 """
 import copy
@@ -262,8 +262,6 @@ class _PrecipitationPlots(QWidget):
 
 
 class BasinHydrologyWidget(QWidget):
-    calculate_p0 = pyqtSignal()
-    calculate_rainfall = pyqtSignal()
     cancel_requested = pyqtSignal()
     changed = pyqtSignal()
 
@@ -276,19 +274,14 @@ class BasinHydrologyWidget(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0,0,0,0)
         self.p0_group = QGroupBox('Umbral de Escorrentía (P₀)',self)
-        self.rainfall_group = QGroupBox('Precipitación máxima diaria de la cuenca',self)
+        self.rainfall_group = QGroupBox('Precipitación diaria máxima anual media en la cuenca',self)
         p0_layout = QVBoxLayout(self.p0_group)
         rainfall_layout = QVBoxLayout(self.rainfall_group)
         layout.addWidget(self.p0_group)
         layout.addWidget(self.rainfall_group)
-        self.p0_button = QPushButton('Calcular P₀ medio',self)
-        self.rainfall_button = QPushButton('Calcular Precipitación diaria máxima anual MEDIA (mm)',self)
-        self.rainfall_button.setToolTip('Calcular Precipitación diaria máxima anual MEDIA (mm)')
-        for button in (self.p0_button,self.rainfall_button):
-            button.setStyleSheet('QPushButton { padding:2px 9px; min-height:0px; }')
-        self.rainfall_button.setStyleSheet('QPushButton { padding:2px 1px; min-height:0px; }')
-        self._fit_calculation_buttons()
-        self.p0_label = QLabel('P₀ medio: no calculado. β no aplicado.',self)
+        # P₀ and rainfall are evaluated automatically whenever the basin
+        # changes; there are no manual calculation buttons in this panel.
+        self.p0_label = QLabel('P₀ medio en la cuenca: pendiente de cálculo. β no aplicado.',self)
         self.p0_label.setTextFormat(Qt.RichText)
         self.p0_statistics_label = QLabel('Mediana, Máx, Mín y Desv. típ: no calculados.',self)
         self.p0_statistics_label.setWordWrap(True)
@@ -297,17 +290,16 @@ class BasinHydrologyWidget(QWidget):
         self.p0_label.setWordWrap(True)
         self.coverage_label.setWordWrap(True)
         p0_row = QGridLayout()
-        p0_row.addWidget(self.p0_button,0,0,3,1,Qt.AlignVCenter)
-        p0_row.addWidget(self.p0_label,0,1)
-        p0_row.addWidget(self.p0_statistics_label,1,1)
-        p0_row.addWidget(self.coverage_label,2,1)
-        p0_row.setColumnStretch(1,1)
+        p0_row.addWidget(self.p0_label,0,0)
+        p0_row.addWidget(self.p0_statistics_label,1,0)
+        p0_row.addWidget(self.coverage_label,2,0)
+        p0_row.setColumnStretch(0,1)
         p0_layout.addLayout(p0_row)
-        rainfall_layout.addWidget(self.rainfall_button,0,Qt.AlignLeft)
         self.rainfall_table = QTableWidget(6,6,self)
         self.rainfall_table.setHorizontalHeader(CompactTableHeader(self.rainfall_table))
         self.rainfall_table.setHorizontalHeaderLabels(
-            ['Periodo T (años)','Pd (media)','Pd mín','Pd máx','Desv. típ.','Estado'])
+            ['Periodo T (años)','Pd (media) [mm]','Pd mín [mm]','Pd máx [mm]',
+             'Desv. típ. [mm]','Estado'])
         self.rainfall_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.rainfall_table.setAlternatingRowColors(False)
         self.rainfall_table.setStyleSheet('QTableWidget { background-color:white; alternate-background-color:white; }')
@@ -370,32 +362,15 @@ class BasinHydrologyWidget(QWidget):
         self.cancel_button = QPushButton('Cancelar cálculo',self)
         self.cancel_button.hide()
         layout.addWidget(self.cancel_button)
-        self.p0_button.clicked.connect(lambda checked=False:self.calculate_p0.emit())
-        self.rainfall_button.clicked.connect(lambda checked=False:self.calculate_rainfall.emit())
         self.cancel_button.clicked.connect(lambda checked=False:self.cancel_requested.emit())
         self.period_spin.valueChanged.connect(lambda value:self._changed('input_period',float(value)))
         self.precipitation_spin.valueChanged.connect(lambda value:self._changed('input_precipitation',float(value)))
         self.extrapolate_check.toggled.connect(lambda value:self._changed('extrapolate',bool(value)))
         self._refresh()
-        QTimer.singleShot(0,self._fit_calculation_buttons)
-
-    def _fit_calculation_buttons(self):
-        try:
-            for button in (self.p0_button,self.rainfall_button):
-                button.ensurePolished()
-                metrics=button.fontMetrics()
-                width=metrics.horizontalAdvance(button.text())+(4 if button is self.rainfall_button else 22)
-                height=max(26,max(metrics.height(),metrics.lineSpacing())+6)
-                if button is self.rainfall_button:
-                    width=round(width*1.10)
-                button.setFixedSize(width,height)
-            if hasattr(self,'_statistics_layout_timer'):
-                self._statistics_layout_timer.start(0)
-        except RuntimeError:
-            return
+        QTimer.singleShot(0,self._fit_statistic_labels)
 
     def _fit_statistic_labels(self):
-        """Keep the two requested result lines to the right of their controls.
+        """Keep the basin-mean statistics legible at narrow window widths.
 
         Only these result labels use a smaller local font when necessary. A
         very narrow dialog may wrap at the readable minimum; no value is lost.
@@ -515,8 +490,15 @@ class BasinHydrologyWidget(QWidget):
             updated['p0_result'] = result
         elif kind == 'rainfall':
             updated['rainfall_results'] = result
+        elif kind == 'both':
+            if not isinstance(result, dict) or set(result) != {'p0', 'rainfall'}:
+                raise ValueError('Faltan resultados del cálculo hidrológico conjunto.')
+            updated['p0_result'] = result['p0']
+            updated['rainfall_results'] = result['rainfall']
         else:
             raise ValueError('Tipo de resultado hidrológico no reconocido.')
+        # Publish P₀ and rainfall atomically: a canceled or failed task must
+        # never display means from two different watershed geometries.
         self._apply(_normalise(updated))
 
     def set_busy(self,busy,text=''):
@@ -534,9 +516,6 @@ class BasinHydrologyWidget(QWidget):
         self.status_label.setVisible(bool(text))
 
     def _sync_busy(self):
-        enabled = self._analysis is not None and not self._busy
-        self.p0_button.setEnabled(enabled)
-        self.rainfall_button.setEnabled(enabled)
         self.cancel_button.setVisible(self._busy)
 
     def _changed(self,key,value):
@@ -552,7 +531,7 @@ class BasinHydrologyWidget(QWidget):
         count = len(self._state['rainfall_results'])
         p0 = self._state['p0_result']
         if p0 is None and not count:
-            return 'Datos todavía no calculados. Pulsa el botón correspondiente.'
+            return 'Calculando automáticamente P₀ y precipitación de la cuenca…'
         partial = any(result['status'] != 'ok' for result in
                       ([p0] if p0 is not None else [])+list(self._state['rainfall_results'].values()))
         return 'Revisa las coberturas parciales o los datos no disponibles.' if partial else ''
@@ -561,17 +540,17 @@ class BasinHydrologyWidget(QWidget):
         self._sync_busy()
         p0 = self._state['p0_result'] if self._state is not None else None
         if p0 is None:
-            self.p0_label.setText('P₀ medio: no calculado. β no aplicado.')
+            self.p0_label.setText('P₀ medio en la cuenca: pendiente de cálculo. β no aplicado.')
             self.p0_statistics_label.setText('Mediana, Máx, Mín y Desv. típ: no calculados.')
             self.coverage_label.setText('Cobertura: no calculada.')
             self.p0_label.setToolTip('')
         else:
             mean = ('sin dato válido' if p0['mean_mm'] is None else
                     f"{p0['mean_mm']:.2f}".replace('.', ',')+' mm')
-            self.p0_label.setText(f'P₀ medio: <span style="color:#C00000; font-weight:700">{mean}</span>. β no aplicado.')
+            self.p0_label.setText(f'P₀ medio en la cuenca: <span style="color:#C00000; font-weight:700">{mean}</span>. β no aplicado.')
             statistics = p0.get('statistics')
             if statistics is None:
-                self.p0_statistics_label.setText('Estadísticos no disponibles. Pulsa «Calcular P₀ medio» para obtenerlos.')
+                self.p0_statistics_label.setText('Estadísticos no disponibles para esta cuenca.')
             else:
                 numbers = {key:f'{value:.2f}'.replace('.', ',') for key,value in statistics.items()}
                 self.p0_statistics_label.setText(
@@ -605,7 +584,7 @@ class BasinHydrologyWidget(QWidget):
         if self._state is None:
             self.forward_label.setText('Pd(T): no calculada.')
             self.inverse_label.setText('T(Pd): no calculado.')
-            self.method_label.setText('P₀ sin aplicar β. La precipitación se calcula únicamente cuando se solicita.')
+            self.method_label.setText('P₀ sin aplicar β. La precipitación se calcula automáticamente para la cuenca activa.')
             self.plots.state = None
         else:
             descriptions = describe_precipitation_estimates(self._state,rich_text=True)
