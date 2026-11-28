@@ -326,8 +326,14 @@ class ManualOutletDialogIntegrationTests(unittest.TestCase):
         row=next(actions.itemAt(i).layout() for i in range(actions.count())
                  if actions.itemAt(i).layout() is not None
                  and actions.itemAt(i).layout().indexOf(dialog.outlet_adjust_button)>=0)
-        self.assertEqual([row.itemAt(i).widget() for i in range(3)],
-                         [dialog.cell_grid_check,dialog.outlet_adjust_button,dialog.clear_delineation_button])
+        actions_found = [row.itemAt(i).widget() for i in range(row.count())
+                         if row.itemAt(i).widget() is not None]
+        for control in (dialog.cell_grid_check, dialog.new_selection_button,
+                        dialog.outlet_adjust_button, dialog.clear_delineation_button):
+            self.assertIn(control, actions_found)
+        self.assertTrue(all(not button.icon().isNull() for button in
+                            (dialog.new_selection_button, dialog.outlet_adjust_button,
+                             dialog.clear_delineation_button)))
         project=QgsProject.instance()
         user=QgsVectorLayer('Point?crs=EPSG:25830','Capa del usuario','memory')
         project.addMapLayer(user)
