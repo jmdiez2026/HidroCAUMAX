@@ -80,44 +80,45 @@ class BasinHydrologyDialogTests(unittest.TestCase):
             for index, period in enumerate(PERIODS)})
         return dialog.basin_hydrology_widget.snapshot()
 
-    def test_both_buttons_schedule_real_task_bodies_and_publish_only_basin_results(self):
+    def test_automatic_joint_means_run_in_one_task_and_publish_only_current_basin(self):
         dialog = self.dialog
         before_query = dialog.query
-        dialog.basin_hydrology_widget.p0_button.click()
+        self.assertFalse(hasattr(dialog.basin_hydrology_widget, 'p0_button'))
+        self.assertFalse(hasattr(dialog.basin_hydrology_widget, 'rainfall_button'))
+        # Simulate the automatic callback scheduled after the native basin is ready.
+        dialog._auto_hydrology_timer.start(0)
+        QTest.qWait(30)
         self.assertEqual(len(self.manager.tasks), 1)
         task = self.manager.tasks[-1]
-        self.assertEqual(task.kind, 'p0')
+        self.assertEqual(task.kind, 'both')
         self.assertIs(task.analysis, dialog.analysis)
         self.assertEqual(task.key, basin_fingerprint(dialog.analysis))
         self.assertFalse(dialog.report_button.isEnabled())
         self.assertFalse(dialog.save_project_button.isEnabled())
         self.assertFalse(dialog.drainage_prepare_button.isEnabled())
         self.assertTrue(dialog.basin_hydrology_widget.cancel_button.isVisibleTo(dialog.basin_hydrology_widget))
-        zero = self.stats(0.0, path=self.sources['p0'])
-        mean = self.publish(task, lambda analysis, path, **kwargs: zero)
-        self.assertEqual(mean.call_args.args, (dialog.analysis, self.sources['p0']))
-        self.assertEqual(dialog.basin_hydrology_widget.snapshot()['p0_result'], zero)
-        self.assertTrue(dialog.report_button.isEnabled())
-        self.assertTrue(dialog.save_project_button.isEnabled())
-
-        dialog.basin_hydrology_widget.rainfall_button.click()
-        task = self.manager.tasks[-1]
         paths = []
-        def rainfall(analysis, path, **kwargs):
+        def values(analysis, path, **kwargs):
             self.assertIs(analysis, dialog.analysis)
             paths.append(path)
-            return self.stats(10.0 + len(paths), path=path)
-        self.publish(task, rainfall)
-        self.assertEqual(paths, [self.sources['rainfall'][str(period)] for period in PERIODS])
-        result = dialog.get_smoothing_state()['basin_hydrology']
-        self.assertEqual(list(result['rainfall_results']), [str(period) for period in PERIODS])
-        self.assertEqual(result['p0_result']['mean_mm'], 0)
+            return self.stats(0. if path == self.sources['p0'] else 10. + len(paths),
+                              path=path)
+        self.publish(task, values)
+        self.assertEqual(paths, [self.sources['p0']] +
+                         [self.sources['rainfall'][str(period)] for period in PERIODS])
+        state = dialog.get_smoothing_state()['basin_hydrology']
+        self.assertEqual(state['p0_result']['mean_mm'], 0)
+        self.assertEqual(list(state['rainfall_results']), [str(period) for period in PERIODS])
+        self.assertTrue(dialog.report_button.isEnabled())
+        self.assertTrue(dialog.save_project_button.isEnabled())
+        dialog._calculate_auto_basin_hydrology()
+        self.assertEqual(len(self.manager.tasks), 1, 'No duplicate automatic work')
         self.assertEqual(dialog.query, before_query)
         self.assertEqual((dialog.query.flow, dialog.query.period), (12.0, 100))
 
     def test_busy_blocks_save_report_and_direct_output_without_opening_a_chooser(self):
         dialog = self.dialog
-        dialog.basin_hydrology_widget.p0_button.click()
+        dialog._calculate_basin_hydrology('both')
         QTest.qWait(30)
         self.assertFalse(dialog.report_button.isEnabled())
         self.assertFalse(dialog.save_project_button.isEnabled())
@@ -132,7 +133,7 @@ class BasinHydrologyDialogTests(unittest.TestCase):
     def test_rainfall_failure_does_not_publish_partial_series_or_erase_previous_results(self):
         dialog = self.dialog
         previous = self.seed_results()
-        dialog.basin_hydrology_widget.rainfall_button.click()
+        dialog._calculate_basin_hydrology('both')
         task = self.manager.tasks[-1]
         calls = []
         def failing(analysis, path, **kwargs):
@@ -151,13 +152,13 @@ class BasinHydrologyDialogTests(unittest.TestCase):
     def test_cancel_and_late_callback_preserve_previous_values_and_allow_a_new_request(self):
         dialog = self.dialog
         previous = self.seed_results()
-        dialog.basin_hydrology_widget.p0_button.click()
+        dialog._calculate_basin_hydrology('both')
         old = self.manager.tasks[-1]
         dialog.basin_hydrology_widget.cancel_button.click()
         self.assertTrue(old.isCanceled())
         self.assertFalse(dialog._basin_hydrology_busy())
         self.assertEqual(dialog.basin_hydrology_widget.snapshot(), previous)
-        dialog.basin_hydrology_widget.p0_button.click()
+        dialog._calculate_basin_hydrology('both')
         current = self.manager.tasks[-1]
         old.result = self.stats(999.0)
         old.finished(True)
@@ -181,7 +182,7 @@ class BasinHydrologyDialogTests(unittest.TestCase):
     def test_closing_dialog_disposes_worker_and_ignores_late_results(self):
         dialog = self.dialog
         previous = self.seed_results()
-        dialog.basin_hydrology_widget.p0_button.click()
+        dialog._calculate_basin_hydrology('both')
         task = self.manager.tasks[-1]
         dialog.dispose()
         self.assertTrue(task.isCanceled())
@@ -276,7 +277,7 @@ class BasinHydrologyDialogTests(unittest.TestCase):
 
     def test_discovery_failure_does_not_unlock_save_or_pdf_while_mean_task_is_busy(self):
         dialog = self.dialog
-        dialog.basin_hydrology_widget.p0_button.click()
+        dialog._calculate_basin_hydrology('both')
         self.assertTrue(dialog._basin_hydrology_busy())
         dialog._resolution_discovering = True
         dialog._resolution_error('No se pudo consultar el catálogo de MDT')
