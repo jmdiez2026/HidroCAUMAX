@@ -725,6 +725,11 @@ class CaumaxBridge(QObject):
         binding.settle_pending = False
         binding.observed_signature = self._quick_signature(binding.dialog, binding.module)
         self._stop_auto_reselection(key)
+        # One click = one new basin. Restore CAUMAX's previous map tool via
+        # its own checkable button, not by overriding the native signal.
+        selector = getattr(binding.dialog, 'btnGetPoint', None)
+        if selector is not None and selector.isChecked():
+            selector.click()
         self._request(key)
 
     def _settle_query(self, key):
