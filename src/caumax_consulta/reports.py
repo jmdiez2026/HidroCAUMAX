@@ -331,7 +331,7 @@ def _flow_quantiles_report_html(state):
         + '. Estas consultas no recalculan el caudal con el nuevo MDT ni con el cierre ajustado.</p>'
         '<table class="results" width="100%" border="1" bordercolor="#d6dee5" cellspacing="0" cellpadding="3">'
         '<thead><tr bgcolor="#ffffff"><th align="center">Periodo de retorno T (años)</th>'
-        '<th align="center">Caudal máximo instantáneo (Qci) [m³/s]</th><th align="left">Capa</th></tr></thead>'
+        '<th align="center">Caudal máximo instantáneo (Qci-n) [m³/s]</th><th align="left">Capa</th></tr></thead>'
         + ''.join(rows) + '</table>'
         '<p class="small"><b>T introducido:</b> '
         + _text(_number(snapshot.get('input_period'), 0).replace('.', ',')) + ' años. '
