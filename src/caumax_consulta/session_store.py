@@ -50,7 +50,8 @@ _STATE_OPTIONAL = {'geometry_wkb', 'stats', 'map_png', 'map_caption', 'map_exten
                    'course_visibility', 'resolution_metadata', 'drainage_state',
                    'hypsometric_dimensionless', 'flow_quantiles', 'basin_hydrology',
                    'base_geometry_wkb', 'cell_grid_visible', 'base_drainage_state',
-                   'chart_snapshots', 'course_flow_profile', 'contour_transparency', 'pd_clip_period'}
+                   'chart_snapshots', 'course_flow_profile', 'contour_transparency', 'pd_clip_period',
+                   'hypsometric_selected_index', 'hypsometric_opacity'}
 
 
 @dataclass(frozen=True)
@@ -1602,6 +1603,20 @@ def _decode_single(document):
             state[key] = _drainage_state(state[key], budget=budget)
     state['hypsometric_dimensionless'] = _bool(state.get('hypsometric_dimensionless', False),
                                               'curva hipsométrica adimensional')
+    if 'hypsometric_opacity' in state:
+        state['hypsometric_opacity'] = _int(
+            state['hypsometric_opacity'], 'opacidad de selección hipsométrica',
+            minimum=0, maximum=100)
+    if 'hypsometric_selected_index' in state:
+        index = state['hypsometric_selected_index']
+        if index is not None:
+            curve = (analysis.diagnostics or {}).get('hypsometric_curve') or {}
+            elevations = curve.get('elevation_m') or []
+            if not isinstance(elevations, list) or not elevations:
+                _fail('cota hipsométrica seleccionada', 'esta consulta no tiene curva')
+            index = _int(index, 'índice de cota hipsométrica', minimum=0,
+                         maximum=len(elevations) - 1)
+        state['hypsometric_selected_index'] = index
     if 'flow_quantiles' in state:
         state['flow_quantiles'] = _flow_quantiles(state['flow_quantiles'], query)
     if 'basin_hydrology' in state:
