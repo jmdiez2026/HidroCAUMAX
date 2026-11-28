@@ -221,28 +221,29 @@ def _precipitation_plot_inputs(state):
     return dict(state,input_flow=state['input_precipitation']),known,forward,inverse
 
 
-def render_precipitation_plots(state,width=1100,height=500,font_family=None,*,fit_height=False):
+def render_precipitation_plots(state,width=1100,height=500,font_family=None,*,fit_height=False,selected=None):
     """Pd uses the same integer ticks and measured margins as the Qci plots."""
     from .quantile_graphics import render
     prepared,known,forward,inverse=_precipitation_plot_inputs(state)
-    return render(prepared,known,forward,inverse,width,height,font_family,quantity='Pd',unit='mm',fit_height=fit_height)
+    return render(prepared,known,forward,inverse,width,height,font_family,quantity='Pd',unit='mm',fit_height=fit_height,selected=selected)
 
 
 class _PrecipitationPlots(QWidget):
     def __init__(self,parent):
         super().__init__(parent)
         self.state=None
-        self.setMinimumHeight(292)
+        self.selected=None
+        self.setMinimumHeight(263)
 
-    def sizeHint(self):return QSize(640,292)
+    def sizeHint(self):return QSize(640,263)
 
     def heightForWidth(self,width):
-        # A further 10% reduction of the 1.2.10 screen height (0.9 * 0.9).
+        # Another 10% reduction of the *current* Pd panel, preserving axis fonts.
         base=680 if width<580 else 360
-        if self.state is None:return round(base*.81)
+        if self.state is None:return round(base*.729)
         from .quantile_graphics import geometry
         state,known,forward,inverse=_precipitation_plot_inputs(self.state)
-        return round(geometry(state,known,forward,inverse,width,base)['height']*.81)
+        return round(geometry(state,known,forward,inverse,width,base)['height']*.729)
 
     def resizeEvent(self,event):
         super().resizeEvent(event)
@@ -250,13 +251,34 @@ class _PrecipitationPlots(QWidget):
         if self.minimumHeight()!=height:
             self.setMinimumHeight(height);self.updateGeometry()
 
+    def _render_size(self):
+        return max(320,self.width()),max(self.heightForWidth(self.width()),self.height())
+
+    def mousePressEvent(self,event):
+        if event.button()!=Qt.LeftButton or self.state is None:
+            return super().mousePressEvent(event)
+        from .quantile_graphics import geometry, pick_linked_curve
+        prepared,known,forward,inverse=_precipitation_plot_inputs(self.state)
+        width,height=self._render_size()
+        layout=geometry(prepared,known,forward,inverse,width,height,fit_height=True)
+        picked=pick_linked_curve(layout,known,
+            event.x()*layout['width']/max(1,self.width()),
+            event.y()*layout['height']/max(1,self.height()),
+            tolerance=12.)
+        if picked is None:
+            return super().mousePressEvent(event)
+        self.selected=picked
+        self.update()
+        event.accept()
+
     def paintEvent(self,event):
         painter=QPainter(self)
         if self.state is None:
             painter.fillRect(self.rect(),QColor('white'))
         else:
-            png=render_precipitation_plots(self.state,max(320,self.width()),
-                                         max(self.heightForWidth(self.width()),self.height()),fit_height=True)
+            width,height=self._render_size()
+            png=render_precipitation_plots(self.state,width,height,
+                                          fit_height=True,selected=self.selected)
             painter.drawImage(self.rect(),QImage.fromData(png))
         painter.end()
 
