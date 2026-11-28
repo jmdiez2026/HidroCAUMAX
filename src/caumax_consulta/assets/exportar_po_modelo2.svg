@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+<path d="M6 4h27l9 10v42H6z" fill="#f5fbff" stroke="#183e59" stroke-width="2.4" stroke-linejoin="round"/>
+<path d="M33 4v11h9" fill="#d4e5ee" stroke="#183e59" stroke-width="2.3" stroke-linejoin="round"/>
+<rect x="9" y="9" width="22" height="11" rx="2" fill="#14526f"/>
+<text x="20" y="17" font-size="8" text-anchor="middle" fill="#ffffff" font-weight="bold" font-family="sans-serif">TIFF</text>
+<path d="M13 29l8-5 10 5 5 11-10 10-13-5-3-8z" fill="#d8e878" stroke="#15516b" stroke-width="2" stroke-linejoin="round"/>
+<path d="M13 29l13 0-5 12-9-2m10-15 3 21" fill="none" stroke="#7abf78" stroke-width="2"/>
+<path d="M36 34h11m-5-5 6 5-6 5" fill="none" stroke="#329857" stroke-width="3.7" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M44 46h7l4 4h6v9H44z" fill="#f4c453" stroke="#91601a" stroke-width="2" stroke-linejoin="round"/>
+<path d="M44 51h17l-2 9H43z" fill="#f6db85" stroke="#91601a" stroke-width="1.5" stroke-linejoin="round"/>
+</svg>
