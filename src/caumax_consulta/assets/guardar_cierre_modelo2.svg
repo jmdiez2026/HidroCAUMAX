@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <title>Guardar Cierre: diana azul, centro rojo y guardar verde</title>
+  <g fill="none" stroke="#0876C4" stroke-width="5.3" stroke-linecap="round">
+    <circle cx="27" cy="27" r="17"/>
+    <path d="M27 4v9M27 41v9M4 27h9M41 27h9"/>
+  </g>
+  <circle cx="27" cy="27" r="7" fill="#E63727"/>
+  <g transform="translate(36 35)" stroke="#087E26" stroke-width="2.1" stroke-linejoin="round">
+    <path d="M2 0H19L24 5V24H2Z" fill="#2CAE37"/>
+    <path d="M6 1H17V10H6Z" fill="#F6FFF7"/>
+    <path d="M9 1V7H14V1" fill="#16933A" stroke="none"/>
+    <rect x="7" y="15" width="12" height="7" rx="1" fill="#F6FFF7"/>
+  </g>
+</svg>
