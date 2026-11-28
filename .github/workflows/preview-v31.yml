@@ -6,6 +6,10 @@ on:
       - mejora-icono-cargar-capas-caumax-v31
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -67,7 +71,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends python3-qgis python3-gdal python3-pypdf
-      - name: Verificar interfaz y recortes reales de P0 y Pd-T
+      - name: Probar P0, Pd-T, guardado de consultas, D8 y PDF en PyQGIS
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
@@ -75,15 +79,16 @@ jobs:
           chmod 700 "$RUNNER_TEMP/xdg-runtime"
           export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdg-runtime"
           export PYTHONPATH="$GITHUB_WORKSPACE/src:$GITHUB_WORKSPACE/tests"
-          /usr/bin/python3 -m unittest discover -s tests -p 'test_po_clip.py' -v
-          /usr/bin/python3 -m unittest discover -s tests -p 'test_pd_clip.py' -v
-          /usr/bin/python3 -m unittest discover -s tests -p 'test_course_flow_profile.py' -v
-          /usr/bin/python3 -m unittest discover -s tests -p 'test_hypsometric_selection.py' -v
-          /usr/bin/python3 -m unittest discover -s tests -p 'test_session_store.py' -v
-          /usr/bin/python3 -m unittest discover -s tests -p 'test_native_toolbar.py' -v
-          /usr/bin/python3 -m unittest discover -s tests -p 'test_native_caumax_toolbar_shortcut.py' -v
-          /usr/bin/python3 -m unittest discover -s tests -p 'test_caumax_bridge.py' -v
-          /usr/bin/python3 -m unittest discover -s tests -p 'test_rational_layers_bridge.py' -v
-          /usr/bin/python3 -m unittest discover -s tests -p 'test_legacy_course_areas.py' -v
-          /usr/bin/python3 -m unittest discover -s tests -p 'test_basin_hydrology_dialog.py' -v
-          /usr/bin/python3 -m unittest discover -s tests -p 'test_reports.py' -v
+          result=0
+          for pattern in 'test_po_clip.py' 'test_pd_clip.py' 'test_course_flow_profile.py' 'test_hypsometric_selection.py' 'test_session_store.py' 'test_native_toolbar.py' 'test_native_caumax_toolbar_shortcut.py' 'test_caumax_bridge.py' 'test_rational_layers_bridge.py' 'test_legacy_course_areas.py' 'test_basin_hydrology_dialog.py' 'test_reports.py'; do
+            echo "::group::Pruebas $pattern"
+            if timeout --signal=TERM --kill-after=5s 120s /usr/bin/python3 -m unittest discover -s tests -p "$pattern" -v; then
+              echo "PASS: $pattern"
+            else
+              status=$?
+              echo "::error::FAIL/TIMEOUT $pattern (exit code $status)"
+              result=1
+            fi
+            echo "::endgroup::"
+          done
+          exit "$result"
