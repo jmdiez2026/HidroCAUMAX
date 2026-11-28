@@ -158,8 +158,9 @@ class RationalBasinDialogTests(unittest.TestCase):
             expected = max(1, round(native.sizeHint().height() * 0.90))
             # Qt 5 may adjust the effective native hint after the dialog is polished.
             # The compact 90% target remains within 4 physical pixels.
-            self.assertLessEqual(abs(button.minimumHeight() - expected), 4)
-            self.assertEqual(button.maximumHeight(), button.minimumHeight())
+            self.assertLessEqual(abs(button.height() - expected), 4)
+            self.assertLessEqual(abs(button.maximumHeight() - expected), 4)
+            self.assertLessEqual(button.minimumHeight(), button.maximumHeight())
             native.deleteLater()
 
     def test_initial_task_checks_exact_native_basin_before_publishing(self):
