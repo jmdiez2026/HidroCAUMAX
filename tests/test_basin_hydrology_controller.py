@@ -63,6 +63,45 @@ class BasinHydrologyControllerTests(unittest.TestCase):
         self.assertEqual(list(self.results[0][2]), ['2', '5', '10', '25', '100', '500'])
         self.assertTrue(all(0 <= value <= 100 for _, value in self.statuses))
 
+    def test_joint_background_task_computes_p0_and_rainfall_atomically(self):
+        self.controller.calculate('both', self.analysis, self.sources)
+        self.assertEqual(len(self.manager.tasks), 1)
+        task = self.manager.tasks[-1]
+        paths = []
+        def mean(analysis, path, *, cancelled, progress, statistics, **kwargs):
+            self.assertIs(analysis, self.analysis)
+            self.assertTrue(statistics)
+            self.assertFalse(cancelled())
+            paths.append(path)
+            progress(50.)
+            return {'source_path': path, 'mean_mm': float(len(paths))}
+        with patch('caumax_consulta.basin_hydrology.basin_raster_mean', side_effect=mean):
+            success = task.run()
+        task.finished(success)
+        self.assertTrue(success)
+        self.assertEqual(paths, ['p0.tif', 't2.tif', 't5.tif', 't10.tif',
+                                 't25.tif', 't100.tif', 't500.tif'])
+        self.assertEqual(len(self.results), 1)
+        self.assertEqual(self.results[0][1], 'both')
+        payload = self.results[0][2]
+        self.assertEqual(payload['p0']['mean_mm'], 1.)
+        self.assertEqual(set(payload['rainfall']), {'2','5','10','25','100','500'})
+        self.assertTrue(all(0 <= value <= 100 for _, value in self.statuses))
+        self.assertFalse(self.controller.busy)
+        self.assertFalse(self.errors)
+
+    def test_joint_error_discards_p0_without_publishing_partial_precipitation(self):
+        self.controller.calculate('both', self.analysis, self.sources)
+        task = self.manager.tasks[-1]
+        with patch('caumax_consulta.basin_hydrology.basin_raster_mean',
+                   side_effect=[{'mean_mm': 20}, RuntimeError('Rainfall read failed')]):
+            success = task.run()
+        task.finished(success)
+        self.assertFalse(success)
+        self.assertFalse(self.results)
+        self.assertEqual(self.errors, ['Rainfall read failed'])
+        self.assertFalse(self.controller.busy)
+
     def test_failure_during_rainfall_does_not_publish_an_incomplete_series(self):
         self.controller.calculate('rainfall', self.analysis, self.sources)
         task = self.manager.tasks[-1]
