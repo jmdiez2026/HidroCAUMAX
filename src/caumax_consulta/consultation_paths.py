@@ -8,7 +8,7 @@ from qgis.core import QgsApplication
 
 
 CONSULTATION_FOLDER = 'ConsultaMapasMaximos'
-DEFAULT_CONSULTATION_FILENAME = 'Consulta_Mapas_Caudales_Máximos_naturales (Qci).json'
+DEFAULT_CONSULTATION_FILENAME = 'Consulta_Mapas_Caudales_Máximos_naturales (Qci-n).json'
 CONSULTATION_FILTER = 'Consulta HidroCAUMAX (*.json)'
 
 
@@ -27,7 +27,7 @@ def default_consultation_path(profile_root=None):
 
 
 REPORT_FOLDER = 'Informes'
-DEFAULT_REPORT_FILENAME = 'Informe_Consulta_Máximos_Naturales (Qcin).pdf'
+DEFAULT_REPORT_FILENAME = 'Informe_Consulta_Máximos_Naturales (Qci-n).pdf'
 
 
 def report_directory(profile_root=None):
