@@ -238,7 +238,7 @@ def _suggested_basin_destination(analysis, query):
     else:
         period_suffix = '_T%s' % format(float(period), 'g')
     return generated_layers_directory() / (
-        'DivisoriaCuenca_CONSULTA_X%s_Y%s_CAUMAX%s.shp' % (
+        'CONSULTA_Divisoria_X%s_Y%s%s.shp' % (
             round(analysis.outlet_x), round(analysis.outlet_y), period_suffix))
 
 
