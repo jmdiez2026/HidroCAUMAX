@@ -1,9 +1,11 @@
 """Hypsometric plots shared by the QGIS dialog and the PDF (Qt only)."""
 import math
+from pathlib import Path
 
+from qgis.PyQt import sip
 from qgis.PyQt.QtCore import QBuffer, QIODevice, QPointF, QRectF, Qt
 from qgis.PyQt.QtGui import QColor, QFont, QImage, QPainter, QPainterPath, QPen
-from qgis.PyQt.QtWidgets import QCheckBox, QLabel, QVBoxLayout, QWidget
+from qgis.PyQt.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 def _finite(value):
     try:
@@ -108,6 +110,26 @@ def _title(hi):
     return 'Índice hipsométrico (HI) = ' + value
 
 
+
+def curve_chart_rect(bounds):
+    """Use exactly the same geometry for rendering and mouse hit testing."""
+    bounds = QRectF(bounds)
+    pixels = max(11, min(18, round(bounds.width() / 70)))
+    return bounds.adjusted(max(80, pixels * 8), pixels * 3,
+                           -pixels * 2, -pixels * 4)
+
+
+def curve_plot_point(data, bounds, index):
+    """Screen coordinate of one saved quantile in either curve mode."""
+    chart = curve_chart_rect(bounds)
+    xmin, xmax = data['x_display_limits']
+    ymin, ymax = data['y_display_limits']
+    return QPointF(chart.left() +
+                   (data['x'][index] * data['x_scale'] - xmin) / (xmax - xmin) * chart.width(),
+                   chart.bottom() -
+                   (data['y'][index] - ymin) / (ymax - ymin) * chart.height())
+
+
 def paint_hypsometric_curve(painter, bounds, data, font_family=None, control_width=0):
     """Paint the same scientific axes for the on-screen widget and PNG export."""
     bounds = QRectF(bounds)
@@ -128,7 +150,7 @@ def paint_hypsometric_curve(painter, bounds, data, font_family=None, control_wid
                          Qt.AlignCenter | Qt.TextWordWrap, data['reason'])
         painter.restore()
         return
-    chart = bounds.adjusted(max(80, pixels * 8), pixels * 3, -pixels * 2, -pixels * 4)
+    chart = curve_chart_rect(bounds)
     if chart.width() <= 0 or chart.height() <= 0:
         painter.restore()
         return
@@ -213,8 +235,56 @@ class _CurveCanvas(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        paint_hypsometric_curve(painter, self.rect(), self.owner.plot_data(),
+        data = self.owner.plot_data()
+        paint_hypsometric_curve(painter, self.rect(), data,
                                 control_width=self.owner.dimensionless_check.width() + 12)
+        i = self.owner._selected_index
+        if data['available'] and i is not None and 0 <= i < len(data['x']):
+            point = curve_plot_point(data, self.rect(), i)
+            chart = curve_chart_rect(self.rect())
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            painter.setPen(QPen(QColor('#DC6F13'), 1.5, Qt.DashLine))
+            painter.drawLine(QPointF(point.x(), chart.top()),
+                             QPointF(point.x(), chart.bottom()))
+            painter.setPen(QPen(QColor('#C15E12'), 2))
+            painter.setBrush(QColor('#FDA23A'))
+            painter.drawEllipse(point, 5, 5)
+            z = self.owner.analysis.diagnostics['hypsometric_curve']['elevation_m'][i]
+            area = data['x'][i]
+            label = (f'Altitud: {z:.2f} m · Área: {area:.3f}'
+                     + (' (a/A)' if data['dimensionless'] else ' km²'))
+            metrics = painter.fontMetrics()
+            width = min(chart.width() - 8, metrics.horizontalAdvance(label) + 18)
+            height = metrics.lineSpacing() + 10
+            px = min(chart.right() - width - 3, max(chart.left() + 3, point.x() + 10))
+            py = max(chart.top() + 3, min(chart.bottom() - height - 3,
+                                          point.y() - height - 10))
+            painter.setPen(QPen(QColor('#C15E12'), 1))
+            painter.setBrush(QColor('white'))
+            painter.drawRoundedRect(QRectF(px, py, width, height), 4, 4)
+            painter.setPen(QColor('#203449'))
+            painter.drawText(QRectF(px + 7, py + 4, width - 14, height - 8),
+                             Qt.AlignLeft | Qt.AlignVCenter, label)
+        painter.end()
+
+    def mousePressEvent(self, event):
+        if event.button() != Qt.LeftButton:
+            return super().mousePressEvent(event)
+        data = self.owner.plot_data()
+        if not data['available']:
+            return super().mousePressEvent(event)
+        chart = curve_chart_rect(self.rect())
+        if not chart.adjusted(-8, -8, 8, 8).contains(event.pos()):
+            return super().mousePressEvent(event)
+        i = min(range(len(data['x'])), key=lambda index:
+                (curve_plot_point(data, self.rect(), index).x() - event.x())**2 +
+                (curve_plot_point(data, self.rect(), index).y() - event.y())**2)
+        point = curve_plot_point(data, self.rect(), i)
+        if (point.x() - event.x())**2 + (point.y() - event.y())**2 <= 23**2:
+            self.owner.select_quantile(i)
+            event.accept()
+        else:
+            super().mousePressEvent(event)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
