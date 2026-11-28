@@ -9,7 +9,7 @@ from qgis.PyQt.QtWidgets import (
 
 class InterpretationHeader(QHeaderView):
     """A normal header: interpretation is computed without an action button."""
-    COLUMN = 3
+    COLUMN = 2
 
     def __init__(self, table):
         super().__init__(Qt.Horizontal, table)
@@ -62,6 +62,48 @@ class InterpretationDelegate(QStyledItemDelegate):
         return size
 
 
+
+def wrapped_line_count(text, font, width):
+    """Count complete wrapped lines, without eliding a parameter label."""
+    layout = QTextLayout(str(text), font)
+    option = QTextOption()
+    option.setWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
+    layout.setTextOption(option)
+    layout.beginLayout()
+    count = 0
+    while True:
+        line = layout.createLine()
+        if not line.isValid():
+            break
+        line.setLineWidth(max(1, int(width)))
+        count += 1
+    layout.endLayout()
+    return max(1, count)
+
+
+def compact_parameter_width(table, available_width, *, max_lines=3):
+    """Narrowest QGIS parameter column fitting complete labels in 3 lines.
+
+    The interpretation has priority over empty space. On smaller viewports
+    labels may use additional lines; row heights expand so none are cut.
+    """
+    metrics = table.fontMetrics()
+    labels = [table.item(row, 0).text() for row in range(table.rowCount())
+              if table.item(row, 0) is not None]
+    left = max(135, metrics.horizontalAdvance('Parámetro') + 16)
+    right = max(left, *(metrics.horizontalAdvance(text) + 18 for text in labels))
+    while left < right:
+        middle = (left + right) // 2
+        if all(wrapped_line_count(text, table.font(), middle - 12) <= max_lines
+               for text in labels):
+            right = middle
+        else:
+            left = middle + 1
+    # Guard at least a third of the actual viewport for Interpretation;
+    # value column is sized separately in the caller.
+    return min(left, max(135, int(available_width * .46)))
+
+
 def fit_morphology_rows(table):
     """Fit body rows without the hidden vertical header's padded section size.
 
@@ -74,4 +116,9 @@ def fit_morphology_rows(table):
     minimum = max(metrics.height(), metrics.lineSpacing()) + 6
     table.verticalHeader().setMinimumSectionSize(minimum)
     for row in range(table.rowCount()):
-        table.setRowHeight(row, max(minimum, table.sizeHintForRow(row)))
+        name = table.item(row, 0)
+        name_lines = wrapped_line_count(name.text(), table.font(),
+                                        table.columnWidth(0) - 12) if name else 1
+        label_height = name_lines * max(metrics.height(), metrics.lineSpacing()) + 8
+        table.setRowHeight(row, max(minimum, label_height,
+                                    table.sizeHintForRow(row)))
