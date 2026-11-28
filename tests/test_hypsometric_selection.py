@@ -61,6 +61,16 @@ class AltitudeMapSelectionTests(unittest.TestCase):
         with self.assertRaises(InterruptedError):
             hs.altitude_mask(str(self.path),self.basin,self.wkt,7,15,cancelled=lambda:True)
 
+    def test_cumulative_selection_marks_all_basin_cells_below_altitude(self):
+        result = hs.altitude_mask(str(self.path), self.basin, self.wkt,
+                                  float('-inf'), 15)
+        self.addCleanup(Path(result['path']).unlink, missing_ok=True)
+        raster = gdal.Open(result['path'])
+        np.testing.assert_array_equal(raster.ReadAsArray(),
+            np.array([[1,1,1],[1,1,1],[0,0,0]], dtype=np.uint8))
+        self.assertEqual(result['count'], 6)
+        raster = None
+
     def test_curve_click_and_dimensionless_view_refer_to_same_physical_altitude(self):
         heights=np.arange(20,dtype=np.float64)
         sample=SimpleNamespace(
@@ -81,6 +91,10 @@ class AltitudeMapSelectionTests(unittest.TestCase):
         selected=widget._selected_index
         elevation=sample.diagnostics['hypsometric_curve']['elevation_m'][selected]
         self.assertIn(f'{elevation:.2f} m', widget.selection_label.text())
+        self.assertEqual(widget.curve_title.text(), 'Curva Hipsométrica')
+        self.assertEqual(widget.opacity_slider.value(), 70)
+        widget.opacity_slider.setValue(45)
+        self.assertIn('45 %', widget.opacity_slider.toolTip())
         widget.set_dimensionless(True)
         self.assertEqual(widget._selected_index,selected)
         self.assertIn(f'{elevation:.2f} m', widget.selection_label.text())
