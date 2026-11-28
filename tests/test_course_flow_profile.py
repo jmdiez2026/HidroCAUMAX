@@ -73,6 +73,37 @@ class CourseFlowProfileTests(unittest.TestCase):
         with self.assertRaises(InterruptedError):
             cp.sample_course_quantiles(self.line, self.wkt, paths, lambda: True)
 
+    def test_profile_segments_never_bridge_nodata_and_keep_zero(self):
+        flows = [0., None, 2.5, None, None, 0., 4.]
+        self.assertEqual(cp.profile_counts(flows), {
+            'total': 7, 'valid': 4, 'missing': 3, 'zeros': 2})
+        self.assertEqual(cp.profile_segments(flows), [
+            (True, 0, 0), (False, 1, 1), (True, 2, 2),
+            (False, 3, 4), (True, 5, 6)])
+        self.assertEqual(cp.profile_segments([]), [])
+        self.assertEqual(cp.profile_segments([None, None]), [(False, 0, 1)])
+        self.assertEqual(cp.profile_segments([0., 5.]), [(True, 0, 1)])
+
+    def test_coverage_remains_visible_after_selecting_zero_or_missing(self):
+        widget = cp.CourseFlowProfile()
+        self.addCleanup(widget.close)
+        widget._rows = [(0., 1., 1., (0.,)*6),
+                        (.025, 2., 2., (None,)*6),
+                        (.050, 3., 3., (5.,)*6)]
+        widget._flows = [0., None, 5.]
+        widget._period = 100.
+        widget._update_coverage()
+        summary = widget.coverage_label.text()
+        self.assertIn('Celdas del curso: 3', summary)
+        self.assertIn('Con caudal válido: 2', summary)
+        self.assertIn('Q=0 en 1', summary)
+        self.assertIn('Sin dato SNCZI: 1', summary)
+        widget.select_index(0)
+        self.assertIn('0.00 m³/s (dato válido)', widget.label.text())
+        widget.select_index(1)
+        self.assertIn('sin dato SNCZI (NoData)', widget.label.text())
+        self.assertEqual(widget.coverage_label.text(), summary)
+
     def test_chart_click_selects_the_same_sample_index(self):
         plot = cp._ProfilePlot(None)
         self.addCleanup(plot.close)
