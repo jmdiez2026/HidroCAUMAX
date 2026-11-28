@@ -23,7 +23,7 @@ def suggested_course_closure_path(analysis):
     from .improved_storage import generated_layers_directory
     x = round(_finite(analysis.outlet_x))
     y = round(_finite(analysis.outlet_y))
-    return generated_layers_directory() / f'Cierre_CursoPrincipal_X{x}_Y{y}.shp'
+    return generated_layers_directory() / f'CONSULTA_Cierre_CursoPrincipal_X{x}_Y{y}.shp'
 
 
 def closure_symbol():
