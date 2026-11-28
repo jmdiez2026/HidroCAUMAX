@@ -385,7 +385,7 @@ class FlowQuantileWidget(QWidget):
         layout.addWidget(self.rational_label)
         self.table=QTableWidget(6,2,self)
         self.table.setHorizontalHeader(CompactTableHeader(self.table))
-        self.table.setHorizontalHeaderLabels(['Periodo de retorno T (años)','Caudal máximo instantáneo (Qci) [m3/s]'])
+        self.table.setHorizontalHeaderLabels(['Periodo de retorno T (años)','Caudal máximo instantáneo (Qci-n) [m3/s]'])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Fixed)
         row_height=max(self.table.fontMetrics().height(),self.table.fontMetrics().lineSpacing())+2
         self.table.verticalHeader().setMinimumSectionSize(row_height)
