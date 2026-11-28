@@ -207,8 +207,13 @@ def inspect_clipped_raster(path, kind, source_path, *, fingerprint=None):
     return file
 
 
-def publish_clipped_raster(path, kind='po', period=None, project=None):
-    """Add or reenable a clipped raster at the top of QGIS, checked as visible."""
+def publish_clipped_raster(path, kind='po', period=None, project=None, *,
+                           register_generated=True):
+    """Show a generated or restored TIFF; register only newly generated files.
+
+    A user-chosen exported GeoTIFF reopened from saved JSON must never be
+    added to HidroCAUMAX's deletion registry merely by opening it.
+    """
     from qgis.core import QgsProject, QgsRasterLayer
     from .generated_cleanup import register_dataset
 
@@ -245,7 +250,8 @@ def publish_clipped_raster(path, kind='po', period=None, project=None):
         project.removeMapLayer(layer.id())
         raise RuntimeError('No se pudo incorporar la capa recortada al árbol de QGIS.')
     node.setItemVisibilityChecked(True)
-    register_dataset(path, project=project)
+    if register_generated:
+        register_dataset(path, project=project)
     return layer
 
 
