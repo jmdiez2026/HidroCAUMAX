@@ -4,12 +4,13 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 from qgis.core import QgsApplication, QgsCoordinateReferenceSystem, QgsProject
 from caumax_consulta.closure_layers import (
     CLOSURE_ROLE, GREEN_CLOSURE_ROLE, analysis_closure_layer, export_closure,
-    export_green_course_closure, make_closure_layer)
+    export_green_course_closure, make_closure_layer, suggested_course_closure_path)
 
 
 class ClosureLayersTests(unittest.TestCase):
@@ -30,6 +31,15 @@ class ClosureLayersTests(unittest.TestCase):
     def tearDown(self):
         self.project.removeMapLayers(list(set(self.project.mapLayers())-self.original))
         self.project.setCustomVariables(self.variables)
+
+    def test_default_blue_cross_filename_uses_course_name_without_consulta(self):
+        analysis = SimpleNamespace(
+            outlet_x=334825.0, outlet_y=4729200.0,
+            selected_x=334823.0, selected_y=4729199.0)
+        with patch('caumax_consulta.improved_storage.generated_layers_directory',
+                   return_value=self.folder):
+            target = suggested_course_closure_path(analysis)
+        self.assertEqual(target, self.folder / 'Cierre_CursoPrincipal_X334825_Y4729200.shp')
 
     def test_exact_picked_point_has_yellow_circle_and_accepted_d8_attributes(self):
         analysis = SimpleNamespace(
