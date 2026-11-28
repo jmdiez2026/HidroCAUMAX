@@ -278,7 +278,13 @@ class _ProfilePlot(QWidget):
         self._ystep = (_decimal_tick_step(high - low) if self.specific
                        else _integer_tick_step(high - low, divisions=6))
         self._ymin = max(0., math.floor(low / self._ystep) * self._ystep)
+        # Keep actual observations inside the plot, never exactly on a frame
+        # edge when a minimum/maximum happens to be an integer tick.
+        if low > 0 and math.isclose(self._ymin, low, rel_tol=0, abs_tol=1e-10):
+            self._ymin = max(0., self._ymin - self._ystep)
         ymax = math.ceil(high / self._ystep) * self._ystep
+        if math.isclose(ymax, high, rel_tol=0, abs_tol=1e-10):
+            ymax += self._ystep
         if ymax <= self._ymin:
             ymax = self._ymin + self._ystep
         if ymax - self._ymin < 4 * self._ystep:
