@@ -96,6 +96,9 @@ class NativeCaumaxPlugin(QObject):
         except OSError as error:
             self.iface.messageBar().pushMessage('HidroCAUMAX',
                 'No se ha podido preparar la carpeta de exportación: ' + str(error), level=Qgis.Warning, duration=10)
+        # The HidroCAUMAX logo is ONLY a shortcut to the official CAUMAX
+        # menu action. It must not restore tools, toggle the plugin, load
+        # HidroCAUMAX references or invoke any parallel raster loader.
         self.action = QAction('Cargar capas CAUMAX', self.iface.mainWindow())
         self.action.triggered.connect(self._load_native_caumax_layers)
         self.iface.addPluginToMenu(self.MENU, self.action)
@@ -147,7 +150,9 @@ class NativeCaumaxPlugin(QObject):
         self._toolbar.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self._active_icon, self._inactive_icon = _hidrocaumax_icons(
             Path(__file__).parent / 'assets' / 'hidrocaumax.png')
-        self.action.setIcon(self._active_icon if self._enabled else self._inactive_icon)
+        # This logo is an ordinary command button, not an enabled-state
+        # indicator: its appearance remains constant if the tools are off.
+        self.action.setIcon(self._active_icon)
         self.open_action.setIcon(QgsApplication.getThemeIcon('/mActionFileOpen.svg'))
         self.reference_action.setIcon(QIcon(str(Path(__file__).parent / 'assets' / 'load_reference_layers.svg')))
         self.clear_layers_action.setIcon(QIcon(str(Path(__file__).parent / 'assets' / 'clear_generated_layers.svg')))
@@ -198,8 +203,8 @@ class NativeCaumaxPlugin(QObject):
             'Comprueba que el complemento oficial CAUMAX está activado.')
 
     def _activate_tools(self, *args):
-        # Re-scan existing dialogs as well as those opened after plugin loading.
-        # The logo restores the tools; it cannot accidentally turn them off.
+        # Separate "Restaurar herramientas HidroCAUMAX" menu command only.
+        # The toolbar logo never invokes this function.
         self.set_enabled(True)
 
     def _complete_startup(self):
@@ -317,10 +322,8 @@ class NativeCaumaxPlugin(QObject):
     def set_enabled(self, enabled):
         enabled = bool(enabled)
         self._enabled = enabled
-        # Keep the restore action enabled; the icon communicates whether the
-        # tools are currently active instead of disabling their restore button.
-        if hasattr(self, 'action') and self._active_icon is not None:
-            self.action.setIcon(self._active_icon if enabled else self._inactive_icon)
+        # The CAUMAX-loader shortcut is independent of HidroCAUMAX's enabled
+        # state. Only the dedicated restore command changes that state.
         if enabled:
             self._bridge.start()
             self._rational.start()
