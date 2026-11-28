@@ -32,14 +32,14 @@ class ClosureLayersTests(unittest.TestCase):
         self.project.removeMapLayers(list(set(self.project.mapLayers())-self.original))
         self.project.setCustomVariables(self.variables)
 
-    def test_default_blue_cross_filename_uses_course_name_without_consulta(self):
+    def test_default_blue_cross_filename_uses_consulta_prefix(self):
         analysis = SimpleNamespace(
             outlet_x=334825.0, outlet_y=4729200.0,
             selected_x=334823.0, selected_y=4729199.0)
         with patch('caumax_consulta.improved_storage.generated_layers_directory',
                    return_value=self.folder):
             target = suggested_course_closure_path(analysis)
-        self.assertEqual(target, self.folder / 'Cierre_CursoPrincipal_X334825_Y4729200.shp')
+        self.assertEqual(target, self.folder / 'CONSULTA_Cierre_CursoPrincipal_X334825_Y4729200.shp')
 
     def test_exact_picked_point_has_yellow_circle_and_accepted_d8_attributes(self):
         analysis = SimpleNamespace(
