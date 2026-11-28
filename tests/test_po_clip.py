@@ -65,8 +65,8 @@ class PoClipTests(unittest.TestCase):
         self.assertEqual(pixels.shape, (3, 3))
         self.assertEqual(pixels[0, 0], original.ReadAsArray()[1, 1])
         self.assertEqual(pixels[0, 2], original.ReadAsArray()[1, 3])
-        self.assertEqual(pixels[2, 0], -9999.)
-        self.assertNotEqual(pixels[2, 2], -9999.)
+        self.assertNotEqual(pixels[2, 0], -9999.)
+        self.assertEqual(pixels[2, 2], -9999.)
         clipped = original = None
         with self.assertRaisesRegex(ValueError, 'existe'):
             clip_po_to_basin(self.source, self.geometry, self.wkt, destination)
