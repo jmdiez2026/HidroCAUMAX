@@ -4,6 +4,7 @@ The fixture module is imported as a module, so unittest does not rediscover its
 TestCase here. Dialogs, signals, QgsTask bodies and portable sessions are real.
 """
 from copy import deepcopy
+import json
 from dataclasses import replace
 from pathlib import Path
 import sys
@@ -20,6 +21,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import test_drainage_dialog as fixture
 
 from caumax_consulta.basin_hydrology import basin_fingerprint
+from caumax_consulta.consultation_paths import (
+    CONSULTATION_FILTER, CONSULTATION_FOLDER, DEFAULT_CONSULTATION_FILENAME,
+    consultation_directory, default_consultation_path,
+)
 from caumax_consulta.session_store import load_session, save_session
 from caumax_consulta.terrain import analyze_basin
 
@@ -79,6 +84,69 @@ class BasinHydrologyDialogTests(unittest.TestCase):
             str(period): self.stats(mean + index, analysis=dialog.analysis)
             for index, period in enumerate(PERIODS)})
         return dialog.basin_hydrology_widget.snapshot()
+
+    def test_consultation_paths_create_the_qgis_profile_folder_and_exact_qci_filename(self):
+        profile_root = self.folder / 'QGIS3' / 'profiles' / 'default'
+        destination = default_consultation_path(profile_root)
+        expected = profile_root / 'HidroCAUMAX' / 'ConsultaMapasMaximos'
+        self.assertEqual(consultation_directory(profile_root), expected)
+        self.assertTrue(expected.is_dir())
+        self.assertEqual(expected.name, CONSULTATION_FOLDER)
+        self.assertEqual(destination.parent, expected)
+        self.assertEqual(destination.name,
+                         'Consulta_Mapas_Caudales_Máximos_naturales (Qci).json')
+        self.assertEqual(destination.name, DEFAULT_CONSULTATION_FILENAME)
+
+    def test_save_and_open_consultation_choosers_use_same_default_json_folder(self):
+        dialog = self.dialog
+        folder = self.folder / 'HidroCAUMAX' / CONSULTATION_FOLDER
+        folder.mkdir(parents=True)
+        proposed = folder / DEFAULT_CONSULTATION_FILENAME
+        with patch('caumax_consulta.basin_dialog.default_consultation_path',
+                   return_value=proposed) as default_path, \
+             patch('caumax_consulta.basin_dialog.QFileDialog.getSaveFileName',
+                   return_value=('', CONSULTATION_FILTER)) as chooser:
+            dialog._choose_save_project()
+        default_path.assert_called_once_with()
+        chooser.assert_called_once_with(
+            dialog, 'Guardar Consulta', str(proposed), CONSULTATION_FILTER)
+        with patch('caumax_consulta.basin_dialog.consultation_directory',
+                   return_value=folder) as directory, \
+             patch('caumax_consulta.basin_dialog.QFileDialog.getOpenFileName',
+                   return_value=('', CONSULTATION_FILTER)) as chooser:
+            dialog._choose_open_project()
+        directory.assert_called_once_with()
+        chooser.assert_called_once_with(
+            dialog, 'Abrir Consulta', str(folder), CONSULTATION_FILTER)
+        # Custom names without suffix remain plain .json, never .caumax.json.
+        with patch('caumax_consulta.basin_dialog.default_consultation_path',
+                   return_value=proposed), \
+             patch('caumax_consulta.basin_dialog.QFileDialog.getSaveFileName',
+                   return_value=(str(folder / 'personalizada'), CONSULTATION_FILTER)), \
+             patch.object(dialog, 'save_project') as save:
+            dialog._choose_save_project()
+        save.assert_called_once_with(str(folder / 'personalizada.json'))
+
+    def test_plain_named_json_retains_full_query_parameters_and_hydrology(self):
+        dialog = self.dialog
+        seeded = self.seed_results()
+        destination = default_consultation_path(self.folder / 'QGIS3' / 'profiles' / 'default')
+        state = dialog.get_smoothing_state()
+        saved_path = save_session(destination, dialog.analysis, dialog.query, state)
+        self.assertEqual(saved_path, destination)
+        raw = json.loads(destination.read_text(encoding='utf-8'))
+        self.assertEqual(raw['schema'], 'caumax-consulta')
+        self.assertIn('values', raw['analysis'])
+        self.assertIn('diagnostics', raw['analysis'])
+        self.assertIn('main_course_wkb', raw['analysis'])
+        self.assertIn('grid_wkb', raw['analysis'])
+        self.assertIn('flow_quantiles', raw['smoothing_state'])
+        self.assertIn('geometry_wkb', raw['smoothing_state'])
+        self.assertIn('basin_hydrology', raw['smoothing_state'])
+        restored = load_session(destination)
+        self.assertEqual(restored.analysis.values, dialog.analysis.values)
+        self.assertEqual(restored.query, dialog.query)
+        self.assertEqual(restored.smoothing_state['basin_hydrology'], seeded)
 
     def test_automatic_joint_means_run_in_one_task_and_publish_only_current_basin(self):
         dialog = self.dialog
