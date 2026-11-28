@@ -296,6 +296,56 @@ class ResolutionControllerTests(unittest.TestCase):
         self.assertEqual([entry[0] for entry in self.downloads],[5])
         self.assertEqual(manual.call_count,1)
 
+    def test_bad_fine_manual_d8_rebuilds_expanded_dem_before_publication(self):
+        from caumax_consulta.manual_outlet import ManualOutletConsistencyError
+        c=self.controller()
+        self.discover(c)
+        context=dict(resolution_key='25',dem_path='/fine/dem.tif',
+            directions_path='/fine/d8.tif',crs_wkt=self.base.crs_wkt,
+            original_x=self.query.x,original_y=self.query.y,
+            search_radius_m=707.106781,reference_area_m2=self.base.area_m2)
+        good=sample(25)
+        payload=dict(analysis=good,directions_path='/expanded/d8.tif',
+                     dem_path='/expanded/dem.tif',metadata={'manual_outlet_selected':True})
+        rebuilt=dict(analysis=good,directions_path='/expanded/d8.tif',
+                     dem_path='/expanded/dem.tif',metadata={'coverage_attempts':2})
+        with patch.object(rc,'_manual_analysis',side_effect=[
+                ManualOutletConsistencyError('Borde del MDT','clipped_manual_basin'),payload]) as manual, \
+             patch.object(rc,'_build',return_value=rebuilt) as build:
+            self.assertTrue(c.select_outlet(context,237.5,212.5))
+            self.wait(lambda:not c.busy)
+        self.assertEqual(manual.call_count,2)
+        self.assertEqual(build.call_count,1)
+        retry=manual.call_args_list[1].args[0]
+        self.assertEqual(retry['dem_path'],'/expanded/dem.tif')
+        self.assertEqual(retry['directions_path'],'/expanded/d8.tif')
+        self.assertEqual(retry['metadata']['manual_d8_rebuild_reason'],'clipped_manual_basin')
+        self.assertIs(c.variants['25']['analysis'],good)
+        self.assertTrue(c.variants['25']['metadata']['manual_d8_recalculated'])
+        self.assertFalse(self.errors)
+        self.assertEqual(c.active_key,'25')
+
+    def test_broken_d8_after_rebuild_does_not_replace_previous_basin(self):
+        from caumax_consulta.manual_outlet import ManualOutletConsistencyError
+        c=self.controller()
+        self.discover(c)
+        context=dict(resolution_key='25',dem_path='/fine/dem.tif',
+            directions_path='/fine/d8.tif',crs_wkt=self.base.crs_wkt,
+            original_x=self.query.x,original_y=self.query.y,
+            search_radius_m=707.106781,reference_area_m2=self.base.area_m2)
+        problem=lambda:ManualOutletConsistencyError(
+            'Cuenca D8 no corresponde al cauce','unrelated_manual_basin')
+        rebuilt=dict(analysis=sample(25),directions_path='/expanded/d8.tif',
+                     dem_path='/expanded/dem.tif',metadata={'coverage_attempts':2})
+        with patch.object(rc,'_manual_analysis',side_effect=[problem(),problem()]) as manual, \
+             patch.object(rc,'_build',return_value=rebuilt):
+            self.assertTrue(c.select_outlet(context,237.5,212.5))
+            self.wait(lambda:not c.busy)
+        self.assertEqual(manual.call_count,2)
+        self.assertNotIn('25',c.variants)
+        self.assertEqual(c.active_key,'500')
+        self.assertTrue(any('no corresponde' in error for error in self.errors))
+
     def test_invalid_manual_cell_preserves_previous_result_and_allows_another_choice(self):
         c=self.controller()
         context=dict(resolution_key='500',dem_path='/original/mdt.tif',
