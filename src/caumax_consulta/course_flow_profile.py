@@ -4,7 +4,9 @@ All Qci values come from the original CAUMAX/SNCZI rasters. The native D8
 course supplies the sample centres and the cumulative chainage only. Raster
 readout is cancellable and off the Qt GUI thread; missing cells remain missing.
 """
+import base64
 import hashlib
+import struct
 import math
 from bisect import bisect_left
 from pathlib import Path
@@ -37,6 +39,37 @@ def _integer_tick_step(span, divisions=10):
         if candidate >= estimate - 1e-10:
             return candidate
     return max(1, int(10 * magnitude))
+
+
+def _decimal_tick_step(span, divisions=6):
+    """Readable 1/2/2.5/5/10-step ticks for specific discharge units."""
+    value = max(0., float(span))
+    if not math.isfinite(value) or value <= 0.:
+        return 0.01
+    target = value / max(1, divisions)
+    magnitude = 10 ** math.floor(math.log10(target))
+    for factor in (1, 2, 2.5, 5, 10):
+        candidate = factor * magnitude
+        if candidate >= target - 1e-12:
+            return candidate
+    return 10 * magnitude
+
+
+def main_course_areas(analysis):
+    """Decode exact contributing areas saved by the native D8 traversal."""
+    packed = (getattr(analysis, 'diagnostics', {}) or {}).get('main_course_areas_b64')
+    if not packed:
+        return []
+    try:
+        raw = base64.b64decode(packed, validate=True)
+        if not raw or len(raw) % 8:
+            return []
+        values = [value[0] for value in struct.iter_unpack('<d', raw)]
+        if any(not math.isfinite(value) or value <= 0 for value in values):
+            return []
+        return values
+    except (ValueError, TypeError, struct.error):
+        return []
 
 
 def profile_counts(flows):
@@ -193,8 +226,9 @@ class _ProfileTask(QgsTask):
 class _ProfilePlot(QWidget):
     chosen = pyqtSignal(int)
 
-    def __init__(self, parent):
+    def __init__(self, parent, *, specific=False):
         super().__init__(parent)
+        self.specific = bool(specific)
         self.rows = []
         self.flows = []
         self.selected = None
@@ -223,11 +257,13 @@ class _ProfilePlot(QWidget):
             return float(length), 1.
         low, high = min(known), max(known)
         if low == high:
-            margin = max(1., abs(low) * 0.05)
+            margin = (max(0.001, abs(low) * 0.05) if self.specific
+                      else max(1., abs(low) * 0.05))
             low = max(0., low - margin)
             high += margin
-        self._ystep = _integer_tick_step(high - low, divisions=6)
-        self._ymin = max(0, math.floor(low / self._ystep) * self._ystep)
+        self._ystep = (_decimal_tick_step(high - low) if self.specific
+                       else _integer_tick_step(high - low, divisions=6))
+        self._ymin = max(0., math.floor(low / self._ystep) * self._ystep)
         ymax = math.ceil(high / self._ystep) * self._ystep
         if ymax <= self._ymin:
             ymax = self._ymin + self._ystep
@@ -276,13 +312,20 @@ class _ProfilePlot(QWidget):
             x1 = chart.left() + stop / length * chart.width()
             painter.fillRect(QRectF(x0, chart.top(), max(0., x1 - x0), chart.height()),
                              QColor(224, 231, 236, 115))
-        for tick in range(int(self._ymin), int(ymax) + 1, self._ystep):
+        tick_count = min(20, 1 + round((ymax - self._ymin) / self._ystep))
+        for index in range(tick_count):
+            tick = self._ymin + index * self._ystep
             y = chart.bottom() - (tick - self._ymin) / (ymax - self._ymin) * chart.height()
             painter.setPen(QPen(QColor('#DFE6EF'), 1))
             painter.drawLine(QPointF(chart.left(), y), QPointF(chart.right(), y))
             painter.setPen(QColor('#25384A'))
+            if self.specific:
+                precision = max(0, min(6, -math.floor(math.log10(self._ystep)) + 1))
+                tick_label = f'{tick:.{precision}f}'.replace('.', ',')
+            else:
+                tick_label = str(round(tick))
             painter.drawText(QRectF(0, y - 10, chart.left() - 8, 20),
-                             Qt.AlignRight | Qt.AlignVCenter, str(tick))
+                             Qt.AlignRight | Qt.AlignVCenter, tick_label)
         for tick in range(0, int(length) + 1, self._xstep):
             x = chart.left() + tick / length * chart.width()
             painter.setPen(QPen(QColor('#DFE6EF'), 1))
@@ -298,7 +341,8 @@ class _ProfilePlot(QWidget):
         painter.translate(17, chart.center().y())
         painter.rotate(-90)
         painter.drawText(QRectF(-chart.height()/2, -13, chart.height(), 25),
-                         Qt.AlignCenter, 'Caudal máximo (m³/s)')
+                         Qt.AlignCenter, ('Aportación específica (m³/s·km²)' if self.specific
+                                          else 'Caudal máximo (m³/s)'))
         painter.restore()
         # Join only consecutive cells with valid official Q; no interpolation.
         painter.setPen(QPen(QColor('#0080BB'), 2))
@@ -340,9 +384,13 @@ class _ProfilePlot(QWidget):
                 painter.drawEllipse(p, 5, 5)
             msg = 'Abscisado: ' + self.number(self.rows[i][0]) + ' km'
             q = self.flows[i]
-            msg += ('\nQ: sin dato SNCZI (NoData)' if q is None else
-                    '\nQ: ' + self.number(q) + ' m³/s' +
-                    (' (dato válido)' if q == 0 else ''))
+            if self.specific:
+                msg += ('\nAportación: sin dato' if q is None else
+                        '\nAportación: ' + f'{q:.4f}'.replace('.', ',') + ' m³/s·km²')
+            else:
+                msg += ('\nQ: sin dato SNCZI (NoData)' if q is None else
+                        '\nQ: ' + self.number(q) + ' m³/s' +
+                        (' (dato válido)' if q == 0 else ''))
             metrics = painter.fontMetrics()
             lines = msg.split('\n')
             w = max(metrics.horizontalAdvance(line) for line in lines) + 14
