@@ -12,7 +12,8 @@ from osgeo import gdal
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 from qgis.PyQt import sip
-from qgis.PyQt.QtCore import QCoreApplication, QEvent, QPoint, QSize, Qt
+from qgis.PyQt.QtCore import QCoreApplication, QEvent, QPoint, QPointF, QSize, Qt
+from qgis.PyQt.QtGui import QMouseEvent
 from qgis.PyQt.QtTest import QTest
 from qgis.PyQt.QtWidgets import QDialog, QWidget
 from qgis.core import (QgsApplication, QgsCoordinateReferenceSystem, QgsCoordinateTransform,
@@ -357,7 +358,11 @@ class OutletSelectionTests(unittest.TestCase):
         target = QgsPointXY(*self.point(2, 6))
         pixel = self.canvas.mapSettings().mapToPixel().transform(target)
         cursor = QPoint(round(pixel.x()), round(pixel.y()))
-        QTest.mouseMove(self.canvas.viewport(), cursor)
+        # Send a genuine viewport event: Qt's offscreen mouse driver may
+        # drop QTest.mouseMove before it reaches the QGIS viewport.
+        QCoreApplication.sendEvent(self.canvas.viewport(),
+            QMouseEvent(QEvent.MouseMove, QPointF(cursor), Qt.NoButton,
+                        Qt.NoButton, Qt.NoModifier))
         QTest.qWait(85)
         self.app.processEvents()
         self.assertEqual(lens._cursor_pos, cursor)
@@ -384,7 +389,11 @@ class OutletSelectionTests(unittest.TestCase):
         dialog.start_picking()
         lens = dialog._magnifier
         cursor = QPoint(170, 140)
-        QTest.mouseMove(self.canvas.viewport(), cursor)
+        # Send a genuine viewport event: Qt's offscreen mouse driver may
+        # drop QTest.mouseMove before it reaches the QGIS viewport.
+        QCoreApplication.sendEvent(self.canvas.viewport(),
+            QMouseEvent(QEvent.MouseMove, QPointF(cursor), Qt.NoButton,
+                        Qt.NoButton, Qt.NoModifier))
         QTest.qWait(85)
         self.assertTrue(lens.isVisible())
 
@@ -392,7 +401,9 @@ class OutletSelectionTests(unittest.TestCase):
         self.assertFalse(lens.isVisible())
         self.assertFalse(lens._refresh_timer.isActive())
         dialog.start_picking()  # Already active: re-enable the passive preview.
-        QTest.mouseMove(self.canvas.viewport(), QPoint(175, 140))
+        QCoreApplication.sendEvent(self.canvas.viewport(),
+            QMouseEvent(QEvent.MouseMove, QPointF(175, 140), Qt.NoButton,
+                        Qt.NoButton, Qt.NoModifier))
         QTest.qWait(85)
         self.assertTrue(lens.isVisible())
 
