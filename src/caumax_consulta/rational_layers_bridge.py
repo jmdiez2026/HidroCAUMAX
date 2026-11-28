@@ -506,7 +506,7 @@ class RationalLayersBridge(QObject):
         complete_button.setStyleSheet(ACTION_BUTTON_STYLE)
         complete_button.setToolTip('Guardar capas, estilos, MDT/D8, archivos mejorados y coordenadas en .hidrocuenca.')
         row.addWidget(complete_button, 0, Qt.AlignLeft)
-        basin_button = QPushButton('Descripción cuenca', frame)
+        basin_button = QPushButton('IC-5.2 Análisis Cuenca', frame)
         basin_button.setObjectName(BASIN_BUTTON_NAME)
         basin_button.setStyleSheet(ACTION_BUTTON_STYLE)
         basin_button.setEnabled(False)
