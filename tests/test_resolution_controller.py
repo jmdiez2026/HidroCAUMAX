@@ -344,6 +344,8 @@ class ResolutionControllerTests(unittest.TestCase):
         self.assertEqual(manual.call_count,2)
         self.assertNotIn('25',c.variants)
         self.assertEqual(c.active_key,'500')
+        self.assertEqual(c.outlet_selection_context['dem_path'],'/expanded/dem.tif')
+        self.assertEqual(c.outlet_selection_context['directions_path'],'/expanded/d8.tif')
         self.assertTrue(any('no corresponde' in error for error in self.errors))
 
     def test_invalid_manual_cell_preserves_previous_result_and_allows_another_choice(self):
