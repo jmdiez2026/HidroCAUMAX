@@ -1,5 +1,8 @@
 """Actual SNCZI raster sampling by D8 chainage and graph selection."""
 import math
+import base64
+import struct
+from types import SimpleNamespace
 import os
 from pathlib import Path
 import tempfile
@@ -103,6 +106,51 @@ class CourseFlowProfileTests(unittest.TestCase):
         widget.select_index(1)
         self.assertIn('sin dato SNCZI (NoData)', widget.label.text())
         self.assertEqual(widget.coverage_label.text(), summary)
+
+    def test_integer_flow_axes_not_pinned_to_zero_and_decimal_specific_axis(self):
+        plot = cp._ProfilePlot(None)
+        self.addCleanup(plot.close)
+        plot.resize(640, 280)
+        plot.show()
+        self.app.processEvents()
+        rows = [(0., 1., 1., (1.,)*6), (11.4, 2., 2., (2.,)*6),
+                (26.8, 3., 3., (3.,)*6)]
+        plot.show_profile(rows, [135., 145., 160.], None)
+        length, ymax = plot.frame()
+        self.assertGreater(plot._ymin, 0)
+        self.assertIsInstance(plot._xstep, int)
+        self.assertIsInstance(plot._ystep, int)
+        self.assertGreaterEqual(length, rows[-1][0])
+        self.assertGreater(ymax, max(plot.flows))
+        specific = cp._ProfilePlot(None, specific=True)
+        self.addCleanup(specific.close)
+        specific.resize(640, 280)
+        specific.show_profile(rows, [.016, .018, .020], None)
+        specific.frame()
+        self.assertGreater(specific._ymin, 0)
+        self.assertLess(specific._ystep, 1.)
+
+    def test_specific_discharge_uses_each_native_upstream_area_and_syncs_selection(self):
+        widget = cp.CourseFlowProfile()
+        self.addCleanup(widget.close)
+        areas = [.30, .20, .10]
+        analysis = SimpleNamespace(diagnostics={
+            'main_course_areas_b64': base64.b64encode(
+                struct.pack('<3d', *areas)).decode('ascii')})
+        self.assertEqual(cp.main_course_areas(analysis), areas)
+        widget._areas = cp.main_course_areas(analysis)
+        widget._rows = [(0.,1.,1.,(30.,)*6),
+                        (.025,2.,2.,(None,)*6),
+                        (.050,3.,3.,(5.,)*6)]
+        widget._period = 100.
+        widget._refresh()
+        self.assertEqual(widget._specific_values[0], 100.)
+        self.assertIsNone(widget._specific_values[1])
+        self.assertEqual(widget._specific_values[2], 50.)
+        widget.select_index(2)
+        self.assertEqual(widget.graph.selected, 2)
+        self.assertEqual(widget.specific_graph.selected, 2)
+        self.assertIn('Aportación específica: 50.0000', widget.label.text())
 
     def test_chart_click_selects_the_same_sample_index(self):
         plot = cp._ProfilePlot(None)
