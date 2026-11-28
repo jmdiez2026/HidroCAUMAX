@@ -8,6 +8,7 @@ No QGIS object, project, setting or installed raster is modified here.
 
 from dataclasses import dataclass
 import math
+import base64
 
 import numpy as np
 from osgeo import ogr
@@ -124,7 +125,7 @@ def _profile_value(distances, heights, target):
 
 
 def _paths(directions, mask, elevations, outlet_row, outlet_col,
-           transform, cancelled):
+           transform, cancelled, weights=None):
     """Longest D8 course and its Tc; retain old maximum Tc only as diagnostic."""
     rows, cols = mask.shape
     distances = np.full(mask.shape, -1.0, dtype=np.float64)
@@ -134,12 +135,14 @@ def _paths(directions, mask, elevations, outlet_row, outlet_col,
     outlet_height = float(elevations[outlet_row, outlet_col])
     valid_path[outlet_row, outlet_col] = math.isfinite(outlet_height)
     pending = [outlet_row * cols + outlet_col]
+    traversal = []
     longest = pending[0]
     best_tc = None
     best_length = best_slope = best_start = None
     valid_candidates = missing_candidates = invalid_slope_candidates = processed = 0
     while pending:
         index = pending.pop()
+        traversal.append(index)
         row, col = divmod(index, cols)
         processed += 1
         if processed % 1000 == 0:
@@ -184,6 +187,26 @@ def _paths(directions, mask, elevations, outlet_row, outlet_col,
         row, col = divmod(index, cols)
         index = int(parents[row, col])
     path_indices.reverse()
+    # The D8 search visits downstream cells before their tributaries.
+    # Reverse that order to accumulate each cell's full upstream area in
+    # square metres, using exact polygon-intersection weights where given.
+    area_m2 = np.zeros(mask.size, dtype=np.float64)
+    cell_area_m2 = abs(transform[1] * transform[5] - transform[2] * transform[4])
+    weights_flat = None if weights is None else np.asarray(weights, dtype=np.float64).ravel()
+    parent_flat = parents.ravel()
+    for i, index in enumerate(traversal):
+        if i % 10000 == 0:
+            _b._check_cancel(cancelled)
+        area_m2[index] = (cell_area_m2 if weights_flat is None
+                          else weights_flat[index])
+    for i, index in enumerate(reversed(traversal)):
+        if i % 10000 == 0:
+            _b._check_cancel(cancelled)
+        downstream = int(parent_flat[index])
+        if downstream >= 0:
+            area_m2[downstream] += area_m2[index]
+    profile_areas = np.asarray([area_m2[index] / 1e6 for index in path_indices],
+                               dtype='<f8')
     profile_distances = np.empty(len(path_indices), dtype=np.float64)
     profile_heights = np.empty(len(path_indices), dtype=np.float64)
     line = ogr.Geometry(ogr.wkbLineString)
@@ -215,6 +238,8 @@ def _paths(directions, mask, elevations, outlet_row, outlet_col,
             segment_slope = (z85 - z10) / (0.75 * length)
     diagnostics = {
         "main_profile_cells": len(path_indices),
+        "main_course_areas_b64": base64.b64encode(profile_areas.tobytes()).decode('ascii'),
+        "main_course_area_at_closure_km2": float(profile_areas[0]),
         "main_profile_missing_cells": int(np.count_nonzero(~np.isfinite(profile_heights))),
         "z10_m": z10, "z85_m": z85,
         "tc_valid_paths": valid_candidates,
@@ -380,7 +405,8 @@ def analyze_basin(directions_path, dem_path, outlet_x, outlet_y,
         local_directions = _b._read(directions_ds.GetRasterBand(1), *window)
         main_wkb, main_length, main_slope, tc, tc_length, tc_slope, diagnostics = _paths(
             local_directions, mask, elevations,
-            selected.row - window[1], selected.col - window[0], local_transform, cancelled
+            selected.row - window[1], selected.col - window[0], local_transform, cancelled,
+            weights=weights
         )
         grid_wkb, grid_segments = _grid_lines(mask, local_transform, cancelled)
         tc_candidate = tc
