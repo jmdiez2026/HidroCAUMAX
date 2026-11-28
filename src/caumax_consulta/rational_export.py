@@ -39,15 +39,21 @@ def _place_export_button(dialog, button, grouped=True):
     """Share one GEA strip while each bridge retains its own button lifecycle."""
     frame = dialog.findChild(QFrame, ACTION_FRAME_NAME) if grouped else None
     if frame is not None:
-        # The shared GEA bar has two rows; insert the export in the first
-        # row between Calcular and Guardar Cierre regardless of load order.
-        primary = frame.findChild(QHBoxLayout, 'HidroCAUMAXPrimaryActions')
-        if primary is None:
-            primary = frame.layout()  # compatibility with the earlier strip
-        if primary.indexOf(button) >= 0:
+        # The shared GEA bar has two rows. "Guardar Divisoria" belongs on
+        # the second row, always between "Guardar Cierre" and "Guardar IC-5.2".
+        # This works whether the export bridge or the rational tools load first.
+        target = frame.findChild(QHBoxLayout, 'HidroCAUMAXSecondaryActions')
+        if target is None:
+            target = frame.findChild(QHBoxLayout, 'HidroCAUMAXPrimaryActions')
+        if target is None:
             return
+        desired_index = 1 if target.objectName() == 'HidroCAUMAXSecondaryActions' else 2
+        old_parent = button.parentWidget()
+        old_layout = old_parent.layout() if old_parent is not None else None
+        if old_layout is not None:
+            old_layout.removeWidget(button)
         dialog.horizontalLayout_2.removeWidget(button)
-        primary.insertWidget(2, button)  # logo, Calcular, Guardar Divisoria
+        target.insertWidget(desired_index, button)
         button.setStyleSheet(ACTION_BUTTON_STYLE)
         button.setIcon(QIcon())
     else:
