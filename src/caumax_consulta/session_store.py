@@ -49,7 +49,8 @@ _STATE_REQUIRED = {'original_checked', 'smooth_checked', 'degree'}
 _STATE_OPTIONAL = {'geometry_wkb', 'stats', 'map_png', 'map_caption', 'map_extent',
                    'course_visibility', 'resolution_metadata', 'drainage_state',
                    'hypsometric_dimensionless', 'flow_quantiles', 'basin_hydrology',
-                   'base_geometry_wkb', 'cell_grid_visible', 'base_drainage_state'}
+                   'base_geometry_wkb', 'cell_grid_visible', 'base_drainage_state',
+                   'chart_snapshots', 'course_flow_profile'}
 
 
 @dataclass(frozen=True)
@@ -1196,6 +1197,78 @@ def _stats(geometry, area, perimeter):
                 delta_perimeter_pct=100 * (measured_perimeter / perimeter - 1))
 
 
+def _chart_snapshots(items, *, encode=False):
+    """Validate a bounded collection of PNGs captured from visible charts."""
+    if not isinstance(items, list) or len(items) > 8:
+        _fail('gráficos de consulta', 'se esperan como máximo ocho gráficas')
+    results = []
+    used = set()
+    for entry in items:
+        _keys(entry, {'key', 'title', 'png'}, 'gráfica guardada')
+        key = _text(entry['key'], 'identificador de gráfica', 80)
+        title = _text(entry['title'], 'título de gráfica', 200)
+        if not key or not title or key in used:
+            _fail('gráficos de consulta', 'título o identificador duplicado')
+        used.add(key)
+        raw = entry['png']
+        if encode:
+            raw = _base64(raw, 'gráfica ' + key, MAX_PNG_BYTES)
+        else:
+            raw = _binary(raw, 'gráfica ' + key, MAX_PNG_BYTES)
+            _png(raw)
+        results.append({'key': key, 'title': title, 'png': raw})
+    return results
+
+
+def _course_flow_snapshot(snapshot, analysis):
+    """Validate exact native course centres and all six official Qci samples."""
+    if not isinstance(snapshot, dict):
+        _fail('perfil longitudinal', 'estructura desconocida')
+    _keys(snapshot, {'version', 'selected', 'rows'}, 'perfil longitudinal')
+    if type(snapshot['version']) is not int or snapshot['version'] != 1:
+        _fail('perfil longitudinal', 'versión desconocida')
+    rows = snapshot['rows']
+    if not isinstance(rows, list) or not 1 <= len(rows) <= 100_000:
+        _fail('perfil longitudinal', 'número de celdas no permitido')
+    native = ogr.CreateGeometryFromWkb(bytes(analysis.main_course_wkb))
+    if (native is None or ogr.GT_Flatten(native.GetGeometryType()) != ogr.wkbLineString
+            or native.GetPointCount() != len(rows)):
+        _fail('perfil longitudinal', 'recorrido distinto del curso D8')
+    selected = snapshot['selected']
+    if selected is not None:
+        selected = _int(selected, 'celda del perfil', maximum=len(rows)-1)
+    output = []
+    cumulative, previous = 0.0, None
+    for i, row in enumerate(rows):
+        if not isinstance(row, list) or len(row) != 4:
+            _fail('perfil longitudinal', 'fila de datos incompleta')
+        distance = _float(row[0], 'abscisado de perfil')
+        x = _float(row[1], 'X del curso')
+        y = _float(row[2], 'Y del curso')
+        if distance < 0:
+            _fail('perfil longitudinal', 'abscisado negativo')
+        native_x, native_y, _ = native.GetPoint(i)
+        if not math.isclose(x, native_x, abs_tol=1e-6, rel_tol=0) or not math.isclose(
+                y, native_y, abs_tol=1e-6, rel_tol=0):
+            _fail('perfil longitudinal', 'coordenadas ajenas al trazado D8')
+        if previous is not None:
+            cumulative += math.hypot(x - previous[0], y - previous[1]) / 1000.
+        if not math.isclose(distance, cumulative, abs_tol=1e-6, rel_tol=0):
+            _fail('perfil longitudinal', 'distancia distinta del abscisado D8')
+        previous = x, y
+        flows = row[3]
+        if not isinstance(flows, list) or len(flows) != 6:
+            _fail('perfil longitudinal', 'faltan los seis períodos CAUMAX')
+        values = []
+        for q in flows:
+            number = None if q is None else _float(q, 'caudal longitudinal')
+            if number is not None and number < 0:
+                _fail('perfil longitudinal', 'caudal negativo')
+            values.append(number)
+        output.append([distance, x, y, values])
+    return {'version': 1, 'selected': selected, 'rows': output}
+
+
 def _document(analysis, query, state):
     if not isinstance(analysis, Analysis) or not isinstance(query, NativeQuery):
         _fail('consulta', 'se requieren Analysis y NativeQuery')
@@ -1217,6 +1290,8 @@ def _document(analysis, query, state):
     state.setdefault('stats', {})
     if 'map_png' in state:
         state['map_png'] = _base64(state['map_png'], 'captura GIS', MAX_PNG_BYTES)
+    if 'chart_snapshots' in state:
+        state['chart_snapshots'] = _chart_snapshots(state['chart_snapshots'], encode=True)
     for key in ('drainage_state', 'base_drainage_state'):
         if key in state:
             state[key] = _drainage_state(state[key], encode=True)
@@ -1519,6 +1594,11 @@ def _decode_single(document):
         state['flow_quantiles'] = _flow_quantiles(state['flow_quantiles'], query)
     if 'basin_hydrology' in state:
         state['basin_hydrology'] = _basin_hydrology(state['basin_hydrology'], analysis)
+    if 'chart_snapshots' in state:
+        state['chart_snapshots'] = _chart_snapshots(state['chart_snapshots'])
+    if 'course_flow_profile' in state:
+        state['course_flow_profile'] = _course_flow_snapshot(
+            state['course_flow_profile'], analysis)
     return SavedSession(analysis, query, state)
 
 
