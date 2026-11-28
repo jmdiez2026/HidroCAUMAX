@@ -27,7 +27,7 @@ jobs:
       - name: Instalar PyQGIS, Qt5 y GDAL
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends python3-qgis python3-gdal
+          sudo apt-get install -y --no-install-recommends python3-qgis python3-gdal python3-pypdf
       - name: Cotejar calculador CAUMAX original de referencia
         run: |
           set -euo pipefail
