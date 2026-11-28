@@ -473,6 +473,31 @@ class CourseFlowProfile(QWidget):
             f'Sin dato SNCZI: {counts["missing"]}. '
             'Azul: Q>0 · Verde: Q=0 válido · Gris: NoData (sin interpolar).')
 
+    def snapshot(self):
+        """Portable original Qci samples for every D8 course centre and return period."""
+        if not self._rows or self._task is not None:
+            return None
+        return {
+            'version': 1,
+            'selected': self._selected,
+            'rows': [
+                [float(distance), float(x), float(y),
+                 [None if q is None else float(q) for q in values]]
+                for distance, x, y, values in self._rows
+            ],
+        }
+
+    def restore_snapshot(self, snapshot):
+        """Reopen the complete profile without needing the original Qci TIFFs."""
+        self._stop_task()
+        self._rows = [
+            (float(row[0]), float(row[1]), float(row[2]), tuple(row[3]))
+            for row in snapshot['rows']
+        ]
+        self._selected = snapshot.get('selected')
+        self.show()
+        self._refresh()
+
     def _selection_text(self):
         if self._selected is not None and 0 <= self._selected < len(self._rows):
             station = self._rows[self._selected][0]
