@@ -342,7 +342,7 @@ class CourseFlowProfile(QWidget):
         self._marker = self._outline = None
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 6, 0, 0)
-        title = QLabel('Caudal máximo a lo largo del curso principal', self)
+        title = QLabel('Caudal Máximo (Qci-n) a lo largo del curso principal', self)
         font = title.font()
         font.setBold(True)
         title.setFont(font)
