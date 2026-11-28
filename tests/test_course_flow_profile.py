@@ -107,6 +107,31 @@ class CourseFlowProfileTests(unittest.TestCase):
         self.assertIn('sin dato SNCZI (NoData)', widget.label.text())
         self.assertEqual(widget.coverage_label.text(), summary)
 
+    def test_single_valid_qci_from_user_screenshot_uses_nonzero_integer_y_ticks(self):
+        plot = cp._ProfilePlot(None)
+        self.addCleanup(plot.close)
+        plot.resize(680, 280)
+        plot.show()
+        self.app.processEvents()
+        rows = [(0.,1.,1.,(None,)*6),
+                (1.,2.,2.,(18.06,)*6),
+                (12.,3.,3.,(None,)*6),
+                (22.62,4.,4.,(None,)*6)]
+        flows = [None, 18.06, None, None]
+        plot.show_profile(rows, flows, 1)
+        extent, ymax = plot.frame()
+        self.assertGreater(plot._ymin, 0)
+        self.assertLessEqual(plot._ymin, 18)
+        self.assertGreater(ymax, 18.06)
+        self.assertIsInstance(plot._xstep, int)
+        self.assertIsInstance(plot._ystep, int)
+        self.assertEqual(plot._xstep, 2)
+        self.assertGreaterEqual(extent, 22.62)
+        # 0, 2, 4, ..., 24 km: more labelled divisions than the old 6 ticks.
+        self.assertGreater(int(extent // plot._xstep) + 1, 6)
+        self.assertEqual(cp.profile_counts(flows), {
+            'total': 4, 'valid': 1, 'missing': 3, 'zeros': 0})
+
     def test_integer_flow_axes_not_pinned_to_zero_and_decimal_specific_axis(self):
         plot = cp._ProfilePlot(None)
         self.addCleanup(plot.close)
