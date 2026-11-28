@@ -227,6 +227,21 @@ def export_previewed(analysis, query, geometries, destination, degree,
     return saved
 
 
+def _suggested_basin_destination(analysis, query):
+    """Use the persistent QGIS profile folder for CAUMAX basin exports."""
+    from .improved_storage import generated_layers_directory
+    if getattr(query, 'source_kind', 'caumax_raster') == 'rational':
+        return generated_layers_directory() / suggested_filename(query)
+    period = getattr(query, 'period', None)
+    if period is None:
+        period_suffix = ''
+    else:
+        period_suffix = '_T%s' % format(float(period), 'g')
+    return generated_layers_directory() / (
+        'DivisoriaCuenca_CONSULTA_X%s_Y%s_CAUMAX%s.shp' % (
+            round(analysis.outlet_x), round(analysis.outlet_y), period_suffix))
+
+
 def choose_export_destination(parent, analysis, query, geometries, degree):
     """Ask for one SHP/GPKG path and export the current visible snapshot.
 
@@ -237,8 +252,12 @@ def choose_export_destination(parent, analysis, query, geometries, degree):
         QMessageBox.warning(parent, 'CAUMAX · Exportar divisoria',
                             'Selecciona una divisoria mostrada en el mapa.')
         return []
-    from .improved_storage import export_directory
-    suggested = str(export_directory() / suggested_filename(query))
+    try:
+        suggested = str(_suggested_basin_destination(analysis, query))
+    except (OSError, ValueError, TypeError) as error:
+        QMessageBox.critical(parent, 'Guardar divisoria',
+                             'No se pudo preparar Capas_Generadas: ' + str(error))
+        return []
     destination, selected = QFileDialog.getSaveFileName(
         parent, 'Guardar divisoria', suggested,
         'Shapefile (*.shp);;GeoPackage (*.gpkg)', options=QFileDialog.DontConfirmOverwrite,
@@ -463,8 +482,12 @@ class SmoothExportDialog(QDialog):
     def _choose_destination(self):
         if not self._preview_ready:
             return
-        directory = QStandardPaths.writableLocation(QStandardPaths.DocumentsLocation)
-        suggested = str(Path(directory) / suggested_filename(self.query))
+        try:
+            suggested = str(_suggested_basin_destination(self.analysis, self.query))
+        except (OSError, ValueError, TypeError) as error:
+            QMessageBox.critical(self, 'Guardar divisoria',
+                                 'No se pudo preparar Capas_Generadas: ' + str(error))
+            return
         destination, selected = QFileDialog.getSaveFileName(
             self, 'Guardar divisoria', suggested,
             'Shapefile (*.shp);;GeoPackage (*.gpkg)', options=QFileDialog.DontConfirmOverwrite,
