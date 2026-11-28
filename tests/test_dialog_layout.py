@@ -229,6 +229,20 @@ class DialogLayoutTests(unittest.TestCase):
         self.assertEqual(calls, ['native'])
         self.assertIn('Nueva selección activa', dialog.resolution_status.text())
 
+    def test_new_selection_keeps_current_analysis_until_caumax_returns_valid_result(self):
+        dialog = self.dialog
+        active = [True]
+        dialog.set_new_selection_handler(lambda: True, lambda: active[0])
+        before = dialog.analysis
+        dialog._parent_query_changed()
+        self.assertFalse(dialog._disposed)
+        self.assertIs(dialog.analysis, before)
+        # Once the original native picker has been cancelled, ordinary CAUMAX
+        # input changes must retain their normal invalidation behaviour.
+        active[0] = False
+        dialog._parent_query_changed()
+        self.assertTrue(dialog._disposed)
+
     def test_morphology_widths_alignments_and_complete_interpretation_are_retained(self):
         dialog = self.dialog
         for width in (520, 650, 900):
