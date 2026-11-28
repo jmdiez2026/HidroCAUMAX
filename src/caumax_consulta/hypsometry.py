@@ -373,6 +373,31 @@ class HypsometricWidget(QWidget):
     def plot_data(self):
         return curve_plot_data(self.analysis, self.is_dimensionless())
 
+    def selection_state(self):
+        """Portable display state; the DEM selection raster is regenerated on restore."""
+        return {
+            'selected_index': self._selected_index,
+            'opacity': int(self.opacity_slider.value()),
+        }
+
+    def restore_selection_state(self, selected_index=None, opacity=70):
+        """Restore the selected physical elevation and its opacity, if available."""
+        if type(opacity) is not int or not 0 <= opacity <= 100:
+            raise ValueError('La opacidad hipsométrica debe estar entre 0 y 100 %.')
+        self.opacity_slider.setValue(opacity)
+        if selected_index is None:
+            self._cancel_selection()
+            self._selected_index = None
+            self.selection_label.clear()
+            self.selection_label.hide()
+            self.canvas.update()
+            return
+        data = self.plot_data()
+        if (type(selected_index) is not int or not data['available']
+                or not 0 <= selected_index < len(data['x'])):
+            raise ValueError('La cota hipsométrica guardada no existe en la curva activa.')
+        self.select_quantile(selected_index)
+
     def _selection_summary(self):
         i = self._selected_index
         data = self.plot_data()
