@@ -50,7 +50,12 @@ def capture_available_charts(dialog):
             ('specific_contribution', 'Aportación Específica (m³/s·km²)', 'specific_graph'),
         ):
             extra = getattr(course, attribute, None)
-            if extra is not None and getattr(extra, 'isVisible', lambda: False)():
+            # A fully computed panel must appear in the report even when
+            # its parent is temporarily hidden by scrolling or a reopened
+            # consultation has not yet been shown on the desktop.
+            computed = getattr(course, '_specific_values', ())
+            if (extra is not None and computed
+                    and len(computed) == len(getattr(course, '_rows', ()))):
                 items.append((key, title, extra))
     hydrology = getattr(dialog, 'basin_hydrology_widget', None)
     if hydrology is not None:
