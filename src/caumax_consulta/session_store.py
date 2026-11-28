@@ -50,7 +50,7 @@ _STATE_OPTIONAL = {'geometry_wkb', 'stats', 'map_png', 'map_caption', 'map_exten
                    'course_visibility', 'resolution_metadata', 'drainage_state',
                    'hypsometric_dimensionless', 'flow_quantiles', 'basin_hydrology',
                    'base_geometry_wkb', 'cell_grid_visible', 'base_drainage_state',
-                   'chart_snapshots', 'course_flow_profile', 'contour_transparency'}
+                   'chart_snapshots', 'course_flow_profile', 'contour_transparency', 'pd_clip_period'}
 
 
 @dataclass(frozen=True)
@@ -1520,6 +1520,11 @@ def _decode_single(document):
         state[key] = _bool(state[key], key)
     if 'cell_grid_visible' in state:
         state['cell_grid_visible'] = _bool(state['cell_grid_visible'], 'malla de celdas visible')
+    if 'pd_clip_period' in state:
+        period = _int(state['pd_clip_period'], 'período de recorte Pd-T', maximum=500)
+        if period not in (2, 5, 10, 25, 100, 500):
+            _fail('período de recorte Pd-T', 'T no corresponde a una capa CEDEX oficial')
+        state['pd_clip_period'] = period
     if 'contour_transparency' in state:
         state['contour_transparency'] = _int(
             state['contour_transparency'], 'transparencia de contorno', maximum=100)
