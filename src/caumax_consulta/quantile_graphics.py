@@ -87,7 +87,105 @@ def geometry(state, known, forward, inverse, width, height, font_family=None, *,
                 ticks=ticks, qmax=qmax, tmin=tmin, tmax=tmax, legend=legend, stacked=stacked)
 
 
-def render(state, known, forward, inverse, width, height, font_family=None, quantity='Qci', unit='m³/s', *, fit_height=False):
+
+def plot_curve_point(layout, period, flow, panel_index):
+    """Location of a Q(T) pair in either reciprocal chart, as drawn by render."""
+    rect = layout['axes'][panel_index]
+    t = math.log(float(period) / layout['tmin']) / math.log(layout['tmax'] / layout['tmin'])
+    q = float(flow) / layout['qmax']
+    return QPointF(rect.left() + (t if panel_index == 0 else q) * rect.width(),
+                   rect.bottom() - (q if panel_index == 0 else t) * rect.height())
+
+
+def pick_linked_curve(layout, known, pixel_x, pixel_y, tolerance=12.):
+    """Pick only a visible blue curve, never the surrounding empty chart.
+
+    Returns the same (return period, Q/Pd) pair regardless of whether the
+    user clicked Q(T) or its reciprocal T(Q) panel. Interpolate Q linearly
+    with log T, which is exactly how both the plot and Q(T) calculations work.
+    """
+    if not known:
+        return None
+    cursor = QPointF(float(pixel_x), float(pixel_y))
+    closest = None
+    threshold = float(tolerance) ** 2
+    for panel_index, axis in enumerate(layout['axes']):
+        if not axis.adjusted(-tolerance, -tolerance,
+                             tolerance, tolerance).contains(cursor):
+            continue
+        coords = [plot_curve_point(layout, p, q, panel_index)
+                  for p, q in known]
+        if len(known) == 1:
+            candidates = [(known[0][0], known[0][1],
+                           (coords[0].x() - cursor.x()) ** 2
+                           + (coords[0].y() - cursor.y()) ** 2)]
+        else:
+            candidates = []
+            for (p1, q1), (p2, q2), a, b in zip(
+                    known, known[1:], coords, coords[1:]):
+                dx, dy = b.x() - a.x(), b.y() - a.y()
+                denominator = dx * dx + dy * dy
+                fraction = max(0., min(1., (
+                    ((cursor.x() - a.x()) * dx + (cursor.y() - a.y()) * dy)
+                    / denominator) if denominator > 0 else 0.))
+                px, py = a.x() + dx * fraction, a.y() + dy * fraction
+                deviation = (cursor.x() - px) ** 2 + (cursor.y() - py) ** 2
+                period = p1 * math.exp(math.log(p2 / p1) * fraction)
+                flow = q1 + (q2 - q1) * fraction
+                candidates.append((period, flow, deviation))
+        for period, flow, distance_sq in candidates:
+            if distance_sq <= threshold and (
+                    closest is None or distance_sq < closest[2]):
+                closest = (period, flow, distance_sq)
+    return None if closest is None else closest[:2]
+
+
+def _draw_linked_selection(painter, layout, selected, quantity, unit):
+    """Mark and label the *same* selected pair on both reciprocal axes."""
+    if selected is None:
+        return
+    try:
+        period, flow = float(selected[0]), float(selected[1])
+    except (TypeError, ValueError, IndexError):
+        return
+    if (not math.isfinite(period) or not math.isfinite(flow)
+            or period < layout['tmin'] or period > layout['tmax']
+            or flow < 0 or flow > layout['qmax']):
+        return
+    painter.setRenderHint(QPainter.Antialiasing, True)
+    metrics = painter.fontMetrics()
+    fmt = lambda value: f'{value:.2f}'.replace('.', ',')
+    lines = (f'T: {fmt(period)} años', f'{quantity}: {fmt(flow)} {unit}')
+    width = max(metrics.horizontalAdvance(line) for line in lines) + 16
+    height = 2 * math.ceil(metrics.height()) + 10
+    for index, rect in enumerate(layout['axes']):
+        point = plot_curve_point(layout, period, flow, index)
+        painter.setPen(QPen(QColor('#DA741D'), 1.3, Qt.DashLine))
+        painter.drawLine(QPointF(point.x(), rect.top()), QPointF(point.x(), rect.bottom()))
+        painter.drawLine(QPointF(rect.left(), point.y()), QPointF(rect.right(), point.y()))
+        painter.setPen(QPen(QColor('#BF6014'), 2))
+        painter.setBrush(QColor('#FFAE51'))
+        painter.drawEllipse(point, 5, 5)
+        # Keep the entire label inside the data frame even on narrow panels.
+        box_width = min(float(width), max(1., rect.width() - 6))
+        box_height = min(float(height), max(1., rect.height() - 6))
+        left = min(rect.right() - box_width - 3,
+                   max(rect.left() + 3, point.x() + 11))
+        top = min(rect.bottom() - box_height - 3,
+                  max(rect.top() + 3, point.y() - box_height - 9))
+        box = QRectF(left, top, box_width, box_height)
+        painter.setBrush(QColor('#FFFFFF'))
+        painter.setPen(QPen(QColor('#C96A19'), 1))
+        painter.drawRoundedRect(box, 3, 3)
+        painter.setPen(QColor('#243746'))
+        for row, text in enumerate(lines):
+            painter.drawText(QRectF(left + 7, top + 4 + row * metrics.height(),
+                                    max(1., box_width - 14), metrics.height()),
+                             Qt.AlignLeft | Qt.AlignVCenter, text)
+
+
+def render(state, known, forward, inverse, width, height, font_family=None,
+           quantity='Qci', unit='m³/s', *, fit_height=False, selected=None):
     layout = geometry(state, known, forward, inverse, width, height, font_family, fit_height=fit_height)
     width, height, line = layout['width'], layout['height'], layout['line']
     image = QImage(width, height, QImage.Format_RGB32)
@@ -157,6 +255,7 @@ def render(state, known, forward, inverse, width, height, font_family=None, quan
         low, high = max(layout['tmin'], interval['min_period']), min(layout['tmax'], interval['max_period'] or layout['tmax'])
         if low <= high:
             painter.drawLine(point(low, state['input_flow'], 1), point(high, state['input_flow'], 1))
+    _draw_linked_selection(painter, layout, selected, quantity, unit)
     painter.end()
     buffer = QBuffer()
     buffer.open(QIODevice.WriteOnly)
