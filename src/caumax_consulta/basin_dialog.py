@@ -1161,6 +1161,9 @@ class BasinDialog(QDialog):
         if len(main_course_areas(proposed)) != len(
                 course_centres(self.analysis.main_course_wkb, self.analysis.crs_wkt)):
             profile._area_note = 'Las áreas D8 recuperadas no coinciden con el curso.'
+            if profile._rows:
+                profile._update_coverage()
+            self._refresh_basin_hydrology_controls()
             return
         self.analysis = replace(self.analysis, diagnostics=diagnostics)
         profile.set_upstream_areas(
@@ -2153,6 +2156,7 @@ class BasinDialog(QDialog):
             return
         if self.analysis is None:
             return
+        self._cancel_legacy_area_recovery()
         self._clear_interpretations()
         if self._base_geometry_wkb is None:
             self._base_geometry_wkb = bytes(self.analysis.geometry_wkb)
@@ -2502,6 +2506,10 @@ class BasinDialog(QDialog):
         quantiles = self.quantiles_widget.snapshot()
         if quantiles is not None:
             state['flow_quantiles'] = deepcopy(quantiles)
+        if not is_rational_query(self.query):
+            profile = self.quantiles_widget.course_profile.snapshot()
+            if profile is not None:
+                state['course_flow_profile'] = profile
         if self.analysis is not None:
             hydrology = self.basin_hydrology_widget.snapshot()
             if hydrology is not None:
@@ -2745,6 +2753,14 @@ class BasinDialog(QDialog):
         if missing:
             raise ValueError('Aún faltan resoluciones por calcular. Pulsa Guardar proyecto para preparar el conjunto completo.')
         resolution_state = self._resolution_bundle()
+        # Output-only graph captures must accompany the identical active
+        # variant; retain strict validation of all other saved state.
+        active_state = resolution_state['variants'][self._active_resolution_key]['smoothing_state']
+        for name in ('chart_snapshots', 'course_flow_profile'):
+            if name in state:
+                active_state[name] = deepcopy(state[name])
+            else:
+                active_state.pop(name, None)
         return save_session(destination, self.analysis, self.query, state, resolution_state=resolution_state)
 
     def _new_resolution_state(self, key, analysis):
@@ -2953,10 +2969,10 @@ class BasinDialog(QDialog):
         self._base_drainage_state = deepcopy(state.get('base_drainage_state') or self._drainage_state)
         self._display_analysis(quantile_snapshot=state.get('flow_quantiles'))
         self._apply_smoothing_snapshot(state)
-        if state.get('course_flow_profile') and not is_rational_query(self.query):
-            self.quantiles_widget.course_profile.restore_snapshot(state['course_flow_profile'])
-        self._start_legacy_area_recovery()
         self._setup_resolutions(getattr(saved,'resolution_state',None))
+        # Restoring a resolution binds its analysis again and cancels prior
+        # workers. Recover legacy areas only after that final active binding.
+        self._start_legacy_area_recovery()
 
     def _apply_smoothing_snapshot(self, state):
         self._boundary_adopt_existing = False
@@ -2978,6 +2994,8 @@ class BasinDialog(QDialog):
             self.quantiles_widget.set_query(self.query)
         elif state.get('flow_quantiles'):
             self.quantiles_widget.restore(state['flow_quantiles'])
+        if state.get('course_flow_profile') and not is_rational_query(self.query):
+            self.quantiles_widget.course_profile.restore_snapshot(state['course_flow_profile'])
         self.basin_hydrology_widget.set_analysis(self.analysis, state=state.get('basin_hydrology'))
         selected_pd = state.get('pd_clip_period', 100)
         index = self.basin_hydrology_widget.pd_period_combo.findData(selected_pd)

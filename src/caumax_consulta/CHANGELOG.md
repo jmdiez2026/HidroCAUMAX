@@ -4,6 +4,13 @@
 - Recorte GeoTIFF sobre la divisoria activa, conservando el tamaño de celda y los valores nativos del ráster de origen y NoData fuera de la cuenca.
 - Los recortes se añaden inmediatamente como capas visibles en QGIS; exportación a Capas_Generadas mediante los nombres CONSULTA_Umbral Po Cuenca.tif y CONSULTA_Pd-T CEDEX.tif.
 - Ajustes y ampliaciones de curvas hipsométricas, perfiles de caudales y aportación específica, guardar consulta e informes PDF.
+- Recuperación D8 de consultas antiguas después de restaurar la resolución activa, comprobando la geometría completa de la divisoria y conservando las muestras Qci. Los resultados incompletos desbloquean Guardar/Informe.
+- Reapertura verificada de los recortes P₀/Pd-T; los P₀ homogéneos se representan sin errores de clasificación por cuantiles.
+- Copia automática del P₀ incluido y su auxiliar a HidroCAUMAX/ResolucionMejorada del perfil activo en la primera activación, independiente del original, sin sobrescribir y protegida frente a la limpieza.
+- Conservados los dos iconos aprobados y el orden de seis botones en dos filas. Corregida la hoja de estilo del marco de Método Racional.
+- Guardado de cierres manuales con validación de correspondencia/excepción y de sus superficies. Capturas y perfil Qci coherentes con la variante activa al guardar varias resoluciones.
+- Reparada la comprobación de la firma PNG para incorporar al PDF las gráficas guardadas.
+- Verificación de esta tanda: 308 pruebas distintas, 306 correctas y 2 omitidas por depender de CAUMAX original; PyQGIS 3.40.6 y GDAL 3.10.3 en Linux. Pendiente validación en QGIS/Windows.
 - Paquete de prueba de desarrollo: las funciones necesitan revisión funcional en QGIS antes de publicar la versión estable.
 
 # HidroCAUMAX v.1.0 — reparar método racional con capas configuradas (revisión 1.0.22, 2026-11-27)

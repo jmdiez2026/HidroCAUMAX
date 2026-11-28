@@ -1,5 +1,9 @@
 # HidroCAUMAX
 
+> **Desarrollo 1.0.31:** continuación del 28/11/2026 en la rama
+> `mejora-icono-cargar-capas-caumax-v31`. [Estado, decisiones de iconos y cambios](docs/desarrollo-v1.0.31.md).
+> La versión estable publicada continúa siendo **1.0.30**.
+
 Complemento para **QGIS 3** que amplía **CAUMAX 3.0** con delimitación y análisis de cuencas, selección de MDT, morfología, curva hipsométrica, umbral de escorrentía P₀, precipitación diaria máxima Pd y consultas de cuantiles. Nombre visible: **HidroCAUMAX v.1.0**; revisión técnica del paquete: **1.0.30**. Repositorio: **jmdiez2026/HidroCAUMAX**.
 
 **Cuenca hidrográfica** admite las capas configuradas manualmente en CAUMAX, incluidas las de 25 m. MDT y direcciones pueden tener distinta extensión si comparten origen, resolución y CRS y cubren toda la cuenca. Se conservan la máscara, divisoria, área y caudal nativos, sin remuestrear ni modificar los archivos. La divisoria de 25 m de la última consulta sustituye a la anterior en QGIS. Véase la [verificación de 1.0.16](docs/verification-1.0.16.md).

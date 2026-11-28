@@ -189,6 +189,8 @@ def _outlet_snap(diagnostics, basin, selected_x, selected_y, boundary, budget=No
             extra |= {'selection_policy', 'candidate_chain_cells'}
         _keys(snap, required | extra, 'ajuste por cuenca de referencia', refinement_optional)
     else:
+        if isinstance(snap, dict) and snap.get('method') == 'manual_cell_d8':
+            optional |= {'reference_mismatch_override', 'reference_correspondence'}
         _keys(snap, required, 'ajuste del cierre', optional)
     upstream = snap['method'] == 'upstream_section_d8'
     manual = snap['method'] == 'manual_cell_d8'
@@ -670,6 +672,40 @@ def _manual_outlet_record(snap, basin, selected_x, selected_y):
            'variación de área tras elección manual')
     _close(snap['area_change_vs_reference_pct'], 100 * (candidate / snap['reference_area_m2'] - 1),
            'variación de área de referencia manual')
+    _manual_reference_record(snap, basin)
+
+
+def _manual_reference_record(snap, basin):
+    """Preserve an explicit manual exception with internally coherent areas."""
+    label = 'correspondencia del cierre manual'
+    override = _bool(snap.get('reference_mismatch_override', False), label)
+    record = snap.get('reference_correspondence')
+    if 'reference_correspondence' not in snap:
+        if override:
+            _fail(label, 'la excepción carece de comparación de divisorias')
+        return
+    required = {'reference_coverage_fraction', 'candidate_overlap_fraction',
+                'reference_overlap_area_m2', 'reference_basin_area_m2',
+                'candidate_basin_area_m2', 'reference_correspondence_valid'}
+    _keys(record, required, label)
+    reference = _float(record['reference_basin_area_m2'], label, positive=True)
+    candidate = _float(record['candidate_basin_area_m2'], label, positive=True)
+    common = _float(record['reference_overlap_area_m2'], label)
+    _close(candidate, basin.area_m2, 'área de la cuenca manual comparada')
+    if common < 0 or common > min(reference, candidate) + max(1e-5, candidate * 1e-7):
+        _fail(label, 'intersección fuera de las superficies comparadas')
+    coverage = _float(record['reference_coverage_fraction'], label)
+    overlap = _float(record['candidate_overlap_fraction'], label)
+    for fraction in (coverage, overlap):
+        if not 0 <= fraction <= 1 + 1e-7:
+            _fail(label, 'fracción de solape fuera del intervalo válido')
+    _close(coverage, common / reference, 'cobertura de la referencia manual')
+    _close(overlap, common / candidate, 'solape de la cuenca manual')
+    matches = coverage > .5 and overlap > .5
+    if _bool(record['reference_correspondence_valid'], label) != matches:
+        _fail(label, 'el resultado no coincide con los solapes declarados')
+    if override != (not matches):
+        _fail(label, 'la excepción expresa no corresponde a la comparación')
 
 
 def _upstream_section_record(snap, basin, selected_x, selected_y):

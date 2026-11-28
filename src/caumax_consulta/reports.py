@@ -490,7 +490,7 @@ def _captured_dialog_charts_html(state):
     for item in charts:
         data = bytes(item['png'])
         picture = QImage.fromData(data, 'PNG')
-        if picture.isNull() or not data.startswith(b'\\x89PNG\\r\\n\\x1a\\n'):
+        if picture.isNull() or not data.startswith(b'\x89PNG\r\n\x1a\n'):
             raise ValueError('Uno de los gráficos guardados no es un PNG válido.')
         scale = min(1., 820 / picture.width(), 450 / picture.height())
         width = max(1, round(picture.width() * scale))

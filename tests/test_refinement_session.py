@@ -292,6 +292,68 @@ class RefinementSessionTests(unittest.TestCase):
         self.assertEqual(restored.resolution_state['variants']['500']['analysis'], later)
         self.assertEqual(restored.analysis.diagnostics['outlet_snap']['reference_area_m2'], original.area_m2)
 
+    def manual_reference_fixture(self, *, different=False):
+        directions, dem = self.rasters('manual_reference')
+        point = (137.5, 112.5)
+        reference = analyze_basin(directions, dem, *point)
+        context = dict(dem_path=str(dem), directions_path=str(directions),
+                       original_x=point[0], original_y=point[1],
+                       search_radius_m=707.1067811865476,
+                       reference_area_m2=reference.area_m2,
+                       reference_geometry_wkb_hex=reference.geometry_wkb.hex(),
+                       reference_crs_wkt=reference.crs_wkt,
+                       verify_reference_overlap=True,
+                       allow_reference_mismatch=different)
+        chosen = (12.5, 262.5) if different else point
+        analysis = build_manual_outlet(context, *chosen)['analysis']
+        return analysis, self.query(point, directions, dem)
+
+    def test_manual_reference_and_explicit_exception_roundtrip_without_rasters(self):
+        for different in (False, True):
+            with self.subTest(different=different):
+                analysis, query = self.manual_reference_fixture(different=different)
+                snap = analysis.diagnostics['outlet_snap']
+                self.assertEqual(snap['reference_mismatch_override'], different)
+                self.assertEqual(snap['reference_correspondence']
+                                 ['reference_correspondence_valid'], not different)
+                self.save(analysis, query)
+                with patch.object(gdal, 'Open', side_effect=AssertionError('No source rasters')):
+                    restored = session_store.load_session(self.path)
+                self.assertEqual(restored.analysis, analysis)
+
+    def test_manual_reference_metadata_must_remain_consistent(self):
+        analysis, query = self.manual_reference_fixture(different=True)
+        self.save(analysis, query)
+        original = self.path.read_bytes()
+        changes = (
+            lambda snap: snap.update(reference_mismatch_override=1),
+            lambda snap: snap.update(reference_mismatch_override=False),
+            lambda snap: snap['reference_correspondence'].update(
+                candidate_basin_area_m2=analysis.area_m2 * 2),
+            lambda snap: snap['reference_correspondence'].update(
+                reference_coverage_fraction=.9),
+            lambda snap: snap['reference_correspondence'].update(
+                reference_correspondence_valid=True),
+            lambda snap: snap.pop('reference_correspondence'),
+            lambda snap: snap.update(reference_correspondence=None),
+        )
+        for index, change in enumerate(changes):
+            with self.subTest(index=index):
+                diagnostics = deepcopy(analysis.diagnostics)
+                change(diagnostics['outlet_snap'])
+                with self.assertRaises(ValueError):
+                    self.save(replace(analysis, diagnostics=diagnostics), query)
+                self.assertEqual(self.path.read_bytes(), original)
+
+    def test_legacy_manual_snap_without_reference_fields_remains_readable(self):
+        analysis, query = self.manual_reference_fixture()
+        diagnostics = deepcopy(analysis.diagnostics)
+        for key in ('reference_mismatch_override', 'reference_correspondence'):
+            diagnostics['outlet_snap'].pop(key)
+        legacy = replace(analysis, diagnostics=diagnostics)
+        self.save(legacy, query)
+        self.assertEqual(session_store.load_session(self.path).analysis, legacy)
+
     def test_actual_126_legacy_document_keeps_its_original_selection(self):
         source = Path(__file__).with_name('fixtures') / 'outlet_main_course_v126.json'
         document = json.loads(source.read_text(encoding='utf-8'))

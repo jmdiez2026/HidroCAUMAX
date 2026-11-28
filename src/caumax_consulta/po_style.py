@@ -1,7 +1,10 @@
 """Default P0 presentation: RdYlGn, linear, 16 quantiles, integer labels."""
+import math
+
 from qgis.PyQt.QtGui import QColor
 from qgis.core import (QgsGradientColorRamp, QgsGradientStop, QgsColorRampShader,
-                       QgsRasterShader, QgsSingleBandPseudoColorRenderer)
+                       QgsRasterBandStats, QgsRasterShader,
+                       QgsSingleBandPseudoColorRenderer)
 
 
 def apply_po_style(layer):
@@ -10,7 +13,21 @@ def apply_po_style(layer):
          QgsGradientStop(0.75, QColor('#a6d96a'))])
     colors = QgsColorRampShader(0, 152, ramp, QgsColorRampShader.Interpolated, QgsColorRampShader.Quantile)
     colors.setLabelPrecision(0)
-    colors.classifyColorRamp(16, 1, layer.extent(), layer.dataProvider())
+    provider = layer.dataProvider()
+    stats = provider.bandStatistics(
+        1, QgsRasterBandStats.Min | QgsRasterBandStats.Max,
+        layer.extent(), 0)
+    if (math.isfinite(stats.minimumValue)
+            and stats.minimumValue == stats.maximumValue):
+        # A small basin may contain only one P0 value. Quantile histograms
+        # require max > min; use its actual value instead of asking GDAL for
+        # sixteen identical breaks, which emits errors whenever it is opened.
+        value = stats.minimumValue
+        color = ramp.color(max(0., min(1., value / 152.)))
+        colors.setColorRampItemList([
+            QgsColorRampShader.ColorRampItem(value, color, f'{value:.0f}')])
+    else:
+        colors.classifyColorRamp(16, 1, layer.extent(), provider)
     items = colors.colorRampItemList()
     for item in items:
         item.label = f'{item.value:.0f}'

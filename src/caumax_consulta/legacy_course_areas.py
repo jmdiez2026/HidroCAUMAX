@@ -6,7 +6,7 @@ and DEM data. Never invent upstream areas from total catchment size.
 """
 from pathlib import Path
 
-from osgeo import osr
+from osgeo import ogr, osr
 from qgis.core import QgsTask
 
 
@@ -56,6 +56,19 @@ def recover_course_areas(analysis, directions_path, dem_path,
             raise ValueError('El trazado D8 original ha cambiado; no se asignan áreas ajenas.')
     if abs(rebuilt.area_m2 - analysis.area_m2) > max(1., analysis.area_m2 * 1e-6):
         raise ValueError('La divisoria original no coincide con la cuenca guardada.')
+    # A tributary can move while total area and the longest course remain
+    # identical. Check the full saved footprint before attaching denominators
+    # to its Qci samples. A symmetric difference also accepts equivalent
+    # polygon ring orders without accepting an area-only coincidence.
+    saved_boundary = ogr.CreateGeometryFromWkb(bytes(analysis.geometry_wkb))
+    recovered_boundary = ogr.CreateGeometryFromWkb(bytes(rebuilt.geometry_wkb))
+    if (saved_boundary is None or recovered_boundary is None
+            or saved_boundary.IsEmpty() or recovered_boundary.IsEmpty()):
+        raise ValueError('La divisoria guardada no permite verificar las áreas D8.')
+    if not saved_boundary.Equals(recovered_boundary):
+        difference = saved_boundary.SymDifference(recovered_boundary)
+        if difference is None or not difference.IsEmpty():
+            raise ValueError('La divisoria original no coincide con la cuenca guardada.')
     recovered = main_course_areas(rebuilt)
     if len(recovered) != len(saved_course):
         raise ValueError('Faltan áreas drenantes D8 de celdas del curso.')

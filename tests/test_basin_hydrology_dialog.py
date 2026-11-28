@@ -125,6 +125,8 @@ class BasinHydrologyDialogTests(unittest.TestCase):
                    return_value=proposed), \
              patch('caumax_consulta.basin_dialog.QFileDialog.getSaveFileName',
                    return_value=(str(folder / 'personalizada'), CONSULTATION_FILTER)), \
+             patch.object(dialog, '_export_consultation_layers',
+                          return_value=([], [])), \
              patch.object(dialog, 'save_project') as save:
             dialog._choose_save_project()
         save.assert_called_once_with(str(folder / 'personalizada.json'))

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <title>Mejorar resolución MDT - modelo 2: relieve con lupa</title>
+  <g fill="none" stroke="#176D9D" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M9 17C13 7 31 7 36 14C41 20 48 21 47 29C46 37 37 43 25 43C12 44 6 37 7 29C7 24 7 22 9 17Z"/>
+    <path d="M16 19C20 13 28 14 32 19C36 24 40 25 38 30C36 35 29 37 23 35C16 33 12 27 16 19Z"/>
+    <path d="M23 22C28 19 33 25 30 29C27 33 20 27 23 22Z"/>
+    <circle cx="44" cy="43" r="12" fill="#FFFFFF" fill-opacity="0.9"/>
+    <path d="M52.5 51.5L60 59M37 44L42 37L47 44L50 41"/>
+  </g>
+</svg>

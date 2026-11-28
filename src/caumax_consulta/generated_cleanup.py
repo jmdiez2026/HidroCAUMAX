@@ -107,12 +107,13 @@ def _reference_files(project):
 
 def _protected_sources(project):
     """Neither bundled P0 nor native CAUMAX default datasets are disposable."""
-    from .improved_storage import po_path
+    from .improved_storage import po_path, profile_po_path, PO_REFERENCE_FILES
     protected = _reference_files(project)
-    reference = po_path()
-    for path in (reference, Path(str(reference) + '.aux.xml')):
-        if _plain_file(path):
-            protected.add(str(path.resolve()))
+    for reference in (po_path(), profile_po_path()):
+        # Both exact reference locations are permanent. Include expected
+        # sidecar paths even before GDAL writes them during provider release.
+        for name in PO_REFERENCE_FILES:
+            protected.add(str((reference.parent / name).resolve()))
     module = sys.modules.get('caumax.layers')
     defaults = getattr(module, '_defaultLayerPaths', {}) if module else {}
     for value in defaults.values() if isinstance(defaults, dict) else ():

@@ -88,6 +88,79 @@ class StorageTests(unittest.TestCase):
         for name, contents in expected.items():
             self.assertEqual((self.folder/name).read_bytes(), contents)
 
+    def test_startup_installs_independent_profile_p0_and_auxiliary_once(self):
+        source = self.raster(storage.PO_FILENAME)
+        auxiliary = self.folder / storage.PO_AUX_FILENAME
+        auxiliary.write_bytes(b'<PAMDataset/>')
+        before = {p.name: p.read_bytes() for p in (source, auxiliary)}
+        storage.prepare_export_directory()
+        destination = storage.profile_po_path()
+        self.assertEqual(destination, self.root / 'backup' / storage.PO_FILENAME)
+        for name, contents in before.items():
+            self.assertEqual((destination.parent / name).read_bytes(), contents)
+            self.assertFalse(os.path.samefile(self.folder / name, destination.parent / name))
+        stamps = {p.name: storage._stamp(p) for p in destination.parent.iterdir()}
+        storage.prepare_export_directory()
+        self.assertEqual({p.name: storage._stamp(p) for p in destination.parent.iterdir()}, stamps)
+        self.assertFalse((destination.parent / storage.BACKUP_INDEX).exists())
+        destination.write_bytes(b'user modification')
+        storage.prepare_export_directory()
+        self.assertEqual(destination.read_bytes(), b'user modification')
+        self.assertEqual(source.read_bytes(), before[source.name])
+
+    def test_missing_profile_auxiliary_is_copied_only_for_the_same_p0(self):
+        self.raster(storage.PO_FILENAME)
+        (self.folder / storage.PO_AUX_FILENAME).write_bytes(b'<PAMDataset/>')
+        storage.prepare_export_directory()
+        target = storage.profile_po_path()
+        target_aux = target.parent / storage.PO_AUX_FILENAME
+        target_aux.unlink()
+        storage.prepare_export_directory()
+        self.assertEqual(target_aux.read_bytes(), b'<PAMDataset/>')
+        target_aux.unlink()
+        target.write_bytes(b'different user raster')
+        storage.prepare_export_directory()
+        self.assertEqual(target.read_bytes(), b'different user raster')
+        self.assertFalse(target_aux.exists())
+
+    def test_export_preservation_never_overwrites_or_prunes_profile_reference(self):
+        self.raster(storage.PO_FILENAME)
+        (self.folder / storage.PO_AUX_FILENAME).write_bytes(b'bundled auxiliary')
+        backup = self.root / 'backup'
+        backup.mkdir()
+        expected = {name: ('profile ' + name).encode() for name in storage.PO_REFERENCE_FILES}
+        for name, contents in expected.items():
+            (backup / name).write_bytes(contents)
+        # Old versions could put the auxiliary into the generated snapshot.
+        (backup / storage.BACKUP_INDEX).write_text(json.dumps(list(expected)))
+        storage.preserve_exports()
+        for name, contents in expected.items():
+            self.assertEqual((backup / name).read_bytes(), contents)
+        self.assertEqual(json.loads((backup / storage.BACKUP_INDEX).read_text()), [])
+        storage.prepare_export_directory()
+        self.assertEqual((self.folder / storage.PO_AUX_FILENAME).read_bytes(), b'bundled auxiliary')
+
+    def test_profile_copy_failure_removes_partial_target_and_preserves_source(self):
+        source = self.raster(storage.PO_FILENAME)
+        before = source.read_bytes()
+        def broken(src, dst, length):
+            dst.write(b'part'); raise OSError('disk full')
+        with patch.object(storage.os, 'link') as link, \
+             patch.object(storage.shutil, 'copyfileobj', side_effect=broken):
+            with self.assertRaisesRegex(OSError, 'disk full'):
+                storage.prepare_export_directory()
+            link.assert_not_called()
+        self.assertFalse(storage.profile_po_path().exists())
+        self.assertEqual(source.read_bytes(), before)
+
+    def test_profile_reference_does_not_follow_redirected_target_directory(self):
+        self.raster(storage.PO_FILENAME)
+        outside = self.root / 'outside'; outside.mkdir()
+        (self.root / 'backup').symlink_to(outside, target_is_directory=True)
+        with self.assertRaisesRegex(OSError, 'enlace'):
+            storage.prepare_export_directory()
+        self.assertEqual(list(outside.iterdir()), [])
+
     def test_startup_never_restores_previous_dem_or_generated_index(self):
         self.raster(storage.PO_FILENAME)
         (self.folder/(storage.PO_FILENAME + '.aux.xml')).write_bytes(b'<PAMDataset/>')

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <title>Mejorar resolución MDT - modelo 1: malla gruesa a fina</title>
+  <g fill="none" stroke="#176D9D" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="7" y="10" width="22" height="22" rx="1"/>
+    <path d="M18 10V32M7 21H29"/>
+    <path d="M35 13H49V24M44 19L49 24L54 19"/>
+    <rect x="32" y="32" width="24" height="24" rx="1"/>
+    <path d="M40 32V56M48 32V56M32 40H56M32 48H56"/>
+  </g>
+</svg>

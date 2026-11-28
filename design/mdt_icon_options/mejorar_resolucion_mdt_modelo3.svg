@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <title>Mejorar resolución MDT - modelo 3: modelo del terreno con flecha</title>
+  <g fill="none" stroke="#176D9D" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M7 36L31 24L57 36L32 49Z"/>
+    <path d="M7 43L32 56L57 43"/>
+    <path d="M15 32L24 15L34 30L40 22L49 32" fill="#FFFFFF"/>
+    <path d="M20 38L32 44L44 38M32 44V49"/>
+    <path d="M53 24V8M47 14L53 8L59 14"/>
+  </g>
+</svg>

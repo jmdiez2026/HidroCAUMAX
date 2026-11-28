@@ -128,6 +128,39 @@ class GeneratedCleanupTests(unittest.TestCase):
         self.assertFalse(result['failed'])
         self.assertEqual(len(result['removed']), 2)
 
+    def test_profile_p0_and_its_late_auxiliary_survive_strict_cleanup(self):
+        from caumax_consulta import improved_storage as storage
+        installed = self.root / 'plugin' / storage.FOLDER_NAME
+        backup = self.root / 'profile' / 'HidroCAUMAX' / storage.FOLDER_NAME
+        installed.mkdir(parents=True)
+        backup.mkdir(parents=True)
+        source = installed / storage.PO_FILENAME
+        reference = backup / storage.PO_FILENAME
+        source.write_bytes(b'Bundled P0')
+        reference.write_bytes(b'User profile P0')
+        generated = backup / 'MDT_25m.tif'
+        generated.write_bytes(b'generated terrain')
+        auxiliary = backup / storage.PO_AUX_FILENAME
+        real_unlink = Path.unlink
+        def unlink(path, *args, **kwargs):
+            if path == generated:
+                auxiliary.write_bytes(b'P0 metadata written on GDAL close')
+            return real_unlink(path, *args, **kwargs)
+        with patch.object(storage, 'PLUGIN_ROOT', self.root / 'plugin'), \
+             patch.object(storage, 'backup_directory', return_value=backup), \
+             patch.object(cleanup, 'cache_roots', return_value=()):
+            # A wrong historical registry must not turn reference data into results.
+            cleanup.register_dataset(reference, self.project)
+            plan = cleanup.deletion_plan(self.project)
+            self.assertNotIn(str(reference.resolve()), plan['files'])
+            with patch.object(Path, 'unlink', unlink):
+                result = cleanup.delete_generated(plan, self.project)
+            self.assertFalse(result['failed'], result['failed'])
+            self.assertFalse(generated.exists())
+            self.assertEqual(reference.read_bytes(), b'User profile P0')
+            self.assertEqual(source.read_bytes(), b'Bundled P0')
+            self.assertEqual(auxiliary.read_bytes(), b'P0 metadata written on GDAL close')
+
     def test_registered_shapefile_family_and_unloaded_exports_are_included(self):
         target = self.root / 'network.shp'
         for suffix in ('.shp', '.shx', '.dbf', '.prj'):

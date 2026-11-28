@@ -1,6 +1,21 @@
 # HidroCAUMAX v.1.0
 
-Complemento auxiliar para **CAUMAX 3.0 y QGIS 3 con Qt 5**. La versión técnica del paquete es **1.0.30** y la identificación visible es **HidroCAUMAX v.1.0**. Conserva procesamiento con TauDEM, exportación de MDT, direcciones y red, curva hipsométrica, los seis cuantiles originales y **P₀ y precipitación máxima diaria de la cuenca**. Conserva el punto original de consulta y permite ajustar el cierre manualmente. Incluye comprobación de actualizaciones, interfaz compacta y **interpretación automática local con criterios documentados**. Los ensayos reproducibles de esta revisión deben ejecutarse en un entorno QGIS 3 con Qt 5; la última validación integral registrada en el repositorio corresponde a versiones anteriores. Las pruebas reproducibles se encuentran en la carpeta `tests` del repositorio; los registros locales de sesiones no se publican.
+Complemento auxiliar para **CAUMAX 3.0 y QGIS 3 con Qt 5**. La versión técnica de esta vista previa es **1.0.31** y la identificación visible es **HidroCAUMAX v.1.0**. Conserva procesamiento con TauDEM, exportación de MDT, direcciones y red, curva hipsométrica, los seis cuantiles originales y **P₀ y precipitación máxima diaria de la cuenca**. Conserva el punto original de consulta y permite ajustar el cierre manualmente. Incluye comprobación de actualizaciones, interfaz compacta y **interpretación automática local con criterios documentados**. Esta tanda se ha comprobado con QGIS 3.40.6 y GDAL 3.10.3 en Linux: 308 pruebas distintas, 306 correctas y 2 omitidas por requerir las fuentes originales de CAUMAX. La validación en Windows sigue pendiente. Las pruebas reproducibles se encuentran en la carpeta `tests` del repositorio; los registros locales de sesiones no se publican.
+
+## Vista previa de desarrollo 1.0.31
+
+La versión estable publicada continúa siendo 1.0.30. Esta revisión conserva
+los dos iconos elegidos y las dos filas de botones de Método Racional;
+la siguiente elección corresponde a «Mejorar resolución MDT».
+
+Al activar el complemento después de instalarlo, el TIFF
+`Po_Spain_CLC2000_100x100_30N_AdrLBallesteros.tif` y su auxiliar se copian a
+`HidroCAUMAX/ResolucionMejorada` dentro del perfil activo de QGIS. Los archivos
+existentes se conservan y esa referencia queda protegida al limpiar capas.
+
+Se han comprobado la reapertura de P₀/Pd-T y la recuperación de áreas D8 de
+consultas antiguas. Se corrigen el guardado con cierres manuales, la coherencia
+de gráficos y perfiles entre resoluciones, y su incorporación al PDF.
 
 ## Ficha de identificación en QGIS (1.0.30)
 

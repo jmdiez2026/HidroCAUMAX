@@ -30,6 +30,12 @@ class ResolutionSaveRegressionTests(unittest.TestCase):
         self.addCleanup(self.fixture.doCleanups)
         self.addCleanup(self.fixture.tearDown)
         self.dialog = self.fixture.dialog
+        # These regressions exercise the atomic JSON/variant transaction.
+        # Optional SHP exports have their own tests and default destinations.
+        exports = patch.object(self.dialog, '_export_consultation_layers',
+                               return_value=([], []))
+        exports.start()
+        self.addCleanup(exports.stop)
         self.manager = SimpleNamespace(tasks=[])
         self.manager.addTask = self.manager.tasks.append
         task_patch = patch('caumax_consulta.basin_dialog.QgsApplication.taskManager',return_value=self.manager)
@@ -176,6 +182,32 @@ class ResolutionSaveRegressionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'resultados completos del MDT de 5'):
             self.dialog._resolution_bundle()
         self.assertIsNone(self.controller.variants['5']['smoothing_state'])
+
+    def test_selecting_another_legacy_variant_recalculates_its_own_d8_areas(self):
+        from caumax_consulta.course_flow_profile import main_course_areas
+        from caumax_consulta.resolution_controller import ResolutionController
+        self.configure()
+        coarse_areas = main_course_areas(self.dialog.analysis)
+        fine = self.controller.variants['5']
+        expected = main_course_areas(fine['analysis'])
+        fine['analysis'] = replace(fine['analysis'], diagnostics={
+            key: value for key, value in fine['analysis'].diagnostics.items()
+            if key not in ('main_course_areas_b64', 'main_course_area_at_closure_km2')})
+        fine['smoothing_state'] = self.dialog._new_resolution_state('5', fine['analysis'])
+        controller = ResolutionController(self.dialog.analysis, self.dialog.query,
+                                         parent=self.dialog)
+        controller.variants, controller.options = self.controller.variants, self.controller.options
+        self.dialog._resolution_controller = controller
+        self.dialog._resolution_result('5', fine['analysis'], fine['query'])
+        self.assertTrue(self.dialog._surface_pending)
+        self.dialog._smoothing_timer.stop()
+        self.dialog._update_smoothing()
+        task = self.manager.tasks[-1]
+        self.assertEqual(task.query.directions_path, fine['query'].directions_path)
+        self.assertEqual(task.query.dem_path, fine['query'].dem_path)
+        self.publish(task)
+        self.assertEqual(main_course_areas(self.dialog.analysis), expected)
+        self.assertNotEqual(main_course_areas(self.dialog.analysis), coarse_areas)
 
     def test_dispose_cancels_save_worker_without_publishing(self):
         self.configure()

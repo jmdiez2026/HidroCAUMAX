@@ -465,7 +465,7 @@ class RationalLayersBridge(QObject):
         frame = QFrame(container)
         frame.setObjectName(ACTION_FRAME_NAME)
         frame.setStyleSheet(f'QFrame#{ACTION_FRAME_NAME} {{ border: 1px solid #7EB4D0; '
-                           'border-radius: 3px; background-color: #F2F9FD; }}')
+                           'border-radius: 3px; background-color: #F2F9FD; }')
         # Exactly three analytical actions on the upper row (beside the logo),
         # and three save actions on the lower row. The separately owned
         # "Guardar Divisoria" button is inserted between Cierre and IC-5.2

@@ -13,6 +13,9 @@ from qgis.core import QgsApplication
 PLUGIN_ROOT = Path(__file__).resolve().parent
 FOLDER_NAME = 'ResolucionMejorada'
 PO_FILENAME = 'Po_Spain_CLC2000_100x100_30N_AdrLBallesteros.tif'
+PO_AUX_FILENAME = PO_FILENAME + '.aux.xml'
+PO_REFERENCE_FILES = frozenset((PO_FILENAME, PO_AUX_FILENAME,
+                                PO_FILENAME + '.ovr', PO_FILENAME + '.msk'))
 PAIR_INDEX = '.hidrocaumax-calculation-pairs.json'
 BACKUP_INDEX = '.hidrocaumax-preserved-files.json'
 GENERATED_INDEX = '.hidrocaumax-generated-files.json'
@@ -38,6 +41,11 @@ def po_path():
 
 def backup_directory():
     return Path(QgsApplication.qgisSettingsDirPath()) / 'HidroCAUMAX' / FOLDER_NAME
+
+
+def profile_po_path():
+    """The included reference copied to the active profile, outside plugins."""
+    return backup_directory() / PO_FILENAME
 
 
 def _plain(path):
@@ -69,26 +77,68 @@ def _write(path, value):
         temporary.unlink(missing_ok=True)
 
 
-def _copy_missing(source, target):
+def _copy_missing(source, target, *, hardlink=True):
     if any(p.is_symlink() or (hasattr(p, 'is_junction') and p.is_junction()) for p in target.parents):
         raise OSError('La carpeta de conservación contiene un enlace: ' + str(target.parent))
     target.parent.mkdir(parents=True, exist_ok=True)
-    if target.exists():
-        return
+    if target.exists() or target.is_symlink():
+        return False
+    if hardlink:
+        try:
+            os.link(source, target)
+            return True
+        except FileExistsError:
+            return False
+        except OSError:
+            pass
+    created = False
     try:
-        os.link(source, target)
+        with source.open('rb') as src, target.open('xb') as dst:
+            created = True
+            shutil.copyfileobj(src, dst, 1024 * 1024)
+        shutil.copystat(source, target)
+    except FileExistsError:
+        if created:
+            target.unlink(missing_ok=True)
+            raise
+        return False
     except OSError:
-        if not target.exists():
-            created = False
-            try:
-                with source.open('rb') as src, target.open('xb') as dst:
-                    created = True
-                    shutil.copyfileobj(src, dst, 1024 * 1024)
-                shutil.copystat(source, target)
-            except OSError:
-                if created:
-                    target.unlink(missing_ok=True)
-                raise
+        if created:
+            target.unlink(missing_ok=True)
+        raise
+    return True
+
+
+def _same_contents(source, target):
+    """Compare only when a missing sidecar may be installed beside an old P0."""
+    if not _plain(source) or not _plain(target) or source.stat().st_size != target.stat().st_size:
+        return False
+    with source.open('rb') as left, target.open('rb') as right:
+        while True:
+            block = left.read(1024 * 1024)
+            if block != right.read(1024 * 1024):
+                return False
+            if not block:
+                return True
+
+
+def install_profile_reference():
+    """Install the bundled P0 once; keep the user's existing profile files.
+
+    ZIP installations can run code only after the plugin is activated. The
+    source stays in the plugin package; the profile copy is independent so
+    editing it cannot modify the bundled reference through a hard link.
+    No generated terrain, settings or calculation sources are restored here.
+    """
+    source, target = po_path(), profile_po_path()
+    if not _plain(source):
+        return
+    copied = _copy_missing(source, target, hardlink=False)
+    source_aux, target_aux = (source.parent / PO_AUX_FILENAME,
+                              target.parent / PO_AUX_FILENAME)
+    if (_plain(source_aux) and not target_aux.exists() and not target_aux.is_symlink()
+            and (copied or _same_contents(source, target))):
+        _copy_missing(source_aux, target_aux, hardlink=False)
 
 
 def preserve_exports():
@@ -97,7 +147,7 @@ def preserve_exports():
     previous = _read(backup / BACKUP_INDEX, [])
     entries = []
     for source in folder.rglob('*'):
-        if not _plain(source) or source.name == PO_FILENAME:
+        if not _plain(source) or source.name in PO_REFERENCE_FILES:
             continue
         relative = source.relative_to(folder)
         # Skip partial exports still in their private staging directory.
@@ -119,7 +169,8 @@ def preserve_exports():
         if not isinstance(name, str) or name in entries:
             continue
         relative = Path(name)
-        if relative.drive or relative.is_absolute() or '..' in relative.parts or ':' in name:
+        if (relative.drive or relative.is_absolute() or '..' in relative.parts or ':' in name
+                or relative.name in PO_REFERENCE_FILES):
             continue
         target = backup / relative
         if _plain(target) and target.resolve().is_relative_to(backup.resolve()):
@@ -129,6 +180,7 @@ def preserve_exports():
 def prepare_export_directory(legacy_alias=False):
     """Prepare the installed folder without recovering old calculation results."""
     folder = export_directory()
+    install_profile_reference()
     # The compatibility alias lives outside ResolucionMejorada. Never populate
     # this folder from a previous snapshot merely because QGIS has started.
     if legacy_alias and po_path().is_file():
@@ -144,7 +196,8 @@ def restore_exports(legacy_alias=False):
         if not isinstance(relative, str):
             continue
         path = Path(relative)
-        if path.drive or path.is_absolute() or '..' in path.parts or ':' in relative or path.name == PO_FILENAME:
+        if (path.drive or path.is_absolute() or '..' in path.parts or ':' in relative
+                or path.name in PO_REFERENCE_FILES):
             continue
         source, target = backup / path, folder / path
         if _plain(source) and not target.exists():
@@ -200,7 +253,7 @@ def record_exports(exports):
     owned = owned if isinstance(owned, dict) else {}
     for name in exports.values():
         path = Path(name).resolve()
-        if path.parent != folder or path.name == PO_FILENAME:
+        if path.parent != folder or path.name in PO_REFERENCE_FILES:
             continue
         for member in _family(path):
             if _plain(member):
@@ -214,7 +267,7 @@ def generated_files():
     folder = export_directory()
     owned = _read(folder / GENERATED_INDEX, {})
     for name, stamp in owned.items() if isinstance(owned, dict) else ():
-        if not name or Path(name).name != name or ':' in name or name == PO_FILENAME:
+        if not name or Path(name).name != name or ':' in name or name in PO_REFERENCE_FILES:
             continue
         path = folder / name
         if _plain(path) and _stamp(path) == stamp:
