@@ -62,6 +62,13 @@ def read_metadata(source: Path) -> dict[str, str]:
             raise ValueError(f'{key} must remain {expected}.')
     if metadata.get('experimental') not in ('True', 'False'):
         raise ValueError('experimental must explicitly be True or False.')
+    icon = metadata.get('icon', '').strip()
+    if icon:
+        # QGIS's installed-plugin browser resolves this path within the ZIP.
+        # The public repository index uses the immutable release-tag URL.
+        if (not re.fullmatch(r'assets/[A-Za-z0-9_.-]+\.(?:png|svg)', icon)
+                or not (source / icon).is_file()):
+            raise ValueError('Plugin icon must be a bundled PNG/SVG inside assets/.')
     return metadata
 
 
@@ -147,6 +154,11 @@ def repository_xml(metadata: dict[str, str], repository: str, tag: str, filename
         # Keep this stable even though the GitHub asset has a versioned name.
         'file_name': PLUGIN_ID+'.zip', 'experimental': metadata['experimental'], 'deprecated': 'False',
         'category': metadata.get('category', 'Raster'), 'tags': 'hidrologia,cuencas,caumax'}
+    if metadata.get('icon'):
+        # QGIS repository browsers need an absolute URL, while the installed
+        # plugin's metadata.txt intentionally uses a local relative path.
+        values['icon'] = (f'https://raw.githubusercontent.com/{repository}/{tag}/'
+                          f'src/caumax_consulta/{metadata["icon"]}')
     for key, value in values.items():
         ET.SubElement(plugin, key).text = value
     ET.indent(root, space='  ')
