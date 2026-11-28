@@ -369,7 +369,9 @@ class CourseFlowProfile(QWidget):
             'Activa la selección de una celda del curso principal en el mapa QGIS.')
         self.label = QLabel('Selecciona un punto de la gráfica o del mapa.', self)
         self.label.setWordWrap(True)
-        row.addWidget(self.map_button)
+        # Map selection button intentionally absent: the longitudinal plots
+        # remain clickable, and the abscissa/Q value stays permanently visible.
+        self.map_button.hide()
         row.addWidget(self.label, 1)
         layout.addLayout(row)
         self.hide()
