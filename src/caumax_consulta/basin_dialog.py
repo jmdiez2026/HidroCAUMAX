@@ -31,6 +31,9 @@ from .morphology_table import (InterpretationDelegate, InterpretationHeader,
 from .drainage_panel import DrainageControls, DrainageStatusLabel
 from .flow_quantiles import is_rational_query, rational_flow_text
 from .native_decimal import format_decimal
+from .consultation_paths import (
+    CONSULTATION_FILTER, consultation_directory, default_consultation_path,
+)
 
 
 BLUE_BUTTON_STYLE = '''
@@ -2386,12 +2389,22 @@ class BasinDialog(QDialog):
             if self._drainage_timer.isActive():self._prepare_drainage()
             self.drainage_status.setText('Espera a que termine la actualización de la red antes de guardar el proyecto.')
             return
+        try:
+            # Always use the current QGIS profile (default on the user's
+            # installation), not the Python home or plugin installation path.
+            suggested = default_consultation_path()
+        except OSError as error:
+            QMessageBox.critical(
+                self, 'Guardar Consulta',
+                'No se puede crear la carpeta de consultas de HidroCAUMAX: ' + str(error))
+            return
         destination, _ = QFileDialog.getSaveFileName(
-            self, 'Guardar proyecto de consulta', str(Path.home()/'consulta_cuenca.caumax.json'),
-            'Proyecto de consulta CAUMAX (*.caumax.json)')
+            self, 'Guardar Consulta', str(suggested), CONSULTATION_FILTER)
         if destination:
             try:
-                effective = destination if destination.lower().endswith('.json') else destination + '.caumax.json'
+                # A plain .json filename is a fully validated, portable
+                # CAUMAX consultation document, not a shallow data export.
+                effective = destination if destination.lower().endswith('.json') else destination + '.json'
                 if effective != destination and Path(effective).exists():
                     answer = QMessageBox.question(self, 'Guardar proyecto',
                         'Ya existe el archivo:\n' + effective + '\n¿Quieres sustituirlo?',
@@ -2453,9 +2466,17 @@ class BasinDialog(QDialog):
                     QMessageBox.critical(self, 'Guardar proyecto', str(error))
 
     def _choose_open_project(self):
+        try:
+            folder = consultation_directory()
+        except OSError as error:
+            QMessageBox.critical(
+                self, 'Abrir Consulta',
+                'No se puede abrir la carpeta de consultas de HidroCAUMAX: ' + str(error))
+            return
+        # The *.json filter also includes historic *.caumax.json sessions;
+        # never hide the requested default .json consultation files.
         source, _ = QFileDialog.getOpenFileName(
-            self, 'Abrir proyecto de consulta', str(Path.home()),
-            'Proyecto de consulta CAUMAX (*.caumax.json);;Archivos JSON (*.json)')
+            self, 'Abrir Consulta', str(folder), CONSULTATION_FILTER)
         if source:
             try:
                 self.load_project(source)
