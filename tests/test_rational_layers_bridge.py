@@ -256,7 +256,7 @@ class RationalLayersBridgeTests(unittest.TestCase):
                                binding.frequency_button.geometry().center().y())
             for b in buttons:
                 self.assertEqual(b.icon().isNull(),
-                                 b is not binding.frequency_button)
+                                 b not in (binding.frequency_button, binding.basin_button))
                 self.assertIn('#D9F0FF', b.styleSheet())
                 self.assertIn('padding: 5px 9px', b.styleSheet())
                 self.assertGreaterEqual(b.width(), b.sizeHint().width())
@@ -543,7 +543,11 @@ class RationalLayersBridgeTests(unittest.TestCase):
         self.app.processEvents()
         self.assertTrue(binding.basin_button.isEnabled())
         self.assertEqual(binding.basin_button.text(),'IC-5.2 Análisis Cuenca')
-        self.assertTrue(binding.basin_button.icon().isNull())
+        self.assertFalse(binding.basin_button.icon().isNull())
+        self.assertEqual(binding.basin_button.iconSize(), QSize(22, 22))
+        self.assertEqual(binding.basin_button.layoutDirection(), Qt.LeftToRight)
+        pixmap = binding.basin_button.icon().pixmap(22, 22)
+        self.assertFalse(pixmap.isNull(), 'El SVG del modelo 3 debe cargarse correctamente')
         self.assertEqual(binding.action_row.indexOf(binding.basin_button),2)
         self.assertEqual(binding.action_row.indexOf(binding.button),3)
         self.assertEqual(binding.action_row_bottom.indexOf(binding.closure_button),0)
