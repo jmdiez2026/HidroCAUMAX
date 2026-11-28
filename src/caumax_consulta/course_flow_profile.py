@@ -308,6 +308,11 @@ class CourseFlowProfile(QWidget):
         layout.addWidget(self.graph)
         row = QHBoxLayout()
         self.map_button = QPushButton('Elegir celda en el mapa', self)
+        # 95% of the native button height, preserving font and interactions.
+        self.map_button.ensurePolished()
+        self.map_button.setFixedHeight(max(
+            self.map_button.fontMetrics().height() + 4,
+            round(self.map_button.sizeHint().height() * .95)))
         self.map_button.setCheckable(True)
         self.map_button.toggled.connect(self._toggle_map_pick)
         self.map_button.setToolTip(
