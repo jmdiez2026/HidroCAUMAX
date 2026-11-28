@@ -2455,7 +2455,8 @@ class BasinDialog(QDialog):
                 period = record.get('period') if kind == 'pd' else None
                 if kind == 'pd' and period != self.basin_hydrology_widget.selected_pd_period():
                     raise ValueError('El período seleccionado no coincide con el recorte Pd-T.')
-                publish_clipped_raster(path, kind=kind, period=period)
+                publish_clipped_raster(path, kind=kind, period=period,
+                                       register_generated=False)
                 if kind == 'po':
                     self._po_clip_path = path
                     self._po_clip_source = record['source_path']
