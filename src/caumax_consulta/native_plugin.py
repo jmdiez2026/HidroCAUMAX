@@ -376,7 +376,8 @@ class NativeCaumaxPlugin(QObject):
                 and bridge is not None
                 and hasattr(dialog, 'set_new_selection_handler')):
             dialog.set_new_selection_handler(
-                lambda native=native_dialog: bridge.start_auto_reselection(native))
+                lambda native=native_dialog: bridge.start_auto_reselection(native),
+                lambda native=native_dialog: bridge.auto_reselection_pending(native))
         self._dialogs[native_dialog] = dialog
         if getattr(query, 'source_kind', None) == 'rational':
             binding = self._rational_layers._bindings.get(id(native_dialog))
