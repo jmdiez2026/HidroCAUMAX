@@ -2512,6 +2512,76 @@ class BasinDialog(QDialog):
                 and float(state['degree']) != self.smoothing_degree.value()):
             self._queue_smoothing()
 
+    def _export_consultation_layers(self):
+        """Export the current closure and basin without prompting for two paths.
+
+        The JSON consultation remains authoritative and is never rolled back
+        because an optional SHP could not be written. Existing files are never
+        overwritten; callers receive separate warnings for each export.
+        """
+        from .closure_layers import export_green_course_closure
+        from .smooth_export import export_previewed, _suggested_basin_destination, basin_geometry
+        from .improved_storage import generated_layers_directory
+        from qgis.core import QgsGeometry
+
+        errors, saved = [], []
+        analysis, query = self.analysis, self.query
+        directory = generated_layers_directory()
+        closure = directory / (
+            f'Cierre_CursoPrincipal_CONSULTA_X{round(analysis.outlet_x)}_'
+            f'Y{round(analysis.outlet_y)}.shp')
+        try:
+            if closure.exists():
+                errors.append('Guardar Cierre: ya existe ' + closure.name)
+            else:
+                export_green_course_closure(analysis, closure)
+                saved.append(closure.name)
+        except Exception as error:
+            errors.append('Guardar Cierre: ' + str(error))
+
+        try:
+            destination = _suggested_basin_destination(analysis, query)
+            # Preserve the selected original/smoothed contours when available.
+            # When neither is checked, still export the unmodified basin.
+            geometries = {
+                kind: QgsGeometry(geometry)
+                for kind, geometry in self.preview_geometries.items()
+                if kind in ('original', 'suavizada') and not geometry.isNull()
+            }
+            if not geometries:
+                geometries = {'original': basin_geometry(analysis)}
+            from .smooth_export import _export_destinations
+            targets = _export_destinations(geometries, destination)
+            existing = [path.name for path in targets.values() if path.exists()]
+            if existing:
+                errors.append('Guardar Divisoria: ya existe ' + ', '.join(existing))
+            else:
+                export_previewed(analysis, query, geometries, destination,
+                                 self.smoothing_degree.value())
+                saved.extend(path.name for path in targets.values())
+        except Exception as error:
+            errors.append('Guardar Divisoria: ' + str(error))
+        return saved, errors
+
+    def _finish_save_consultation(self, destination):
+        """Save the complete JSON first; then export the two default SHPs."""
+        saved_path = self.save_project(destination)
+        try:
+            exported, errors = self._export_consultation_layers()
+        except Exception as error:
+            exported, errors = [], ['Exportaciones automáticas: ' + str(error)]
+        if errors:
+            QMessageBox.warning(
+                self, 'Guardar Consulta',
+                'Consulta guardada en:\\n' + str(saved_path) +
+                '\\n\\nArchivos SHP: ' +
+                (', '.join(exported) if exported else 'ninguno nuevo') +
+                '\\n\\nIncidencias:\\n' + '\\n'.join(errors))
+        else:
+            self.status.setText(
+                'Consulta guardada con cierre y divisoria en Capas_Generadas.')
+        return saved_path
+
     def _choose_save_project(self):
         self._close_outlet_selection()
         if self._basin_hydrology_busy():
@@ -2564,7 +2634,7 @@ class BasinDialog(QDialog):
                         try:
                             if error:
                                 raise ValueError(error)
-                            self.save_project(effective)
+                            self._finish_save_consultation(effective)
                             self.resolution_status.setText('Proyecto guardado con todas las resoluciones disponibles.')
                         except Exception as error:
                             if not self._disposed:
@@ -2593,7 +2663,7 @@ class BasinDialog(QDialog):
                             self._prepare_resolution_states(complete)
                     controller.ensure_all(ready)
                 else:
-                    self.save_project(effective)
+                    self._finish_save_consultation(effective)
             except Exception as error:
                 if not self._disposed:
                     QMessageBox.critical(self, 'Guardar proyecto', str(error))
