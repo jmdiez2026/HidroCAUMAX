@@ -11,7 +11,7 @@ from qgis.PyQt.QtGui import QColor, QFont, QFontMetrics, QIcon
 from qgis.PyQt.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QDialog, QDialogButtonBox,
     QDoubleSpinBox, QSpinBox, QFileDialog, QFrame, QGridLayout, QGroupBox, QHBoxLayout, QMessageBox,
-    QHeaderView, QLabel, QPlainTextEdit, QProgressBar, QPushButton, QTableWidget,
+    QHeaderView, QLabel, QPlainTextEdit, QProgressBar, QPushButton, QSlider, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QScrollArea, QSizePolicy, QWidget,
 )
 from qgis.core import (
@@ -257,8 +257,16 @@ class BasinDialog(QDialog):
         smoothing = QGroupBox('Suavizado divisoria', self)
         smoothing_layout = QVBoxLayout(smoothing)
         controls = QHBoxLayout()
-        self.original_check = QCheckBox('Original · contorno de celdas', smoothing)
+        self.original_check = QCheckBox('Contorno', smoothing)
         self.original_check.setChecked(True)
+        self.original_check.setToolTip('Mostrar la divisoria original y su relleno de celdas.')
+        self.transparency_label = QLabel('Transparencia', smoothing)
+        self.contour_transparency = QSlider(Qt.Horizontal, smoothing)
+        self.contour_transparency.setRange(0, 100)
+        self.contour_transparency.setValue(80)
+        self.contour_transparency.setFixedWidth(94)
+        self.contour_transparency.setToolTip('Transparencia del relleno de la cuenca: 80 %')
+        self.contour_transparency.valueChanged.connect(self._contour_transparency_changed)
         self.smooth_check = QCheckBox('Suavizada', smoothing)
         self.smoothing_degree = QSpinBox(smoothing)
         self.smoothing_degree.setRange(1, 45)
@@ -293,7 +301,8 @@ class BasinDialog(QDialog):
         self.export_closure_button.clicked.connect(self._export_green_closure)
         self.export_button.clicked.connect(self._export)
         self._smoothing_controls = (
-            self.original_check, self.smooth_check, degree_label,
+            self.original_check, self.transparency_label, self.contour_transparency,
+            self.smooth_check, degree_label,
             self.smoothing_degree, self.export_closure_button, self.export_button)
         self._smoothing_controls_layout = controls
         controls.setSpacing(4)
@@ -662,9 +671,7 @@ class BasinDialog(QDialog):
 
     def _fit_smoothing_controls(self):
         """Fit both export buttons without truncating them on narrow dialogs."""
-        # The full source label is restored as space becomes available. At
-        # narrow widths the same meaning stays in its tooltip.
-        self.original_check.setText('Original · contorno de celdas')
+        self.original_check.setText('Contorno')
         self.original_check.setToolTip('Divisoria original · contorno de celdas')
         group = self.export_button.parentWidget()
         margins = (self.body_scroll.widget().layout().contentsMargins(),
@@ -683,9 +690,10 @@ class BasinDialog(QDialog):
             if needed <= available:
                 break
             if points <= minimum:
-                # The long label, not a save button, may be abbreviated:
-                # leave both "Guardar Cierre" and "Guardar Divisoria" intact.
-                self.original_check.setText('Original')
+                # Shrink only the slider if the panel is narrow. Labels remain
+                # intact, including Guardar Cierre and Guardar Divisoria.
+                remaining = max(40, self.contour_transparency.width() - max(0, needed - available))
+                self.contour_transparency.setFixedWidth(remaining)
                 break
             points = max(minimum,points-.25)
         # Keep the existing type size. Measure the unmodified compact QGIS
@@ -1967,6 +1975,24 @@ class BasinDialog(QDialog):
         self.resolution_progress.hide()
         self._resume_outlet_selection()
 
+    def _contour_transparency_changed(self, value):
+        """Adjust only map overlay opacity; never recalculate the watershed."""
+        self.contour_transparency.setToolTip(
+            f'Transparencia del relleno de la cuenca: {value} %')
+        if self._disposed or self._smoothing_loading:
+            return
+        overlay = getattr(self, '_rubber', None)
+        if overlay is not None:
+            try:
+                overlay.setFillColor(QColor(255, 35, 35, round(255 * (100 - value) / 100)))
+                self.iface.mapCanvas().viewport().update()
+            except RuntimeError:
+                pass
+        self._map_data = {}
+        self._restored = False
+        if self.analysis is not None:
+            self._cache_variant_state()
+
     def _grid_visibility_changed(self, checked):
         if self._smoothing_loading or self._disposed or self.analysis is None:
             return
@@ -2023,6 +2049,7 @@ class BasinDialog(QDialog):
     def get_smoothing_state(self):
         self._normalise_drainage_encoding()
         state = dict(original_checked=self.original_check.isChecked(), smooth_checked=self.smooth_check.isChecked(),
+                    contour_transparency=self.contour_transparency.value(),
                     degree=self.smoothing_degree.value(),
                     base_geometry_wkb=bytes(self._base_geometry_wkb or self.analysis.geometry_wkb),
                     cell_grid_visible=self.cell_grid_check.isChecked(),
@@ -2097,7 +2124,8 @@ class BasinDialog(QDialog):
             if 'original' in self.preview_geometries:
                 self._rubber = register_overlay(canvas, QgsRubberBand(canvas, QgsWkbTypes.PolygonGeometry))
                 self._rubber.setColor(QColor(190, 0, 0, 220))
-                self._rubber.setFillColor(QColor(255, 35, 35, 51))
+                self._rubber.setFillColor(QColor(
+                    255, 35, 35, round(255 * (100 - self.contour_transparency.value()) / 100)))
                 self._rubber.setWidth(2)
                 self._rubber.setToGeometry(polygon, None)
             if self.cell_grid_check.isChecked() and self.analysis.grid_wkb:
@@ -2237,7 +2265,7 @@ class BasinDialog(QDialog):
             current = self.get_smoothing_state()
             if (self.analysis is not analysis or self.query is not query
                     or any(current[key] != snapshot[key] for key in
-                           ('original_checked','smooth_checked','degree','geometry_wkb','course_visibility','resolution_metadata','cell_grid_visible'))
+                           ('original_checked','smooth_checked','degree','geometry_wkb','course_visibility','resolution_metadata','cell_grid_visible','contour_transparency'))
                     or current.get('drainage_state') != snapshot.get('drainage_state')
                     or current.get('hypsometric_dimensionless') != snapshot.get('hypsometric_dimensionless')):
                 raise ValueError('La consulta ha cambiado durante la captura. Vuelve a generar el informe o guardar el proyecto.')
@@ -2293,7 +2321,7 @@ class BasinDialog(QDialog):
                 delta_area_pct=100*(geometry.area()/analysis.area_m2-1),
                 delta_perimeter_pct=100*(geometry.length()/analysis.perimeter_m-1))
         return dict(original_checked=self.original_check.isChecked(),smooth_checked=self.smooth_check.isChecked(),
-            degree=degree,base_geometry_wkb=bytes(analysis.geometry_wkb),
+            contour_transparency=self.contour_transparency.value(),degree=degree,base_geometry_wkb=bytes(analysis.geometry_wkb),
             geometry_wkb={kind:bytes(geometry.asWkb()) for kind,geometry in geometries.items()},stats=stats,
             course_visibility={'main':True,'central':False},cell_grid_visible=key in ('500','25'),
             hypsometric_dimensionless=self.hypsometry_widget.is_dimensionless(),
@@ -2488,6 +2516,7 @@ class BasinDialog(QDialog):
         self._grid_visibility_by_resolution[key] = visible
         self.cell_grid_check.setChecked(visible)
         self.original_check.setChecked(state['original_checked'])
+        self.contour_transparency.setValue(state.get('contour_transparency', 80))
         self.smooth_check.setChecked(state['smooth_checked'])
         self.smoothing_degree.setValue(max(1, round(state['degree'])))
         self.hypsometry_widget.set_dimensionless(state.get('hypsometric_dimensionless',False))
