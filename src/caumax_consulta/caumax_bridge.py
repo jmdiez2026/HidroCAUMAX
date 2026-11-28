@@ -453,6 +453,8 @@ class _Binding:
     query_dirty: bool = False
     settle_pending: bool = False
     observed_signature: object = None
+    auto_reselection: bool = False
+    reselect_connections: list = None
 
 
 class CaumaxBridge(QObject):
@@ -639,6 +641,92 @@ class CaumaxBridge(QObject):
         binding.observed_signature = None
         self._sync(key)
 
+    def auto_reselection_pending(self, native_dialog):
+        """True only while our new-selection map action is active."""
+        binding = self._bindings.get(id(native_dialog))
+        return bool(binding is not None and binding.auto_reselection)
+
+    def start_auto_reselection(self, native_dialog):
+        """Invoke CAUMAX's original Seleccionar en mapa tool, never a fake point.
+
+        The original MaxFlowDialog connects tool.canvasClicked to updatePoint,
+        which calls its own calculate(). After that calculation has succeeded
+        we open a fresh detailed watershed using its verified NativeQuery.
+        """
+        binding = self._bindings.get(id(native_dialog))
+        if binding is None or not self._running:
+            return False
+        selector = getattr(native_dialog, 'btnGetPoint', None)
+        tool = getattr(native_dialog, 'tool', None)
+        if (selector is None or not callable(getattr(selector, 'click', None))
+                or not callable(getattr(selector, 'isChecked', None))
+                or tool is None or not hasattr(tool, 'canvasClicked')):
+            self._notify('Esta versión de CAUMAX no ofrece una herramienta compatible de selección en mapa.')
+            return False
+        if binding.auto_reselection:
+            return True
+        binding.auto_reselection = True
+        binding.reselect_connections = []
+        # The native point handler was connected first, in MaxFlowDialog.
+        # This connection observes the completed native point calculation.
+        def observe_click(*unused, key=id(native_dialog)):
+            QTimer.singleShot(0, lambda key=key: self._finish_auto_reselection(key))
+        def observe_toggle(checked, key=id(native_dialog)):
+            if not checked:
+                self._stop_auto_reselection(key)
+        try:
+            tool.canvasClicked.connect(observe_click)
+            binding.reselect_connections.append((tool.canvasClicked, observe_click))
+            selector.toggled.connect(observe_toggle)
+            binding.reselect_connections.append((selector.toggled, observe_toggle))
+            if not selector.isChecked():
+                selector.click()
+            else:
+                # A checked native button can survive a temporary map-tool
+                # change. Restore it using CAUMAX's own public slot.
+                if (self.iface.mapCanvas().mapTool() is not tool
+                        and callable(getattr(native_dialog, 'getPointClicked', None))):
+                    native_dialog.getPointClicked()
+            if self.iface.mapCanvas().mapTool() is not tool:
+                self._stop_auto_reselection(id(native_dialog))
+                self._notify('CAUMAX no ha podido activar «Seleccionar en mapa».')
+                return False
+            return True
+        except (RuntimeError, AttributeError, TypeError) as error:
+            self._stop_auto_reselection(id(native_dialog))
+            self._notify('No se pudo iniciar «Nueva selección»: ' + str(error))
+            return False
+
+    def _stop_auto_reselection(self, key):
+        binding = self._bindings.get(key)
+        if binding is None:
+            return
+        binding.auto_reselection = False
+        for signal, slot in (binding.reselect_connections or ()):
+            try:
+                signal.disconnect(slot)
+            except (RuntimeError, TypeError):
+                pass
+        binding.reselect_connections = []
+
+    def _finish_auto_reselection(self, key):
+        binding = self._bindings.get(key)
+        if binding is None or not binding.auto_reselection or not self._running:
+            return
+        self._sync(key)
+        # CAUMAX's calculate() and enabled state, rather than a stale text
+        # widget, are the authority. Failed clicks do not reopen the basin.
+        try:
+            verified = make_native_query(binding.dialog, binding.module)
+        except (AttributeError, TypeError, ValueError, RuntimeError, OSError):
+            return
+        binding.query = verified
+        binding.query_dirty = False
+        binding.settle_pending = False
+        binding.observed_signature = self._quick_signature(binding.dialog, binding.module)
+        self._stop_auto_reselection(key)
+        self._request(key)
+
     def _settle_query(self, key):
         """Rearm after both coordinates and the native result are consistent."""
         binding = self._bindings.get(key)
@@ -668,6 +756,7 @@ class CaumaxBridge(QObject):
             self._notify('No se pudo abrir la cuenca hidrográfica: ' + str(error))
 
     def _detach(self, key):
+        self._stop_auto_reselection(key)
         binding = self._bindings.pop(key, None)
         if binding is None:
             return
