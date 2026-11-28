@@ -115,6 +115,45 @@ class ReportTests(unittest.TestCase):
         self.folder = Path(self.directory.name)
         self.analysis, self.query = example()
 
+    def test_pdf_includes_every_saved_visible_chart_and_longitudinal_coverage(self):
+        image = QImage(700, 260, QImage.Format_RGB32)
+        image.fill(QColor('#dcecf2'))
+        png_path = self.folder / 'onscreen.png'
+        self.assertTrue(image.save(str(png_path), 'PNG'))
+        data = png_path.read_bytes()
+        state = {
+            'chart_snapshots': [
+                {'key': 'main_course_qci',
+                 'title': 'Caudal Máximo (Qci-n) a lo largo del curso principal',
+                 'png': data},
+                {'key': 'specific_contribution',
+                 'title': 'Aportación Específica (m³/s·km²)',
+                 'png': data}
+            ],
+            'course_flow_profile': {
+                'version': 1, 'selected': 1,
+                'rows': [
+                    [0., 338825., 4715200., [10.,20.,30.,40.,50.,60.]],
+                    [.025, 338850., 4715200., [None,None,25.,None,45.,55.]],
+                ],
+            },
+        }
+        destination = reports.generate_basin_pdf(
+            self.folder / 'full_charts.pdf', self.analysis, self.query,
+            open_after=False, smoothing_state=state)
+        reader = PdfReader(str(destination))
+        text = pdf_text(reader)
+        self.assertIn('Gráficos disponibles al generar la consulta', text)
+        self.assertIn('Aportación Específica', text)
+        self.assertIn('Caudal Máximo (Qci-n)', text)
+        self.assertIn('Datos longitudinales oficiales', text)
+        self.assertIn('celdas D8 muestreadas: 2', text)
+        pictures = [ref.get_object()
+                    for page in reader.pages
+                    for ref in page['/Resources'].get_object().get('/XObject', {}).values()
+                    if ref.get_object().get('/Subtype') == '/Image']
+        self.assertGreaterEqual(len(pictures), 2)
+
     def test_pdf_contains_all_values_units_coordinates_and_definitions(self):
         destination = self.folder / 'informe.pdf'
         with patch.object(reports.QDesktopServices, 'openUrl') as opener:
