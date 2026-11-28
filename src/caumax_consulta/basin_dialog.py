@@ -114,6 +114,7 @@ class BasinDialog(QDialog):
         self._outlet_manual_token = None
         self._outlet_dismissed_token = None
         self._delineation_cleared = False
+        self._new_selection_handler = None
         self._surface_task = None
         self._surface_generation = 0
         self._surface_pending = False
@@ -332,28 +333,61 @@ class BasinDialog(QDialog):
         self.cell_grid_check = QCheckBox('Malla de celdas', resolution_group)
         self.cell_grid_check.setChecked(True)
         self.cell_grid_check.toggled.connect(self._grid_visibility_changed)
-        resolution_actions = QHBoxLayout()
-        resolution_actions.addWidget(self.cell_grid_check)
+        resolution_actions = QGridLayout()
+        resolution_actions.setContentsMargins(0, 0, 0, 0)
+        resolution_actions.setHorizontalSpacing(4)
+        resolution_actions.setVerticalSpacing(3)
+        resolution_actions.addWidget(self.cell_grid_check, 0, 0)
+        self.new_selection_button = QPushButton('Nueva selección', resolution_group)
+        self.new_selection_button.setObjectName('HidroCAUMAXNuevaSeleccion')
+        self.new_selection_button.setToolTip(
+            'Activa Seleccionar en mapa de CAUMAX; cuando se consulta el nuevo '
+            'punto válido, vuelve a calcular automáticamente la cuenca.')
+        self.new_selection_button.clicked.connect(self._new_selection)
+        self.new_selection_button.setEnabled(False)
         self.outlet_adjust_button = QPushButton('Ajuste Punto de Cierre', resolution_group)
-        self.outlet_adjust_button.setStyleSheet('QPushButton { padding: 2px 9px; min-height: 0px; }')
-        self.outlet_adjust_button.setToolTip('Ajustar manualmente el punto de cierre con las direcciones o un clic en el mapa; recalcula toda la cuenca al aplicar.')
+        self.outlet_adjust_button.setToolTip(
+            'Ajustar manualmente el punto de cierre con las direcciones o un clic en '
+            'el mapa; recalcula toda la cuenca al aplicar.')
         self.outlet_adjust_button.setEnabled(False)
         self.outlet_adjust_button.clicked.connect(self._open_outlet_selection)
-        resolution_actions.addWidget(self.outlet_adjust_button)
         self.clear_delineation_button = QPushButton('Borrar Delineado', resolution_group)
-        self.clear_delineation_button.setStyleSheet('QPushButton { padding: 2px 9px; min-height: 0px; }')
-        self.clear_delineation_button.setToolTip('Retirar todas las capas de divisoria, MDT y curso principal generadas en esta sesión; conserva los cálculos y las capas del usuario.')
+        self.clear_delineation_button.setToolTip(
+            'Retirar todas las capas de divisoria, MDT y curso principal generadas '
+            'en esta sesión; conserva los cálculos y las capas del usuario.')
         self.clear_delineation_button.setEnabled(False)
         self.clear_delineation_button.clicked.connect(self._clear_delineation)
-        resolution_actions.addWidget(self.clear_delineation_button)
-        # 105% of the existing compact native button height, measured once.
-        # Icon choices are still pending; neither button's function changes.
-        for button in (self.outlet_adjust_button, self.clear_delineation_button):
+        # Native SVG icons chosen by the user. The same QGIS blue style,
+        # exact font, width and 105%-height apply to all three actions.
+        styles = (
+            (self.new_selection_button, 'nueva_seleccion_mapa_renovar.svg'),
+            (self.outlet_adjust_button, 'ajuste_cierre_modelo4.svg'),
+            (self.clear_delineation_button, 'borrar_delineado_modelo1.svg'),
+        )
+        self._resolution_action_buttons = tuple(button for button, _ in styles)
+        for button, icon_name in styles:
+            button.setStyleSheet('QPushButton { background-color: #D9F0FF; '
+                'border: 1px solid #7EB4D0; border-radius: 3px; '
+                'color: #17374B; padding: 2px 6px; min-height: 0px; }'
+                'QPushButton:hover { background-color: #C7E8FF; }'
+                'QPushButton:pressed { background-color: #B1DDF6; }'
+                'QPushButton:disabled { background-color: #EEF6FB; '
+                'color: #8A9EA8; border-color: #C6DAE5; }')
+            button.setIcon(QIcon(str(Path(__file__).parent / 'assets' / icon_name)))
+            button.setIconSize(QSize(16, 16))
             button.ensurePolished()
-            native_height = button.sizeHint().height()
-            button.setFixedHeight(max(button.fontMetrics().height() + 4,
-                                      round(native_height * 1.05)))
-        resolution_actions.addStretch()
+        uniform_width = max(button.sizeHint().width()
+                            for button in self._resolution_action_buttons)
+        uniform_height = max(button.sizeHint().height()
+                             for button in self._resolution_action_buttons)
+        for button in self._resolution_action_buttons:
+            button.setFixedSize(uniform_width, max(
+                button.fontMetrics().height() + 4, round(uniform_height * 1.05)))
+        self._resolution_actions_layout = resolution_actions
+        self._resolution_action_positions = 'wide'
+        for index, button in enumerate(self._resolution_action_buttons):
+            resolution_actions.addWidget(button, 0, index + 1)
+        resolution_actions.setColumnStretch(4, 1)
         resolution_layout.addLayout(resolution_actions)
         self.resolution_checkboxes = {}
         self._resolution_buttons = QButtonGroup(self)
@@ -520,6 +554,7 @@ class BasinDialog(QDialog):
         if self._disposed:
             return
         self._layout_resolution_options()
+        self._fit_resolution_actions()
         self._fit_context_header()
         self._fit_smoothing_controls()
         self._fit_drainage_controls()
@@ -544,6 +579,64 @@ class BasinDialog(QDialog):
         finally:
             header.blockSignals(blocked)
         fit_morphology_rows(self.table)
+
+    def _fit_resolution_actions(self):
+        """Keep three equally sized buttons complete on narrow QGIS windows."""
+        layout = self._resolution_actions_layout
+        buttons = self._resolution_action_buttons
+        cell = self.cell_grid_check
+        margins = self.body_scroll.widget().layout().contentsMargins()
+        section = self.resolution_group.layout().contentsMargins()
+        available = max(1, self.body_scroll.viewport().width() -
+            margins.left() - margins.right() - section.left() - section.right())
+        space = layout.horizontalSpacing()
+        needed = cell.sizeHint().width() + 3 * buttons[0].width() + 3 * space
+        if needed <= available:
+            mode = 'wide'
+        elif 3 * buttons[0].width() + 2 * space <= available:
+            mode = 'wrapped'
+        else:
+            mode = 'narrow'
+        if mode == self._resolution_action_positions:
+            return
+        self._resolution_action_positions = mode
+        for button in buttons:
+            layout.removeWidget(button)
+        if mode == 'wide':
+            for index, button in enumerate(buttons):
+                layout.addWidget(button, 0, index + 1)
+        elif mode == 'wrapped':
+            for index, button in enumerate(buttons):
+                layout.addWidget(button, 1, index)
+        else:
+            # At unusually large Windows font scaling, preserve all labels.
+            layout.addWidget(buttons[0], 1, 0)
+            layout.addWidget(buttons[1], 2, 0)
+            layout.addWidget(buttons[2], 2, 1)
+
+    def set_new_selection_handler(self, handler):
+        """Native CAUMAX host supplies the selection action only when supported."""
+        self._new_selection_handler = handler
+        self.new_selection_button.setEnabled(callable(handler) and not self._disposed)
+
+    def _new_selection(self, *args):
+        if self._disposed or not callable(self._new_selection_handler):
+            return
+        if self._saving_project:
+            self.resolution_status.setText(
+                'Espera a que termine el guardado antes de iniciar una nueva selección.')
+            return
+        try:
+            if self._new_selection_handler():
+                self.resolution_status.setText(
+                    'Nueva selección activa: haz clic en el mapa de QGIS. '
+                    'CAUMAX consultará el caudal y HidroCAUMAX recalculará '
+                    'automáticamente la nueva cuenca.')
+            else:
+                self.resolution_status.setText(
+                    'No se pudo activar la selección de punto en CAUMAX.')
+        except (RuntimeError, ValueError, AttributeError) as error:
+            self.resolution_status.setText('No se puede seleccionar: ' + str(error))
 
     def _fit_smoothing_controls(self):
         """Fit both export buttons without truncating them on narrow dialogs."""
