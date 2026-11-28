@@ -48,6 +48,10 @@ def _place_export_button(dialog, button, grouped=True):
         if target is None:
             return
         desired_index = 1 if target.objectName() == 'HidroCAUMAXSecondaryActions' else 2
+        if target.indexOf(button) == desired_index:
+            return
+        if target.indexOf(button) >= 0:
+            target.removeWidget(button)
         old_parent = button.parentWidget()
         old_layout = old_parent.layout() if old_parent is not None else None
         if old_layout is not None:
