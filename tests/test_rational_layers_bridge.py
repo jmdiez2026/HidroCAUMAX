@@ -164,7 +164,7 @@ class RationalLayersBridgeTests(unittest.TestCase):
         self.assertFalse(clean.icon().isNull())
         self.assertIn('#FADBD8', clean.styleSheet())
         self.assertIn('padding: 5px 9px', clean.styleSheet())
-        self.assertLess(binding.button.geometry().right(), clean.x())
+        self.assertLess(binding.complete_button.geometry().right(), clean.x())
         with patch('caumax_consulta.clean_layers_ui.confirm_cleanup', return_value='Limpieza terminada') as cleanup:
             clean.click()
         cleanup.assert_called_once_with(self.dialog)
@@ -186,10 +186,12 @@ class RationalLayersBridgeTests(unittest.TestCase):
         self.assertTrue(button.icon().isNull())
         self.assertEqual(button.iconSize(), original_size)
         self.assertTrue(binding.frequency_button.icon().isNull())
-        self.assertEqual(binding.frequency_button.text(), 'Calcular')
+        self.assertEqual(binding.frequency_button.text(), 'Calcular Q vs. T')
         self.assertEqual(binding.action_row.indexOf(binding.frequency_button), 1)
-        self.assertEqual(binding.action_row_bottom.indexOf(binding.basin_button), 0)
-        self.assertEqual(binding.action_row_bottom.indexOf(binding.button), 1)
+        self.assertEqual(binding.action_row.indexOf(binding.basin_button), 2)
+        self.assertEqual(binding.action_row.indexOf(binding.button), 3)
+        self.assertEqual(binding.action_row_bottom.indexOf(binding.closure_button), 0)
+        self.assertEqual(binding.action_row_bottom.indexOf(binding.complete_button), 1)
         self.assertEqual(binding.action_row_bottom.indexOf(binding.clean_button), 3)
         self.assertEqual(binding.action_row.spacing(), 10)
         self.assertEqual(binding.action_row_bottom.spacing(), 10)
@@ -231,18 +233,22 @@ class RationalLayersBridgeTests(unittest.TestCase):
             self.assertTrue(button.icon().isNull())
             self.assertTrue(button.isVisible())
             self.assertEqual(self.dialog.horizontalLayout_2.indexOf(button), -1)
-            self.assertEqual(binding.action_row.indexOf(button), 2)
-            self.assertEqual(binding.action_row_bottom.indexOf(binding.basin_button), 0)
-            self.assertEqual(binding.action_row_bottom.indexOf(binding.button), 1)
+            self.assertEqual(binding.action_row_bottom.indexOf(button), 1)
+            self.assertEqual(binding.action_row_bottom.indexOf(binding.closure_button), 0)
+            self.assertEqual(binding.action_row_bottom.indexOf(binding.complete_button), 2)
+            self.assertEqual(binding.action_row.indexOf(binding.basin_button), 2)
+            self.assertEqual(binding.action_row.indexOf(binding.button), 3)
             self.assertEqual(len(self.dialog.findChildren(QPushButton, SAVE_NAME)), 1)
             self.assertEqual(binding.container.findChildren(QPushButton, SAVE_NAME), [button])
             logos = binding.container.findChildren(QLabel, 'HidroCAUMAXSharedGEALogo')
             self.assertEqual(len(logos), 1)
             self.assertFalse(logos[0].pixmap().isNull())
-            buttons = [binding.frequency_button, button, binding.basin_button, binding.button]
-            self.assertEqual(len({b.geometry().center().y() for b in buttons[:2]}), 1)
-            self.assertEqual(len({b.geometry().center().y() for b in buttons[2:]}), 1)
-            self.assertGreater(binding.basin_button.geometry().center().y(),
+            buttons = [binding.frequency_button, binding.basin_button,
+                       binding.button, binding.closure_button,
+                       button, binding.complete_button]
+            self.assertEqual(len({b.geometry().center().y() for b in buttons[:3]}), 1)
+            self.assertEqual(len({b.geometry().center().y() for b in buttons[3:]}), 1)
+            self.assertGreater(binding.complete_button.geometry().center().y(),
                                binding.frequency_button.geometry().center().y())
             for b in buttons:
                 self.assertTrue(b.icon().isNull())
@@ -250,6 +256,13 @@ class RationalLayersBridgeTests(unittest.TestCase):
                 self.assertIn('padding: 5px 9px', b.styleSheet())
                 self.assertGreaterEqual(b.width(), b.sizeHint().width())
             self.assertLessEqual(binding.button.geometry().right(), binding.button.parentWidget().width())
+            self.assertEqual([binding.action_row.itemAt(i).widget().text()
+                              for i in (1, 2, 3)],
+                             ['Calcular Q vs. T', 'IC-5.2 Análisis Cuenca',
+                              'Mejorar resolución MDT'])
+            self.assertEqual([binding.action_row_bottom.itemAt(i).widget().text()
+                              for i in (0, 1, 2)],
+                             ['Guardar Cierre', 'Guardar Divisoria', 'Guardar IC-5.2'])
             clicked = Mock()
             with patch.object(exporter, 'export_dialog', clicked):
                 button.setEnabled(True)
@@ -275,7 +288,7 @@ class RationalLayersBridgeTests(unittest.TestCase):
                 self.bridge.scan()
                 exporter.scan()
             self.app.processEvents()
-            self.assertEqual(binding.action_row.indexOf(button), 2)
+            self.assertEqual(binding.action_row_bottom.indexOf(button), 1)
             self.assertEqual(len(self.dialog.findChildren(QPushButton, SAVE_NAME)), 1)
             exporter.stop()
             self.app.sendPostedEvents(None, QEvent.DeferredDelete)
@@ -526,11 +539,13 @@ class RationalLayersBridgeTests(unittest.TestCase):
         self.assertTrue(binding.basin_button.isEnabled())
         self.assertEqual(binding.basin_button.text(),'IC-5.2 Análisis Cuenca')
         self.assertTrue(binding.basin_button.icon().isNull())
-        self.assertEqual(binding.action_row_bottom.indexOf(binding.basin_button),0)
-        self.assertEqual(binding.action_row_bottom.indexOf(binding.button),1)
+        self.assertEqual(binding.action_row.indexOf(binding.basin_button),2)
+        self.assertEqual(binding.action_row.indexOf(binding.button),3)
+        self.assertEqual(binding.action_row_bottom.indexOf(binding.closure_button),0)
+        self.assertEqual(binding.action_row_bottom.indexOf(binding.complete_button),1)
         self.assertEqual(binding.closure_button.text(), 'Guardar Cierre')
-        self.assertEqual(binding.complete_button.text(), 'Guardar CUENCA')
-        self.assertEqual(binding.button.text(), 'Mejorar resolución')
+        self.assertEqual(binding.complete_button.text(), 'Guardar IC-5.2')
+        self.assertEqual(binding.button.text(), 'Mejorar resolución MDT')
         self.assertTrue(binding.button.icon().isNull())
         self.assertEqual(len(self.dialog.findChildren(QPushButton,BASIN_BUTTON_NAME)),1)
         query=object();calculator=self.dialog.basinCalc
@@ -549,7 +564,7 @@ class RationalLayersBridgeTests(unittest.TestCase):
         self.dialog.txtY.setText('4725249,11019012')
         callback = Mock()
         self.bridge.on_complete_basin_requested = callback
-        self.assertEqual(current.complete_button.text(), 'Guardar CUENCA')
+        self.assertEqual(current.complete_button.text(), 'Guardar IC-5.2')
         self.assertEqual(current.closure_button.text(), 'Guardar Cierre')
         current.complete_button.click()
         callback.assert_called_once_with(self.dialog)
