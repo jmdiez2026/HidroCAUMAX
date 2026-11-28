@@ -242,6 +242,10 @@ class BridgeTests(unittest.TestCase):
     def test_new_selection_uses_original_caumax_map_tool_then_reopens_after_valid_flow(self):
         self.valid_query()
         self.bridge.start()
+        # A previous basin was already opened before Nueva selección.
+        self.basin_button().click()
+        self.assertEqual(len(self.calls), 1)
+        self.calls.clear()
         self.dialog.btnGetPoint = QPushButton('Seleccionar en mapa', self.dialog)
         self.dialog.btnGetPoint.setCheckable(True)
         self.dialog.tool = QgsMapToolEmitPoint(self.canvas)
@@ -288,6 +292,8 @@ class BridgeTests(unittest.TestCase):
     def test_new_selection_keeps_previous_basin_when_caumax_has_no_valid_flow(self):
         self.valid_query()
         self.bridge.start()
+        self.basin_button().click()
+        self.calls.clear()
         self.dialog.btnGetPoint = QPushButton('Seleccionar en mapa', self.dialog)
         self.dialog.btnGetPoint.setCheckable(True)
         self.dialog.tool = QgsMapToolEmitPoint(self.canvas)
