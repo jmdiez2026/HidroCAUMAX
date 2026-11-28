@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from qgis.PyQt.QtCore import QEvent, QObject, Qt, pyqtSignal
-from qgis.PyQt.QtTest import QTest
+from qgis.PyQt.QtTest import QSignalSpy, QTest
 from qgis.PyQt.QtWidgets import QAction, QMainWindow, QMenu, QToolBar
 from qgis.core import QgsApplication, QgsProject, QgsVectorLayer
 
@@ -141,6 +141,21 @@ class ToolbarTests(unittest.TestCase):
                           return_value='No hay resultados ni referencias de HidroCAUMAX para limpiar.'):
             self.plugin.clear_layers_action.trigger()
         self.assertIn('No hay resultados', self.messages.pushMessage.call_args.args[1])
+
+    def test_logo_has_no_connection_to_any_other_hidrocaumax_toolbar_action(self):
+        p = self.plugin
+        other_actions = (p.reference_action, p.open_action,
+                         p.clear_layers_action, p.update_action,
+                         p.help_action, p.restore_action)
+        watchers = [QSignalSpy(action.triggered) for action in other_actions]
+        was_enabled = p._enabled
+        was_reference_checked = p.reference_action.isChecked()
+        for _ in range(3):
+            QTest.mouseClick(p._toolbar.widgetForAction(p.action), Qt.LeftButton)
+        self.assertEqual(self.caumax_calls, ['CAUMAX'] * 3)
+        self.assertEqual([len(spy) for spy in watchers], [0] * len(watchers))
+        self.assertEqual(p._enabled, was_enabled)
+        self.assertEqual(p.reference_action.isChecked(), was_reference_checked)
 
     def test_logo_is_always_official_caumax_loader_not_tools_status(self):
         from qgis.PyQt.QtGui import QIcon
