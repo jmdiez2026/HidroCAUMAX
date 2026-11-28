@@ -144,7 +144,7 @@ def build_manual_outlet(context, x, y, cancelled=lambda: False, publish=lambda p
     override = bool(context.get('allow_reference_mismatch', False))
     if mismatch and not override:
         raise ManualOutletConsistencyError(
-            'El cierre pertenece a una cuenca diferente de la consulta de referencia: 
+            'El cierre pertenece a una cuenca diferente de la consulta de referencia: '
             'solape con la referencia ' +
             f"{100 * correspondence['reference_coverage_fraction']:.1f} %, " +
             'solape de la cuenca elegida ' +
