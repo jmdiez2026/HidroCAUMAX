@@ -5,7 +5,7 @@ from unittest.mock import Mock, patch
 
 from qgis.PyQt.QtCore import QEvent, QObject, Qt, pyqtSignal
 from qgis.PyQt.QtTest import QTest
-from qgis.PyQt.QtWidgets import QMainWindow, QToolBar
+from qgis.PyQt.QtWidgets import QAction, QMainWindow, QMenu, QToolBar
 from qgis.core import QgsApplication, QgsProject, QgsVectorLayer
 
 from caumax_consulta import native_plugin as native
@@ -34,7 +34,17 @@ class ToolbarTests(unittest.TestCase):
         self.window.setAttribute(Qt.WA_DontShowOnScreen)
         self.startup = QgisStartup()
         self.messages = Mock()
+        # The toolbar shortcut must trigger the SAME existing QAction as
+        # Complementos > CAUMAX > CARGAR CAPAS CAUMAX, nothing else.
+        self.plugin_menu = QMenu('Complementos', self.window)
+        self.caumax_menu = self.plugin_menu.addMenu('CAUMAX')
+        self.official_load = QAction('CARGAR CAPAS CAUMAX', self.window)
+        self.caumax_calls = []
+        self.official_load.triggered.connect(
+            lambda checked=False: self.caumax_calls.append('CAUMAX'))
+        self.caumax_menu.addAction(self.official_load)
         self.iface = SimpleNamespace(mainWindow=lambda: self.window,
+            pluginMenu=lambda: self.plugin_menu,
             addToolBar=self.window.addToolBar, addPluginToMenu=Mock(), removePluginMenu=Mock(),
             messageBar=lambda: self.messages,
             initializationCompleted=self.startup.initializationCompleted)
@@ -132,41 +142,45 @@ class ToolbarTests(unittest.TestCase):
             self.plugin.clear_layers_action.trigger()
         self.assertIn('No hay resultados', self.messages.pushMessage.call_args.args[1])
 
-    def test_hidrocaumax_logo_changes_with_tool_state_without_disabling_restore(self):
+    def test_logo_is_always_official_caumax_loader_not_tools_status(self):
         from qgis.PyQt.QtGui import QIcon
         p = self.plugin
         button = p._toolbar.widgetForAction(p.action)
         active = p.action.icon().pixmap(32, 32, QIcon.Normal).toImage()
         self.assertTrue(p.action.isEnabled())
         p.set_enabled(False)
-        muted = p.action.icon().pixmap(32, 32, QIcon.Normal).toImage()
+        still_active = p.action.icon().pixmap(32, 32, QIcon.Normal).toImage()
         self.assertTrue(p.action.isEnabled())
         self.assertFalse(active.isNull())
-        self.assertFalse(muted.isNull())
-        self.assertTrue(any(
-            active.pixelColor(x, y).rgba() != muted.pixelColor(x, y).rgba()
-            for y in range(min(active.height(), muted.height()))
-            for x in range(min(active.width(), muted.width()))))
+        self.assertEqual(active, still_active)
         QTest.mouseClick(button, Qt.LeftButton)
-        self.assertTrue(p._enabled)
-        restored = p.action.icon().pixmap(32, 32, QIcon.Normal).toImage()
-        self.assertEqual(active, restored)
+        self.assertFalse(p._enabled)
+        self.assertEqual(self.caumax_calls, ['CAUMAX'])
+        self.assertEqual(active, p.action.icon().pixmap(32, 32, QIcon.Normal).toImage())
 
-    def test_logo_restores_tools_and_repeated_clicks_never_disable_them(self):
+    def test_logo_triggers_only_native_menu_action_even_after_repeated_clicks(self):
         p = self.plugin
         button = p._toolbar.widgetForAction(p.action)
         self.assertFalse(p.action.isCheckable())
         self.assertTrue(p._enabled)
         p.set_enabled(False)
-        self.assertFalse(p._enabled)
-        QTest.mouseClick(button, Qt.LeftButton)
-        self.assertTrue(p._enabled)
-        for _ in range(3):
-            p.action.trigger()
-            self.assertTrue(p._enabled)
         for service in (p._bridge, p._rational, p._rational_inputs,
                         p._rational_layers, p._visible_dem):
-            self.assertTrue(service.start.called)
+            service.start.reset_mock()
+        self.assertFalse(p._enabled)
+        QTest.mouseClick(button, Qt.LeftButton)
+        for _ in range(3):
+            p.action.trigger()
+        self.assertEqual(self.caumax_calls, ['CAUMAX'] * 4)
+        self.assertFalse(p._enabled)
+        for service in (p._bridge, p._rational, p._rational_inputs,
+                        p._rational_layers, p._visible_dem):
+            service.start.assert_not_called()
+        p.restore_action.trigger()
+        self.assertTrue(p._enabled)
+        for service in (p._bridge, p._rational, p._rational_inputs,
+                        p._rational_layers, p._visible_dem):
+            service.start.assert_called_once()
         p._updates.check.reset_mock()
         QTest.mouseClick(p._toolbar.widgetForAction(p.update_action), Qt.LeftButton)
         p._updates.check.assert_called_once_with(manual=True)
