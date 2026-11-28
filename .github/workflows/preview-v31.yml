@@ -37,6 +37,7 @@ jobs:
                   'caumax_consulta/po_clip.py',
                   'caumax_consulta/basin_hydrology_widget.py',
                   'caumax_consulta/basin_dialog.py',
+                  'caumax_consulta/assets/calcular_q_vs_t_modelo2.svg',
                   'caumax_consulta/assets/recorte_po_modelo2.svg',
                   'caumax_consulta/assets/exportar_po_modelo2.svg',
               }
