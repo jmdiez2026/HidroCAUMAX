@@ -756,11 +756,17 @@ class BasinDialog(QDialog):
         for widget in (self.table, self.hypsometry_widget, self.quantiles_widget):
             widget.setEnabled(not self._surface_pending)
         self.hypsometry_widget.set_analysis(self.analysis)
+        self.hypsometry_widget.bind_qgis_map(
+            self.iface, getattr(self.query, 'dem_path', ''))
         self._basin_hydrology_loading = True
         self.basin_hydrology_widget.set_analysis(self.analysis)
         self._basin_hydrology_loading = False
         self._quantiles_loading=True
         self.quantiles_widget.set_query(self.query, snapshot=quantile_snapshot)
+        if self._surface_pending:
+            self.quantiles_widget.course_profile.clear()
+        else:
+            self.quantiles_widget.bind_basin(self.analysis, self.iface)
         self._quantiles_loading=False
         self._update_context()
         self.progress.hide()
@@ -849,6 +855,10 @@ class BasinDialog(QDialog):
 
     def _quantiles_changed(self,*args):
         if self._quantiles_loading or self._smoothing_loading or self._disposed:return
+        if self.quantiles_widget.snapshot() is not None:
+            state = self.quantiles_widget.snapshot()
+            self.quantiles_widget.course_profile.set_period(
+                state['input_period'], state['extrapolate'])
         self._render_interpretations()
         self._cache_variant_state()
 
@@ -1646,6 +1656,8 @@ class BasinDialog(QDialog):
         if self._base_geometry_wkb is None:
             self._base_geometry_wkb = bytes(self.analysis.geometry_wkb)
         self._cancel_drainage()
+        self.hypsometry_widget._cancel_selection()
+        self.quantiles_widget.course_profile.clear()
         if self._basin_hydrology_controller is not None:
             self._basin_hydrology_controller.cancel()
         self._cancel_surface()
@@ -2447,6 +2459,8 @@ class BasinDialog(QDialog):
         if self._disposed:
             return
         self._disposed = True
+        self.hypsometry_widget.dispose()
+        self.quantiles_widget.course_profile.dispose()
         from .delineation_cleanup import unregister_dialog
         unregister_dialog(self)
         self._close_outlet_selection()
