@@ -46,7 +46,7 @@ class ReportChartCaptureTests(unittest.TestCase):
         self.assertEqual([item['key'] for item in captured], [
             'qci_return', 'main_course_qci', 'specific_contribution'])
         self.assertTrue(all(
-            item['png'].startswith(b'\\x89PNG\\r\\n\\x1a\\n')
+            item['png'].startswith(b'\x89PNG\r\n\x1a\n')
             for item in captured))
 
     def test_no_specific_graph_without_real_area_denominators(self):
