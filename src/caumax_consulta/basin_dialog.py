@@ -425,11 +425,11 @@ class BasinDialog(QDialog):
             original_height = baseline.sizeHint().height()
             baseline.setParent(None)
             baseline.deleteLater()
-            button.setStyleSheet('QPushButton { padding: 3px 6px; min-height: 0px; }')
+            button.setStyleSheet('QPushButton { padding: 3px 6px; }')
             button.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
             button.setFixedHeight(max(1, round(original_height * 0.90)))
         self.close_button.setStyleSheet('QPushButton { background-color: #FADBD8; color: #742A2A; '
-            'border: 1px solid #D69A9A; border-radius: 3px; padding: 3px 6px; min-height: 0px; } '
+            'border: 1px solid #D69A9A; border-radius: 3px; padding: 3px 6px; } '
             'QPushButton:hover { background-color: #F5C6C2; } '
             'QPushButton:pressed { background-color: #EDB0AA; } '
             'QPushButton:disabled { background-color: #F8ECEA; color: #A79390; border-color: #E3CBC7; }')
