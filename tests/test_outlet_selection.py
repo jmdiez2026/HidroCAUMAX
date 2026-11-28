@@ -12,7 +12,7 @@ from osgeo import gdal
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 from qgis.PyQt import sip
-from qgis.PyQt.QtCore import QCoreApplication, QEvent, QPoint, Qt
+from qgis.PyQt.QtCore import QCoreApplication, QEvent, QPoint, QSize, Qt
 from qgis.PyQt.QtTest import QTest
 from qgis.PyQt.QtWidgets import QDialog, QWidget
 from qgis.core import (QgsApplication, QgsCoordinateReferenceSystem, QgsCoordinateTransform,
@@ -337,6 +337,74 @@ class OutletSelectionTests(unittest.TestCase):
         self.assert_preview(dialog,3,4)
         dialog.reject()
         self.assertIs(self.canvas.mapTool(),replacement)
+
+    def test_hover_magnifier_is_4x_passive_and_click_preserves_exact_native_point(self):
+        """The visual loupe must never turn screen pixels into outlet coordinates."""
+        self.canvas.setExtent(QgsRectangle(499995, 4699950, 500050, 4700005))
+        self.canvas.show()
+        self.app.processEvents()
+        dialog = self.make_dialog(persistent=True, manual_selection_scope='raster_extent')
+        initial_extent = self.canvas.extent().toString(8)
+        dialog.start_picking()
+        lens = dialog._magnifier
+        self.assertIsNotNone(lens)
+        self.assertEqual(lens.size(), QSize(120, 120))
+        self.assertEqual(lens.ZOOM, 4)
+        self.assertIs(lens.parentWidget(), self.canvas)
+        self.assertTrue(lens.testAttribute(Qt.WA_TransparentForMouseEvents))
+        self.assertFalse(lens.isVisible())
+
+        target = QgsPointXY(*self.point(2, 6))
+        pixel = self.canvas.mapSettings().mapToPixel().transform(target)
+        cursor = QPoint(round(pixel.x()), round(pixel.y()))
+        QTest.mouseMove(self.canvas.viewport(), cursor)
+        QTest.qWait(85)
+        self.app.processEvents()
+        self.assertEqual(lens._cursor_pos, cursor)
+        self.assertTrue(lens.isVisible())
+        self.assertFalse(lens._sample.isNull())
+        self.assertEqual(self.canvas.extent().toString(8), initial_extent)
+
+        QTest.mouseClick(self.canvas.viewport(), Qt.LeftButton, Qt.NoModifier, cursor)
+        self.app.processEvents()
+        self.assert_preview(dialog, 2, 6)
+        self.assertFalse(lens.isVisible())
+        self.assertFalse(lens._refresh_timer.isActive())
+        self.assertFalse(dialog._magnifier_active)
+        self.assertEqual(self.canvas.extent().toString(8), initial_extent)
+        dialog.apply_button.click()
+        self.assertEqual(dialog.selection(), self.point(2, 6))
+        self.assertIsNone(dialog._magnifier)
+
+    def test_hover_magnifier_hides_on_leave_rearms_and_cleans_up_on_tool_switch(self):
+        self.canvas.setExtent(QgsRectangle(499995, 4699950, 500050, 4700005))
+        self.canvas.show()
+        self.app.processEvents()
+        dialog = self.make_dialog(persistent=True)
+        dialog.start_picking()
+        lens = dialog._magnifier
+        cursor = QPoint(170, 140)
+        QTest.mouseMove(self.canvas.viewport(), cursor)
+        QTest.qWait(85)
+        self.assertTrue(lens.isVisible())
+
+        QCoreApplication.sendEvent(self.canvas.viewport(), QEvent(QEvent.Leave))
+        self.assertFalse(lens.isVisible())
+        self.assertFalse(lens._refresh_timer.isActive())
+        dialog.start_picking()  # Already active: re-enable the passive preview.
+        QTest.mouseMove(self.canvas.viewport(), QPoint(175, 140))
+        QTest.qWait(85)
+        self.assertTrue(lens.isVisible())
+
+        replacement = QgsMapToolPan(self.canvas)
+        self.canvas.setMapTool(replacement)
+        self.assertIs(self.canvas.mapTool(), replacement)
+        self.assertIsNone(dialog._magnifier)
+        self.assertFalse(lens.isVisible())
+        self.assertFalse(dialog._picking)
+        self.assertTrue(dialog.isVisible())
+        dialog.reject()
+        self.assertIs(self.canvas.mapTool(), replacement)
 
     def test_real_mouse_click_reaches_map_tool_while_selector_is_open(self):
         self.canvas.setExtent(QgsRectangle(499995,4699950,500050,4700005))
