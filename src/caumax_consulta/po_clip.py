@@ -164,8 +164,36 @@ def export_pd_clip(source_path, destination):
     return export_po_clip(source_path, destination)
 
 
+def inspect_clipped_raster(path, kind, source_path):
+    """Check a saved clipped TIFF before restoring it, without modifying it.
+
+    A JSON path is a reference, never proof that the original file still
+    exists or that it is the product produced by HidroCAUMAX.
+    """
+    if kind not in ('po', 'pd'):
+        raise ValueError('Tipo de recorte desconocido.')
+    file = Path(path)
+    if (file.suffix.lower() not in ('.tif', '.tiff')
+            or not file.is_file() or file.is_symlink()):
+        raise FileNotFoundError('El ráster recortado no se encuentra: ' + str(file))
+    dataset = gdal.Open(str(file), gdal.GA_ReadOnly)
+    try:
+        if dataset is None or dataset.RasterCount != 1:
+            raise ValueError('El ráster recortado guardado no es válido.')
+        product = 'PO_BASIN_CLIP' if kind == 'po' else 'PD_BASIN_CLIP'
+        if dataset.GetMetadataItem('HIDROCAUMAX_PRODUCT') != product:
+            raise ValueError('El TIFF guardado no corresponde al recorte solicitado.')
+        if dataset.GetMetadataItem('HIDROCAUMAX_SOURCE') != str(source_path):
+            raise ValueError('El recorte no procede del ráster original indicado.')
+        if dataset.RasterXSize < 1 or dataset.RasterYSize < 1:
+            raise ValueError('El recorte guardado carece de datos espaciales.')
+    finally:
+        dataset = None
+    return file
+
+
 def publish_clipped_raster(path, kind='po', period=None, project=None):
-    """Add the clipped raster at the top of QGIS, checked as visible."""
+    """Add or reenable a clipped raster at the top of QGIS, checked as visible."""
     from qgis.core import QgsProject, QgsRasterLayer
     from .generated_cleanup import register_dataset
 
@@ -183,6 +211,19 @@ def publish_clipped_raster(path, kind='po', period=None, project=None):
     if kind == 'pd':
         layer.setCustomProperty('HidroCAUMAX/return_period', int(period))
     project = project or QgsProject.instance()
+    # Restoring a saved consultation must never duplicate layers that QGIS
+    # already has from a previous opening or a switched resolution.
+    for existing in project.mapLayers().values():
+        if (isinstance(existing, QgsRasterLayer) and existing.isValid()
+                and existing.source() == str(path)
+                and existing.customProperty('HidroCAUMAX/hydrology_clipped') == kind
+                and (kind == 'po' or
+                     existing.customProperty('HidroCAUMAX/return_period') == int(period))):
+            existing_node = project.layerTreeRoot().findLayer(existing.id())
+            if existing_node is not None:
+                existing_node.setItemVisibilityChecked(True)
+                existing.triggerRepaint()
+                return existing
     project.addMapLayer(layer)
     node = project.layerTreeRoot().findLayer(layer.id())
     if node is None:
