@@ -96,6 +96,26 @@ def attach_windows_fixture(test):
 
 
 class ReleasePackagingTests(unittest.TestCase):
+    def test_actual_plugin_manager_metadata_description_category_and_author(self):
+        """The shipped plugin ZIP and the self-hosted QGIS feed share exact labels."""
+        source = ROOT / 'src/caumax_consulta'
+        metadata = builder.read_metadata(source)
+        description = "Herramienta complementaria del plugin oficial CAUMAX v3.0: Consulta de Mapas de Caudales Máximos en régimen Natural (Qci-n) del SNZI. Aplicación del Método Racional Modificado IC-5.2."
+        category = "Caudales máximos - CAUMAX"
+        author = "JM Diez-Hernández (jmdiez@uva.es)"
+        self.assertEqual(metadata['description'], description)
+        self.assertEqual(metadata['category'], category)
+        self.assertEqual(metadata['author'], author)
+        self.assertEqual(metadata['email'], 'jmdiez@uva.es')
+        version = metadata['version']
+        xml = builder.repository_xml(metadata, 'jmdiez2026/HidroCAUMAX',
+                                     'v' + version, 'HidroCAUMAX_v' +
+                                     version.replace('.', '_') + '.zip')
+        entry = ET.fromstring(xml).find('pyqgis_plugin')
+        for field, expected in (('description', description), ('category', category),
+                                ('author_name', author), ('email', 'jmdiez@uva.es')):
+            self.assertEqual(entry.findtext(field), expected)
+
     def test_qgis_plugin_manager_uses_existing_toolbar_icon_from_second_screenshot(self):
         """The installed listing and remote plugin feed use one PNG asset."""
         source = ROOT / 'src/caumax_consulta'
