@@ -263,13 +263,13 @@ class BasinDialog(QDialog):
         degree_label = QLabel('Grado:', smoothing)
         # The blue cross is the accepted outlet of the currently displayed
         # basin, not the yellow originally clicked D8 selection.
-        self.export_closure_button = QPushButton('Exportar Cierre', smoothing)
+        self.export_closure_button = QPushButton('Guardar Cierre', smoothing)
         self.export_closure_button.setToolTip(
-            'Exportar la posición exacta de la cruz azul como SHP de punto '
+            'Guardar la posición exacta de la cruz azul como SHP de punto '
             'con círculo verde intenso y añadirla a QGIS.')
-        self.export_button = QPushButton('Exportar Cuenca', smoothing)
+        self.export_button = QPushButton('Guardar Divisoria', smoothing)
         self.export_button.setToolTip(
-            'Exportar los polígonos de la divisoria activa como SHP o GPKG.')
+            'Guardar los polígonos de la divisoria activa como SHP o GPKG.')
         for export_control in (self.export_closure_button, self.export_button):
             export_control.setStyleSheet(
                 'QPushButton { padding: 2px 3px; min-height: 0px; }')
@@ -552,10 +552,27 @@ class BasinDialog(QDialog):
                 break
             if points <= minimum:
                 # The long label, not a save button, may be abbreviated:
-                # leave both "Exportar Cierre" and "Exportar Cuenca" intact.
+                # leave both "Guardar Cierre" and "Guardar Divisoria" intact.
                 self.original_check.setText('Original')
                 break
             points = max(minimum,points-.25)
+        # Keep the existing type size. Measure the unmodified compact QGIS
+        # button at the final font, then increase its natural height by 5%.
+        # Do not compound the increase when the dialog is resized again.
+        for button in (self.export_closure_button, self.export_button):
+            native = QPushButton(button.text(), group)
+            native.setFont(button.font())
+            native.setStyleSheet(button.styleSheet())
+            native.setIcon(button.icon())
+            native.setIconSize(button.iconSize())
+            native.ensurePolished()
+            original_height = native.sizeHint().height()
+            native.setParent(None)
+            native.deleteLater()
+            requested = max(button.fontMetrics().height() + 4,
+                            round(original_height * 1.05))
+            if button.minimumHeight() != requested or button.maximumHeight() != requested:
+                button.setFixedHeight(requested)
 
     def _fit_drainage_controls(self):
         # The visible, full-width instance now belongs to Método racional.
