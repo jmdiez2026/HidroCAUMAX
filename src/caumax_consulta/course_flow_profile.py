@@ -441,6 +441,7 @@ class CourseFlowProfile(QWidget):
         self._generation = 0
         self._rows, self._flows = [], []
         self._areas, self._specific_values = [], []
+        self._area_note = ''
         self._selected = None
         self._crs = ''
         self._cell_width = self._cell_height = 0.
@@ -514,6 +515,13 @@ class CourseFlowProfile(QWidget):
         self.coverage_label.clear()
         self.hide()
 
+    def set_upstream_areas(self, analysis=None, *, note=''):
+        """Apply verified legacy D8 areas without resampling any official Qci."""
+        self._areas = main_course_areas(analysis) if analysis is not None else []
+        self._area_note = str(note)
+        if self._rows:
+            self._refresh()
+
     def configure(self, analysis, state, iface):
         if analysis is None or not state or iface is None:
             self.clear()
@@ -533,6 +541,7 @@ class CourseFlowProfile(QWidget):
         self._cell_width = float(analysis.cell_width)
         self._cell_height = float(analysis.cell_height)
         self._areas = areas
+        self._area_note = ''
         self.show()
         self.set_period(state['input_period'], state['extrapolate'])
         if key == self._key:
@@ -614,7 +623,10 @@ class CourseFlowProfile(QWidget):
             f'Con caudal válido: {counts["valid"]} '
             f'(Q=0 en {counts["zeros"]}) · '
             f'Sin dato SNCZI: {counts["missing"]}. '
-            'Azul: Q>0 · Verde: Q=0 válido · Gris: NoData (sin interpolar).')
+            'Azul: Q>0 · Verde: Q=0 válido · Gris: NoData (sin interpolar).'
+            + ((' ' + self._area_note) if self._area_note else
+               (' Aportación específica: falta el área drenante D8.'
+                if self._rows and len(self._areas) != len(self._rows) else '')))
 
     def snapshot(self):
         """Portable original Qci samples for every D8 course centre and return period."""
