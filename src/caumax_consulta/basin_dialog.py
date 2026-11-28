@@ -414,8 +414,17 @@ class BasinDialog(QDialog):
         report_buttons = (self.save_project_button, self.open_project_button,
                           self.report_button, self.close_button)
         for button in report_buttons:
-            button.ensurePolished()
-            original_height = button.sizeHint().height()
+            # The live button may inherit a compact Qt minimum size from an
+            # earlier style. Measure a fresh *native* button before setting
+            # 90%: otherwise Qt 5 can calculate an 8 px tall control.
+            baseline = QPushButton(button.text(), reports)
+            baseline.setFont(button.font())
+            baseline.setIcon(button.icon())
+            baseline.setIconSize(button.iconSize())
+            baseline.ensurePolished()
+            original_height = baseline.sizeHint().height()
+            baseline.setParent(None)
+            baseline.deleteLater()
             button.setStyleSheet('QPushButton { padding: 3px 6px; min-height: 0px; }')
             button.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
             button.setFixedHeight(max(1, round(original_height * 0.90)))
