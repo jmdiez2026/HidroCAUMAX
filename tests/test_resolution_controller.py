@@ -242,6 +242,28 @@ class ResolutionControllerTests(unittest.TestCase):
         self.assertGreater(c.bounds[2],manual.outlet_x)
         self.assertGreater(c.bounds[3],manual.outlet_y)
 
+    def test_manual_fine_selection_carries_base_footprint_and_border_guard(self):
+        controller=self.controller()
+        unresolved=dict(resolution_key='25',original_x=230.2,original_y=245.3,
+            search_radius_m=500.,reference_area_m2=self.base.area_m2,
+            dem_path='/pending/mdt.tif',directions_path='/pending/d8.tif',
+            crs_wkt=self.base.crs_wkt)
+        controller.outlet_selection_context=unresolved
+        context=controller.selection_context()
+        self.assertTrue(context['verify_reference_overlap'])
+        self.assertTrue(context['require_complete_coverage'])
+        self.assertEqual(bytes.fromhex(context['reference_geometry_wkb_hex']),
+                         bytes(self.base.geometry_wkb))
+        self.assertEqual(context['reference_crs_wkt'],self.base.crs_wkt)
+        self.assertEqual(context['manual_selection_scope'],'raster_extent')
+        self.assertNotIn('reference_geometry_wkb_hex',unresolved)
+        # Native source resolution is not an implicit re-interpretation of
+        # the user's reference: only refined 25/5 m variants get this guard.
+        controller.outlet_selection_context=dict(unresolved,resolution_key=controller._base_key)
+        base=controller.selection_context()
+        self.assertNotIn('verify_reference_overlap',base)
+        self.assertNotIn('require_complete_coverage',base)
+
     def test_manual_choice_applies_complete_variant_without_requerying_caumax_or_downloading(self):
         c=self.controller()
         self.discover(c)
