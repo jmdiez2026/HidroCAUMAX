@@ -37,6 +37,25 @@ METRICS = (
 BY_KEY = {metric.key: metric for metric in METRICS}
 
 
+def morphology_table_label(metric):
+    """Show dimensional units next to the parameter name in the QGIS table.
+
+    The PDF has its own Unit column and still uses Metric.label/Metric.unit.
+    Cell resolution is measured in metres; its value historically contained
+    the unit instead of storing it in Metric.unit.
+    """
+    unit = 'm' if metric.key == 'cell_resolution' else metric.unit
+    return f'{metric.label} [{unit}]' if unit else metric.label
+
+
+def morphology_table_value(key, value):
+    """Only the onscreen resolution pair omits units already in its heading."""
+    formatted = format_value(key, value)
+    if key == 'cell_resolution' and formatted != 'n.d.':
+        return formatted.removesuffix('m').replace('mx', ' × ')
+    return formatted
+
+
 def format_value(key, value):
     """Spanish numeric text, without unit; undefined values are never zero."""
     if key == 'cell_resolution':
