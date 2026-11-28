@@ -389,6 +389,31 @@ class SessionStoreTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.save(state={**self.state, 'hypsometric_dimensionless': 'yes'})
 
+    def test_hypsometric_selected_altitude_and_opacity_roundtrip_and_legacy(self):
+        state = dict(self.state, hypsometric_selected_index=80,
+                     hypsometric_opacity=35)
+        self.save(state=state)
+        restored = session_store.load_session(self.path)
+        self.assertEqual(restored.smoothing_state['hypsometric_selected_index'], 80)
+        self.assertEqual(restored.smoothing_state['hypsometric_opacity'], 35)
+        legacy = dict(self.state)
+        self.save(state=legacy)
+        reopened = session_store.load_session(self.path)
+        self.assertNotIn('hypsometric_selected_index', reopened.smoothing_state)
+        self.assertNotIn('hypsometric_opacity', reopened.smoothing_state)
+        for invalid in (-1, 202, '80', True):
+            with self.subTest(index=invalid), self.assertRaises(ValueError):
+                self.save(state={**state, 'hypsometric_selected_index':invalid})
+        for invalid in (-1, 101, 35.5, True):
+            with self.subTest(opacity=invalid), self.assertRaises(ValueError):
+                self.save(state={**state, 'hypsometric_opacity':invalid})
+        self.save(state={**state, 'hypsometric_selected_index':None,
+                         'hypsometric_opacity':0})
+        self.assertIsNone(session_store.load_session(self.path).smoothing_state[
+            'hypsometric_selected_index'])
+        self.assertEqual(session_store.load_session(self.path).smoothing_state[
+            'hypsometric_opacity'], 0)
+
     def test_new_optional_states_restore_per_resolution_and_legacy_uses_dimensional_curve(self):
         selected, state = self.multiresolution('25')
         for key, variant in state['variants'].items():
