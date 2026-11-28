@@ -178,6 +178,7 @@ class DialogLayoutTests(unittest.TestCase):
         self.assertTrue(all(button.iconSize().width() == 16 for button in buttons))
         self.assertEqual(len({(button.width(), button.height()) for button in buttons}), 1)
         self.assertTrue(all('#D9F0FF' in button.styleSheet() for button in buttons))
+        natural_heights = []
         for button in buttons:
             sample = QPushButton(button.text(), button.parentWidget())
             sample.setFont(button.font())
@@ -185,11 +186,12 @@ class DialogLayoutTests(unittest.TestCase):
             sample.setIconSize(button.iconSize())
             sample.setStyleSheet(button.styleSheet())
             sample.ensurePolished()
-            self.assertEqual(button.height(), max(
-                button.fontMetrics().height() + 4, round(
-                    max(item.sizeHint().height() for item in
-                        [sample] + [button]) * 1.05)) if False else button.height())
+            natural_heights.append(sample.sizeHint().height())
             sample.deleteLater()
+        target_height = max(
+            round(max(natural_heights) * 1.05),
+            max(button.fontMetrics().height() + 4 for button in buttons))
+        self.assertTrue(all(button.height() == target_height for button in buttons))
         for width in (520, 650, 900):
             with self.subTest(width=width):
                 dialog.resize(width, 900)
