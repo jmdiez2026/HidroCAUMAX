@@ -96,9 +96,13 @@ class NativeCaumaxPlugin(QObject):
         except OSError as error:
             self.iface.messageBar().pushMessage('HidroCAUMAX',
                 'No se ha podido preparar la carpeta de exportación: ' + str(error), level=Qgis.Warning, duration=10)
-        self.action = QAction('Restaurar herramientas HidroCAUMAX', self.iface.mainWindow())
-        self.action.triggered.connect(self._activate_tools)
+        self.action = QAction('Cargar capas de CAUMAX', self.iface.mainWindow())
+        self.action.triggered.connect(self._load_native_caumax_layers)
         self.iface.addPluginToMenu(self.MENU, self.action)
+        self.restore_action = QAction('Restaurar herramientas HidroCAUMAX',
+                                      self.iface.mainWindow())
+        self.restore_action.triggered.connect(self._activate_tools)
+        self.iface.addPluginToMenu(self.MENU, self.restore_action)
         self.open_action = QAction('Abrir proyecto de cuenca…', self.iface.mainWindow())
         self.open_action.triggered.connect(self._open_saved_project)
         self.iface.addPluginToMenu(self.MENU, self.open_action)
@@ -151,7 +155,7 @@ class NativeCaumaxPlugin(QObject):
         self.help_action.setIcon(QIcon(str(Path(__file__).parent / 'assets' / 'help_manual.svg')))
         for action, caption, tip in (
                 (self.action, 'HidroCAUMAX v.1.0',
-                 'Herramientas activas automáticamente. Pulsar para restaurar los botones de HidroCAUMAX.'),
+                 'Complementos > CAUMAX > CARGAR CAPAS DE CAUMAX'),
                 (self.reference_action, 'Capas', 'Cargar las capas de referencia HidroCAUMAX'),
                 (self.open_action, 'Abrir cuenca', 'Abrir un proyecto de cuenca guardado'),
                 (self.clear_layers_action, 'Limpiar capas',
@@ -167,6 +171,30 @@ class NativeCaumaxPlugin(QObject):
         self._toolbar_startup_signal = getattr(self.iface, 'initializationCompleted', None)
         if self._toolbar_startup_signal is not None:
             self._toolbar_startup_signal.connect(self._complete_startup)
+
+    def _load_native_caumax_layers(self, *args):
+        """Trigger the original CAUMAX menu action, without duplicating its loader."""
+        def normal(text):
+            return str(text).replace('&', '').strip().rstrip('.…').strip().casefold()
+
+        plugin_menu = self.iface.pluginMenu()
+        for parent_action in plugin_menu.actions():
+            menu = parent_action.menu()
+            if menu is None or normal(parent_action.text()) != 'caumax':
+                continue
+            for child_action in menu.actions():
+                if normal(child_action.text()) == 'cargar capas de caumax':
+                    if child_action.isEnabled():
+                        child_action.trigger()
+                    else:
+                        QMessageBox.warning(
+                            self.iface.mainWindow(), 'Cargar capas de CAUMAX',
+                            'La acción CARGAR CAPAS DE CAUMAX está deshabilitada.')
+                    return
+        QMessageBox.warning(
+            self.iface.mainWindow(), 'Cargar capas de CAUMAX',
+            'No se encuentra Complementos > CAUMAX > CARGAR CAPAS DE CAUMAX. '
+            'Comprueba que el complemento oficial CAUMAX está activado.')
 
     def _activate_tools(self, *args):
         # Re-scan existing dialogs as well as those opened after plugin loading.
@@ -448,11 +476,18 @@ class NativeCaumaxPlugin(QObject):
         self._native_layers_view.stop()
         if hasattr(self, 'action'):
             try:
-                self.action.triggered.disconnect(self._activate_tools)
+                self.action.triggered.disconnect(self._load_native_caumax_layers)
             except (RuntimeError, TypeError):
                 pass
             self.iface.removePluginMenu(self.MENU, self.action)
             self.action.deleteLater()
+        if hasattr(self, 'restore_action'):
+            try:
+                self.restore_action.triggered.disconnect(self._activate_tools)
+            except (RuntimeError, TypeError):
+                pass
+            self.iface.removePluginMenu(self.MENU, self.restore_action)
+            self.restore_action.deleteLater()
         if hasattr(self, 'open_action'):
             try:
                 self.open_action.triggered.disconnect(self._open_saved_project)
