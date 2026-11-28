@@ -1,13 +1,14 @@
 """Choose a native D8 cell explicitly, without changing or recalculating data."""
 import math
+from pathlib import Path
 
 from osgeo import gdal
 from qgis.PyQt import sip
-from qgis.PyQt.QtCore import QEvent, QPoint, QRect, QTimer, Qt, pyqtSignal
-from qgis.PyQt.QtGui import QColor, QPainter, QPainterPath, QPen, QPixmap
+from qgis.PyQt.QtCore import QEvent, QPoint, QRect, QSize, QTimer, Qt, pyqtSignal
+from qgis.PyQt.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
 from qgis.PyQt.QtWidgets import (
     QCheckBox, QDialog, QDialogButtonBox, QGridLayout, QHBoxLayout, QLabel,
-    QPushButton, QSpinBox, QVBoxLayout, QWidget,
+    QPushButton, QSpinBox, QStyle, QVBoxLayout, QWidget,
 )
 from qgis.core import QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsPointXY, QgsProject
 from qgis.gui import QgsMapToolEmitPoint, QgsVertexMarker
@@ -219,12 +220,27 @@ class OutletSelectionDialog(QDialog):
         self.south_button = QPushButton('Sur', self)
         self.east_button = QPushButton('Este', self)
         self.west_button = QPushButton('Oeste', self)
-        for button,row,col,dr,dc in (
-                (self.north_button,0,1,-1,0), (self.south_button,2,1,1,0),
-                (self.east_button,1,2,0,1), (self.west_button,1,0,0,-1)):
+        for button,row,col,dr,dc,standard_icon,caption in (
+                (self.north_button,0,1,-1,0,QStyle.SP_ArrowUp,'Norte'),
+                (self.south_button,2,1,1,0,QStyle.SP_ArrowDown,'Sur'),
+                (self.east_button,1,2,0,1,QStyle.SP_ArrowRight,'Este'),
+                (self.west_button,1,0,0,-1,QStyle.SP_ArrowLeft,'Oeste')):
             arrows.addWidget(button,row,col)
+            button.setText('')
+            button.setIcon(self.style().standardIcon(standard_icon))
+            button.setIconSize(QSize(22, 22))
+            button.setToolTip(caption + ' · desplazar el cierre ' +
+                              str(self.step.value()) + ' celda(s)')
+            button.setAccessibleName(caption)
+            button.setMinimumHeight(36)
             button.clicked.connect(lambda checked=False,dr=dr,dc=dc:self.move_cell(dr,dc))
-        self.pick_button = QPushButton('Elegir en el mapa', self)
+        self.pick_button = QPushButton('', self)
+        self.pick_button.setIcon(QIcon(str(
+            Path(__file__).resolve().parent / 'assets' / 'ajuste_cierre_modelo4.svg')))
+        self.pick_button.setIconSize(QSize(24, 24))
+        self.pick_button.setToolTip('Elegir en el mapa')
+        self.pick_button.setAccessibleName('Elegir en el mapa')
+        self.pick_button.setMinimumHeight(36)
         self.pick_button.clicked.connect(self.start_picking)
         arrows.addWidget(self.pick_button,1,1)
         layout.addLayout(arrows)
