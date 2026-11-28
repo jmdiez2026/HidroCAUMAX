@@ -148,6 +148,9 @@ class BasinDialog(QDialog):
         self._quantiles_loading = False
         self._basin_hydrology_controller = None
         self._basin_hydrology_loading = False
+        self._auto_hydrology_timer = QTimer(self)
+        self._auto_hydrology_timer.setSingleShot(True)
+        self._auto_hydrology_timer.timeout.connect(self._calculate_auto_basin_hydrology)
         self._drainage_timer = QTimer(self)
         self._drainage_timer.setSingleShot(True)
         self._drainage_timer.setInterval(500)
@@ -233,14 +236,8 @@ class BasinDialog(QDialog):
         layout.addWidget(self.quantiles_widget)
         from .basin_hydrology_widget import BasinHydrologyWidget
         self.basin_hydrology_widget = BasinHydrologyWidget(body)
-        self.basin_hydrology_widget.p0_button.setToolTip(
-            'Media por área de la capa P₀ configurada en CAUMAX sobre la divisoria activa, original o suavizada. '
-            'La capa P₀ conserva su resolución nativa; no se aplica β.')
-        self.basin_hydrology_widget.rainfall_button.setToolTip(
-            'Medias por área de las capas de precipitación configuradas en CAUMAX. '
-            'Conservan su resolución nativa; el MDT activo determina la divisoria de la cuenca.')
-        self.basin_hydrology_widget.calculate_p0.connect(lambda: self._calculate_basin_hydrology('p0'))
-        self.basin_hydrology_widget.calculate_rainfall.connect(lambda: self._calculate_basin_hydrology('rainfall'))
+        # P₀ and all six precipitation means are computed automatically in
+        # background. The active basin/closure is the only calculation input.
         self.basin_hydrology_widget.changed.connect(self._basin_hydrology_changed)
         self.basin_hydrology_widget.cancel_requested.connect(self._cancel_basin_hydrology)
         layout.addWidget(self.basin_hydrology_widget)
@@ -728,6 +725,9 @@ class BasinDialog(QDialog):
         if self._pending_external_basin is not None:
             pending, self._pending_external_basin = self._pending_external_basin, None
             self.adopt_refined_basin(*pending)
+        # New native basin: no clicks needed. Refined/smoothed transitions
+        # compute these statistics as part of their complete SurfaceTask.
+        self._auto_hydrology_timer.start(0)
 
     def _display_analysis(self, quantile_snapshot=None):
         self._interpretations_valid = True
@@ -845,6 +845,24 @@ class BasinDialog(QDialog):
         return bool(self._surface_pending or
                     (self._basin_hydrology_controller and self._basin_hydrology_controller.busy))
 
+    def _calculate_auto_basin_hydrology(self):
+        """Start one joint job only for a stable, uncached native basin.
+
+        Existing saved consultations remain usable without source rasters:
+        restoring them does not trigger a new job. When an outlet or surface
+        changes, the full SurfaceTask recalculates both metrics together.
+        """
+        if (self._disposed or self.analysis is None or self._surface_pending
+                or self._resolution_pending or not self._surface_valid):
+            return
+        state = self.basin_hydrology_widget.snapshot() or {}
+        if (state.get('p0_result') is not None
+                and len(state.get('rainfall_results') or {}) == 6):
+            return
+        if self._basin_hydrology_controller and self._basin_hydrology_controller.busy:
+            return
+        self._calculate_basin_hydrology('both')
+
     def _calculate_basin_hydrology(self, kind):
         if (self._disposed or self.analysis is None or self._saving_project
                 or self._resolution_pending or self._surface_pending or not self._surface_valid):
@@ -906,6 +924,7 @@ class BasinDialog(QDialog):
             self.basin_hydrology_widget.set_busy(False, text)
 
     def _cancel_basin_hydrology(self):
+        self._auto_hydrology_timer.stop()
         if self._surface_pending:
             self._cancel_surface()
             self._surface_valid = False
