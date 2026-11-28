@@ -25,6 +25,13 @@ def export_directory():
     return folder
 
 
+def generated_layers_directory():
+    """Persistent shapefile output for the active QGIS user profile."""
+    folder = Path(QgsApplication.qgisSettingsDirPath()) / 'HidroCAUMAX' / 'Capas_Generadas'
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder
+
+
 def po_path():
     return PLUGIN_ROOT / FOLDER_NAME / PO_FILENAME
 
