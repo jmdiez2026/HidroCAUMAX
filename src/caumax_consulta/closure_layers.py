@@ -18,6 +18,14 @@ GREEN_CLOSURE_LABEL = 'Cierre del curso principal · cruz azul'
 GREEN_CLOSURE_ROLE = 'HidroCAUMAX/main_course_outlet'
 
 
+def suggested_course_closure_path(analysis):
+    """Default SHP for the accepted blue-cross outlet in active QGIS profile."""
+    from .improved_storage import generated_layers_directory
+    x = round(_finite(analysis.outlet_x))
+    y = round(_finite(analysis.outlet_y))
+    return generated_layers_directory() / f'Cierre_CursoPrincipal_X{x}_Y{y}.shp'
+
+
 def closure_symbol():
     """Bright yellow 5 mm circle and contrasting near-black outline."""
     return QgsMarkerSymbol.createSimple({
