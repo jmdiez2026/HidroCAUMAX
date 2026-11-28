@@ -115,6 +115,7 @@ class BasinDialog(QDialog):
         self._outlet_dismissed_token = None
         self._delineation_cleared = False
         self._new_selection_handler = None
+        self._new_selection_pending = None
         self._surface_task = None
         self._surface_generation = 0
         self._surface_pending = False
@@ -614,9 +615,10 @@ class BasinDialog(QDialog):
             layout.addWidget(buttons[1], 2, 0)
             layout.addWidget(buttons[2], 2, 1)
 
-    def set_new_selection_handler(self, handler):
-        """Native CAUMAX host supplies the selection action only when supported."""
+    def set_new_selection_handler(self, handler, pending=None):
+        """The native host starts and reports the active CAUMAX map pick."""
         self._new_selection_handler = handler
+        self._new_selection_pending = pending
         self.new_selection_button.setEnabled(callable(handler) and not self._disposed)
 
     def _new_selection(self, *args):
@@ -789,6 +791,12 @@ class BasinDialog(QDialog):
         self._parent_connections.append((signal, slot))
 
     def _parent_query_changed(self, *args):
+        # The native point picker changes X, Y and the selected flow in several
+        # Qt signals. While our Nueva selección owns the picker, preserve this
+        # window and its previous results until CAUMAX confirms a *valid*
+        # complete query. The host then replaces it atomically.
+        if callable(self._new_selection_pending) and self._new_selection_pending():
+            return
         self.reject()
 
     def _start(self):
