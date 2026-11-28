@@ -2246,7 +2246,16 @@ class BasinDialog(QDialog):
             if current.get('basin_hydrology') != snapshot.get('basin_hydrology'):
                 raise ValueError('La precipitación o el P₀ han cambiado durante la captura. Vuelve a guardar.')
             self._map_data = captured
-        return self.get_smoothing_state()
+        # Save every currently available graph, including the longitudinal
+        # Qci profile not previously included in exported consultation PDFs.
+        from .report_charts import capture_available_charts
+        state = self.get_smoothing_state()
+        state['chart_snapshots'] = capture_available_charts(self)
+        course = self.quantiles_widget.course_profile
+        profile = course.snapshot() if not is_rational_query(self.query) else None
+        if profile is not None:
+            state['course_flow_profile'] = profile
+        return state
 
     def save_project(self, destination):
         from .session_store import save_session
@@ -2466,6 +2475,8 @@ class BasinDialog(QDialog):
         self._base_drainage_state = deepcopy(state.get('base_drainage_state') or self._drainage_state)
         self._display_analysis(quantile_snapshot=state.get('flow_quantiles'))
         self._apply_smoothing_snapshot(state)
+        if state.get('course_flow_profile') and not is_rational_query(self.query):
+            self.quantiles_widget.course_profile.restore_snapshot(state['course_flow_profile'])
         self._setup_resolutions(getattr(saved,'resolution_state',None))
 
     def _apply_smoothing_snapshot(self, state):
