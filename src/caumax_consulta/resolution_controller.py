@@ -185,10 +185,14 @@ def _build(option,bounds,basin_crs,source_crs,x,y,cache_root,snap_options,cancel
     if snap:
         metadata['outlet_snap']=deepcopy(snap)
     if analysis.touches_boundary:
-        note=('La cuenca sigue alcanzando el borde del MDT tras dos ampliaciones de cobertura. '
-              'La divisoria puede estar truncada; compruebe la extensión antes de utilizarla.')
-        analysis=replace(analysis,notes=tuple(analysis.notes)+(note,))
-        metadata['coverage_warning']=note
+        # Never publish a clipped basin merely because the retry budget ended:
+        # the hard raster edge may look like an artificial watershed divide.
+        raise ValueError(
+            'La cuenca del MDT de ' + _key(getattr(option, 'resolution_m',
+                                                    getattr(option, 'resolution', None))) +
+            ' m sigue tocando el borde del ráster tras tres intentos y dos ampliaciones '
+            'de cobertura. La divisoria quedaría truncada: no se aplica ni se guarda. '
+            'Utiliza un MDT que cubra toda la cuenca aportante o revisa la fuente D8.')
     publish('Análisis de '+label+' terminado',100)
     return {'analysis':analysis,'directions_path':str(result.directions_path),
             'dem_path':str(result.dem_path),'metadata':metadata}
