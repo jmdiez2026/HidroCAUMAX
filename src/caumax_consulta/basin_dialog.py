@@ -346,6 +346,13 @@ class BasinDialog(QDialog):
         self.clear_delineation_button.setEnabled(False)
         self.clear_delineation_button.clicked.connect(self._clear_delineation)
         resolution_actions.addWidget(self.clear_delineation_button)
+        # 105% of the existing compact native button height, measured once.
+        # Icon choices are still pending; neither button's function changes.
+        for button in (self.outlet_adjust_button, self.clear_delineation_button):
+            button.ensurePolished()
+            native_height = button.sizeHint().height()
+            button.setFixedHeight(max(button.fontMetrics().height() + 4,
+                                      round(native_height * 1.05)))
         resolution_actions.addStretch()
         resolution_layout.addLayout(resolution_actions)
         self.resolution_checkboxes = {}
