@@ -6,8 +6,8 @@ from dataclasses import replace
 from copy import deepcopy
 from types import SimpleNamespace
 
-from qgis.PyQt.QtCore import Qt, QTimer, QSettings, QEvent
-from qgis.PyQt.QtGui import QColor, QFont, QFontMetrics
+from qgis.PyQt.QtCore import Qt, QTimer, QSettings, QEvent, QSize
+from qgis.PyQt.QtGui import QColor, QFont, QFontMetrics, QIcon
 from qgis.PyQt.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QDialog, QDialogButtonBox,
     QDoubleSpinBox, QSpinBox, QFileDialog, QFrame, QGridLayout, QGroupBox, QHBoxLayout, QMessageBox,
@@ -401,6 +401,14 @@ class BasinDialog(QDialog):
         buttons.setSizePolicy(QSizePolicy.Maximum,QSizePolicy.Fixed)
         self.close_button = buttons.addButton('Cerrar', QDialogButtonBox.RejectRole)
         buttons.rejected.connect(self.close)
+        # Compact vector icons reproduce the three selected designs without
+        # changing the text, positions or native save/open/report connections.
+        for button, icon_name in (
+                (self.save_project_button, 'guardar_consulta_modelo3.svg'),
+                (self.open_project_button, 'abrir_consulta_modelo2.svg'),
+                (self.report_button, 'informe_pdf_modelo1.svg')):
+            button.setIcon(QIcon(str(Path(__file__).parent / 'assets' / icon_name)))
+            button.setIconSize(QSize(16, 16))
         # Each of the four buttons is exactly 90% of its own original
         # (pre-compact-style) QGIS height. Keep the font size unchanged.
         report_buttons = (self.save_project_button, self.open_project_button,
