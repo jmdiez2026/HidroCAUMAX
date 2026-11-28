@@ -112,6 +112,24 @@ class PdCedexClipTests(unittest.TestCase):
             pd_path, kind='pd', period=100, project=self.project), pd_layer)
         self.assertEqual(len(set(self.project.mapLayers())-self.original_layer_ids), 2)
 
+    def test_reopened_user_export_is_visible_without_reenrolling_in_cleanup(self):
+        from unittest.mock import patch
+        output = self.directory / 'saved_pd_t100.tif'
+        clip_po_to_basin(self.original, self.polygon, self.wkt,
+                          output, kind='pd')
+        with patch('caumax_consulta.generated_cleanup.register_dataset') as register:
+            layer = publish_clipped_raster(
+                output, kind='pd', period=100, project=self.project,
+                register_generated=False)
+            self.assertTrue(layer.isValid())
+            node = self.project.layerTreeRoot().findLayer(layer.id())
+            self.assertTrue(node.itemVisibilityChecked())
+            register.assert_not_called()
+            self.assertIs(publish_clipped_raster(
+                output, kind='pd', period=100, project=self.project,
+                register_generated=False), layer)
+            register.assert_not_called()
+
     def test_period_selector_is_in_requested_row_and_disables_old_export(self):
         widget = BasinHydrologyWidget()
         self.addCleanup(widget.close)
