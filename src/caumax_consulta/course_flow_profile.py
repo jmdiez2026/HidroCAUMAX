@@ -1,0 +1,528 @@
+"""Interactive SNCZI Qci along the existing D8 course, measured from outlet.
+
+All Qci values come from the original CAUMAX/SNCZI rasters. The native D8
+course supplies the sample centres and the cumulative chainage only. Raster
+readout is cancellable and off the Qt GUI thread; missing cells remain missing.
+"""
+import hashlib
+import math
+from bisect import bisect_left
+
+from osgeo import gdal, ogr, osr
+from qgis.PyQt import sip
+from qgis.PyQt.QtCore import QPointF, QRectF, Qt, pyqtSignal
+from qgis.PyQt.QtGui import QColor, QPainter, QPainterPath, QPen
+from qgis.PyQt.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from qgis.core import (QgsApplication, QgsCoordinateReferenceSystem,
+                       QgsCoordinateTransform, QgsPointXY, QgsProject, QgsTask,
+                       QgsWkbTypes)
+from qgis.gui import QgsMapToolEmitPoint, QgsRubberBand, QgsVertexMarker
+
+from .flow_quantiles import PERIODS, estimate_flow
+
+
+MAX_PROFILE_CELLS = 100_000
+
+
+def _reference(wkt):
+    srs = osr.SpatialReference()
+    if not wkt or srs.ImportFromWkt(str(wkt)) != 0:
+        raise ValueError('Falta el sistema de referencia del perfil SNCZI.')
+    srs.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+    return srs
+
+
+def course_centres(wkb, crs_wkt):
+    """Actual D8 centres with cumulative distance in km, outlet at zero."""
+    _reference(crs_wkt)
+    geometry = ogr.CreateGeometryFromWkb(bytes(wkb))
+    if (geometry is None or
+            ogr.GT_Flatten(geometry.GetGeometryType()) != ogr.wkbLineString):
+        raise ValueError('El curso principal no es una línea D8 válida.')
+    count = geometry.GetPointCount()
+    if count > MAX_PROFILE_CELLS:
+        raise ValueError('Demasiadas celdas del curso para un perfil interactivo.')
+    rows = []
+    previous = None
+    station = 0.0
+    for i in range(count):
+        x, y, _ = geometry.GetPoint(i)
+        if not (math.isfinite(x) and math.isfinite(y)):
+            raise ValueError('El curso principal contiene coordenadas no finitas.')
+        if previous is not None:
+            segment = math.hypot(x - previous[0], y - previous[1])
+            if not math.isfinite(segment) or segment <= 0:
+                raise ValueError('El curso principal contiene tramos de longitud nula.')
+            station += segment / 1000.
+        rows.append((station, float(x), float(y)))
+        previous = (x, y)
+    return rows
+
+
+def sample_course_quantiles(wkb, crs_wkt, paths, cancelled=lambda: False):
+    """Sample each original official Qci raster at every course-cell centre.
+
+    One per-raster cache prevents repeated GDAL I/O while 25-m D8 cells cross
+    the same 500-m SNCZI flow cell. Source rasters are never changed.
+    """
+    centres = course_centres(wkb, crs_wkt)
+    if len(paths) != len(PERIODS):
+        raise ValueError('Se requieren seis rutas de caudales SNCZI.')
+    source = _reference(crs_wkt)
+    samplers = []
+    for path in paths:
+        raw = str(path or '').split('|', 1)[0]
+        ds = gdal.Open(raw, gdal.GA_ReadOnly) if raw else None
+        if ds is None or ds.RasterCount != 1:
+            samplers.append(None)
+            continue
+        srs = _reference(ds.GetProjectionRef())
+        transformation = (None if source.IsSame(srs)
+                          else osr.CoordinateTransformation(source, srs))
+        inverse = gdal.InvGeoTransform(ds.GetGeoTransform())
+        band = ds.GetRasterBand(1)
+        scale = band.GetScale()
+        offset = band.GetOffset()
+        scale = 1. if scale is None else float(scale)
+        offset = 0. if offset is None else float(offset)
+        if inverse is None or not math.isfinite(scale) or not math.isfinite(offset):
+            samplers.append(None)
+            continue
+        samplers.append((ds, band, band.GetNoDataValue(), transformation,
+                         inverse, scale, offset, {}))
+    samples = []
+    for i, (distance, x, y) in enumerate(centres):
+        if i % 256 == 0 and cancelled():
+            raise InterruptedError('Perfil SNCZI cancelado.')
+        flows = []
+        for sampler in samplers:
+            if sampler is None:
+                flows.append(None)
+                continue
+            ds, band, nodata, transform, inv, scale, offset, cache = sampler
+            try:
+                px, py = x, y
+                if transform is not None:
+                    px, py, _ = transform.TransformPoint(x, y)
+                fx, fy = gdal.ApplyGeoTransform(inv, px, py)
+                col, row = math.floor(fx), math.floor(fy)
+                if not (0 <= col < ds.RasterXSize and 0 <= row < ds.RasterYSize):
+                    flows.append(None)
+                    continue
+                key = (col, row)
+                if key not in cache:
+                    raw = float(band.ReadAsArray(col, row, 1, 1)[0, 0])
+                    valid = (math.isfinite(raw)
+                             and (nodata is None or raw != nodata)
+                             and band.GetMaskBand().ReadAsArray(col, row, 1, 1)[0, 0] != 0)
+                    value = raw * scale + offset if valid else None
+                    cache[key] = (value if value is not None and
+                                  math.isfinite(value) and value >= 0 else None)
+                    if len(cache) > 20_000:
+                        cache.clear()
+                        cache[key] = value if value is not None and math.isfinite(value) and value >= 0 else None
+                flows.append(cache[key])
+            except (RuntimeError, ValueError, TypeError, OverflowError):
+                flows.append(None)
+        samples.append((distance, x, y, tuple(flows)))
+    if cancelled():
+        raise InterruptedError('Perfil SNCZI cancelado.')
+    return samples
+
+
+class _ProfileTask(QgsTask):
+    def __init__(self, generation, wkb, crs, paths, callback):
+        super().__init__('HidroCAUMAX: perfil de caudales SNCZI', QgsTask.CanCancel)
+        self.generation, self.wkb, self.crs, self.paths = generation, wkb, crs, paths
+        self.callback = callback
+        self.result = None
+        self.error = ''
+
+    def run(self):
+        try:
+            self.result = sample_course_quantiles(
+                self.wkb, self.crs, self.paths, self.isCanceled)
+            return not self.isCanceled()
+        except InterruptedError:
+            return False
+        except Exception as error:
+            self.error = str(error)
+            return False
+
+    def finished(self, success):
+        self.callback(self, success)
+
+
+class _ProfilePlot(QWidget):
+    chosen = pyqtSignal(int)
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.rows = []
+        self.flows = []
+        self.selected = None
+        self.chart = QRectF()
+        self.setMinimumHeight(260)
+
+    @staticmethod
+    def number(value):
+        return f'{value:.2f}'.replace('.', ',')
+
+    def show_profile(self, rows, flows, selected):
+        self.rows, self.flows, self.selected = list(rows), list(flows), selected
+        self.update()
+
+    def frame(self):
+        self.chart = QRectF(76, 26, max(50, self.width() - 98),
+                            max(80, self.height() - 90))
+        length = max(1e-9, self.rows[-1][0]) if self.rows else 1.
+        known = [q for q in self.flows if q is not None]
+        ymax = max(1., max(known) * 1.12) if known else 1.
+        return length, ymax
+
+    def xy(self, i, length, ymax):
+        rect = self.chart
+        return QPointF(rect.left() + self.rows[i][0] / length * rect.width(),
+                       rect.bottom() - (self.flows[i] or 0.) / ymax * rect.height())
+
+    def mousePressEvent(self, event):
+        if event.button() != Qt.LeftButton or not self.rows:
+            return super().mousePressEvent(event)
+        length, _ = self.frame()
+        if not self.chart.contains(event.pos()):
+            return super().mousePressEvent(event)
+        distance = (event.x() - self.chart.left()) * length / self.chart.width()
+        stations = [row[0] for row in self.rows]
+        i = min(len(stations) - 1, bisect_left(stations, distance))
+        if i and abs(stations[i-1] - distance) < abs(stations[i] - distance):
+            i -= 1
+        self.chosen.emit(i)
+        event.accept()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.fillRect(self.rect(), Qt.white)
+        length, ymax = self.frame()
+        chart = self.chart
+        for n in range(6):
+            f = n / 5.
+            y = chart.bottom() - f * chart.height()
+            x = chart.left() + f * chart.width()
+            painter.setPen(QPen(QColor('#DFE6EF'), 1))
+            painter.drawLine(QPointF(chart.left(), y), QPointF(chart.right(), y))
+            painter.drawLine(QPointF(x, chart.top()), QPointF(x, chart.bottom()))
+            painter.setPen(QColor('#25384A'))
+            painter.drawText(QRectF(0, y - 10, chart.left() - 8, 20),
+                             Qt.AlignRight | Qt.AlignVCenter, self.number(ymax * f))
+            painter.drawText(QRectF(x - 30, chart.bottom() + 4, 60, 19),
+                             Qt.AlignCenter, self.number(length * f))
+        painter.setPen(QPen(QColor('#526C81'), 1))
+        painter.drawRect(chart)
+        painter.drawText(QRectF(chart.left(), self.height()-28, chart.width(), 23),
+                         Qt.AlignCenter, 'Abscisado (km)')
+        painter.save()
+        painter.translate(17, chart.center().y())
+        painter.rotate(-90)
+        painter.drawText(QRectF(-chart.height()/2, -13, chart.height(), 25),
+                         Qt.AlignCenter, 'Caudal máximo (m³/s)')
+        painter.restore()
+        painter.setPen(QPen(QColor('#0080BB'), 2))
+        path = QPainterPath()
+        joined = False
+        for i, q in enumerate(self.flows):
+            if q is None:
+                if joined:
+                    painter.drawPath(path)
+                path, joined = QPainterPath(), False
+                continue
+            point = self.xy(i, length, ymax)
+            if not joined:
+                path.moveTo(point)
+                joined = True
+            else:
+                path.lineTo(point)
+        if joined:
+            painter.drawPath(path)
+        if not any(q is not None for q in self.flows):
+            painter.setPen(QColor('#65788A'))
+            painter.drawText(chart, Qt.AlignCenter | Qt.TextWordWrap,
+                             'Sin datos SNCZI para representar este curso.' if self.rows
+                             else 'Preparando el perfil del curso principal…')
+        if self.selected is not None and 0 <= self.selected < len(self.rows):
+            i = self.selected
+            p = self.xy(i, length, ymax)
+            painter.setPen(QPen(QColor('#E47921'), 2, Qt.DashLine))
+            painter.drawLine(QPointF(p.x(), chart.top()), QPointF(p.x(), chart.bottom()))
+            if self.flows[i] is not None:
+                painter.setBrush(QColor('#F9A139'))
+                painter.setPen(QPen(QColor('#BD5B13'), 2))
+                painter.drawEllipse(p, 5, 5)
+            msg = 'Abscisado: ' + self.number(self.rows[i][0]) + ' km'
+            msg += '\nQ: ' + (self.number(self.flows[i]) + ' m³/s'
+                              if self.flows[i] is not None else 'sin dato')
+            metrics = painter.fontMetrics()
+            lines = msg.split('\n')
+            w = max(metrics.horizontalAdvance(line) for line in lines) + 14
+            h = metrics.lineSpacing() * 2 + 10
+            px = min(chart.right() - w - 3, max(chart.left() + 3, p.x() + 12))
+            py = max(chart.top() + 3, min(chart.bottom() - h - 3, p.y() - h - 7))
+            box = QRectF(px, py, w, h)
+            painter.setPen(QPen(QColor('#CE6D1C'), 1))
+            painter.setBrush(Qt.white)
+            painter.drawRoundedRect(box, 4, 4)
+            painter.setPen(QColor('#25384A'))
+            for row, line in enumerate(lines):
+                painter.drawText(QRectF(px+7, py+3+row*metrics.lineSpacing(),
+                                        w-14, metrics.lineSpacing()),
+                                 Qt.AlignLeft | Qt.AlignVCenter, line)
+        painter.end()
+
+
+class CourseFlowProfile(QWidget):
+    """Linked profile/map selection; the native CAUMAX query remains unchanged."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._iface = None
+        self._canvas = None
+        self._key = None
+        self._task = None
+        self._generation = 0
+        self._rows, self._flows = [], []
+        self._selected = None
+        self._crs = ''
+        self._cell_width = self._cell_height = 0.
+        self._period, self._extrapolate = 100., True
+        self._map_tool = self._previous_tool = None
+        self._marker = self._outline = None
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 6, 0, 0)
+        title = QLabel('Caudal máximo a lo largo del curso principal', self)
+        font = title.font()
+        font.setBold(True)
+        title.setFont(font)
+        layout.addWidget(title)
+        self.graph = _ProfilePlot(self)
+        self.graph.chosen.connect(self.select_index)
+        layout.addWidget(self.graph)
+        row = QHBoxLayout()
+        self.map_button = QPushButton('Elegir celda en el mapa', self)
+        self.map_button.setCheckable(True)
+        self.map_button.toggled.connect(self._toggle_map_pick)
+        self.map_button.setToolTip(
+            'Activa la selección de una celda del curso principal en el mapa QGIS.')
+        self.label = QLabel('Selecciona un punto de la gráfica o del mapa.', self)
+        self.label.setWordWrap(True)
+        row.addWidget(self.map_button)
+        row.addWidget(self.label, 1)
+        layout.addLayout(row)
+        self.hide()
+
+    def _stop_task(self):
+        self._generation += 1
+        task, self._task = self._task, None
+        if task is not None:
+            task.cancel()
+
+    def clear(self):
+        self._stop_task()
+        self._stop_map_pick()
+        self._remove_marker()
+        self._key = None
+        self._rows, self._flows = [], []
+        self._selected = None
+        self.graph.show_profile([], [], None)
+        self.hide()
+
+    def configure(self, analysis, state, iface):
+        if analysis is None or not state or iface is None:
+            self.clear()
+            return
+        wkb = bytes(analysis.main_course_wkb or b'')
+        paths = tuple(str(path or '') for path in state.get('source_paths', ()))
+        if not wkb or len(paths) != 6:
+            self.clear()
+            return
+        crs = str(analysis.crs_wkt)
+        key = hashlib.sha256(wkb + crs.encode() + repr(paths).encode()).hexdigest()
+        self._iface, self._canvas = iface, iface.mapCanvas()
+        self._crs = crs
+        self._cell_width = float(analysis.cell_width)
+        self._cell_height = float(analysis.cell_height)
+        self.show()
+        self.set_period(state['input_period'], state['extrapolate'])
+        if key == self._key:
+            return
+        self._stop_task()
+        self._stop_map_pick()
+        self._remove_marker()
+        self._selected = None
+        self._rows, self._flows = [], []
+        self._key = key
+        self.graph.show_profile([], [], None)
+        self.label.setText('Leyendo los caudales SNCZI a lo largo del curso…')
+        task = _ProfileTask(self._generation, wkb, crs, paths, self._finished)
+        self._task = task
+        QgsApplication.taskManager().addTask(task)
+
+    def _finished(self, task, success):
+        if task is not self._task or task.generation != self._generation:
+            return
+        self._task = None
+        if not success:
+            self.label.setText(task.error or 'No se ha podido generar el perfil SNCZI.')
+            return
+        self._rows = task.result
+        self._refresh()
+
+    def set_period(self, period, extrapolate):
+        try:
+            period = float(period)
+        except (ValueError, TypeError):
+            return
+        if not math.isfinite(period) or period <= 0:
+            return
+        self._period, self._extrapolate = period, bool(extrapolate)
+        if self._rows:
+            self._refresh()
+
+    def _refresh(self):
+        self._flows = [estimate_flow(self._period, item[3], self._extrapolate)['flow']
+                       for item in self._rows]
+        self.graph.show_profile(self._rows, self._flows, self._selected)
+        self._selection_text()
+        self._update_marker()
+
+    def _selection_text(self):
+        if self._selected is not None and 0 <= self._selected < len(self._rows):
+            station = self._rows[self._selected][0]
+            flow = self._flows[self._selected]
+            self.label.setText(
+                f"Abscisado: {station:.2f} km · "
+                + (f"Q máx. T={self._period:g}: {flow:.2f} m³/s"
+                   if flow is not None else 'Q: sin dato SNCZI'))
+        elif self._rows:
+            good = sum(q is not None for q in self._flows)
+            self.label.setText(
+                f'Perfil SNCZI · T={self._period:g} años · '
+                f'{good} de {len(self._rows)} celdas con caudal disponible.')
+
+    def select_index(self, index):
+        if not 0 <= index < len(self._rows):
+            return
+        self._selected = int(index)
+        self.graph.show_profile(self._rows, self._flows, self._selected)
+        self._selection_text()
+        self._update_marker()
+
+    def _toggle_map_pick(self, active):
+        if not active:
+            self._stop_map_pick()
+            return
+        if self._canvas is None or not self._rows:
+            self.map_button.blockSignals(True)
+            self.map_button.setChecked(False)
+            self.map_button.blockSignals(False)
+            return
+        self._previous_tool = self._canvas.mapTool()
+        self._map_tool = QgsMapToolEmitPoint(self._canvas)
+        self._map_tool.canvasClicked.connect(self._map_clicked)
+        self._canvas.mapToolSet.connect(self._tool_changed)
+        self._canvas.setMapTool(self._map_tool)
+
+    def _tool_changed(self, current, previous):
+        if previous is self._map_tool and current is not self._map_tool:
+            self._stop_map_pick(restore=False)
+
+    def _stop_map_pick(self, restore=True):
+        tool, self._map_tool = self._map_tool, None
+        if self._canvas is not None:
+            try:
+                self._canvas.mapToolSet.disconnect(self._tool_changed)
+            except (TypeError, RuntimeError):
+                pass
+        if tool is not None:
+            try:
+                tool.canvasClicked.disconnect(self._map_clicked)
+            except (TypeError, RuntimeError):
+                pass
+            if (restore and self._canvas is not None and self._canvas.mapTool() is tool):
+                if self._previous_tool is not None and not sip.isdeleted(self._previous_tool):
+                    self._canvas.setMapTool(self._previous_tool)
+                else:
+                    self._canvas.unsetMapTool(tool)
+            tool.deleteLater()
+        self._previous_tool = None
+        self.map_button.blockSignals(True)
+        self.map_button.setChecked(False)
+        self.map_button.blockSignals(False)
+
+    def _map_clicked(self, point, button):
+        if button != Qt.LeftButton or not self._rows:
+            return
+        try:
+            operation = QgsCoordinateTransform(
+                self._canvas.mapSettings().destinationCrs(),
+                QgsCoordinateReferenceSystem.fromWkt(self._crs), QgsProject.instance())
+            native = operation.transform(point)
+            best = min(range(len(self._rows)), key=lambda i:
+                       (self._rows[i][1] - native.x())**2 +
+                       (self._rows[i][2] - native.y())**2)
+            limit = 1.6 * math.hypot(self._cell_width, self._cell_height)
+            if math.hypot(self._rows[best][1] - native.x(),
+                          self._rows[best][2] - native.y()) <= limit:
+                self.select_index(best)
+            else:
+                self.label.setText('Elige una celda sobre el curso principal D8.')
+        except (ValueError, RuntimeError) as error:
+            self.label.setText('No se puede seleccionar esa celda: ' + str(error))
+
+    def _remove_marker(self):
+        from .delineation_cleanup import remove_overlay
+        marker, outline = self._marker, self._outline
+        self._marker = self._outline = None
+        remove_overlay(marker)
+        remove_overlay(outline)
+
+    def _update_marker(self):
+        self._remove_marker()
+        if self._canvas is None or self._selected is None or not self._rows:
+            return
+        try:
+            from .delineation_cleanup import register_overlay
+            row = self._rows[self._selected]
+            station, x, y = row[:3]
+            operation = QgsCoordinateTransform(
+                QgsCoordinateReferenceSystem.fromWkt(self._crs),
+                self._canvas.mapSettings().destinationCrs(), QgsProject.instance())
+            point = operation.transform(QgsPointXY(x, y))
+            marker = register_overlay(self._canvas, QgsVertexMarker(self._canvas))
+            marker.setCenter(point)
+            marker.setColor(QColor('#DE6918'))
+            marker.setIconType(QgsVertexMarker.ICON_CROSS)
+            marker.setIconSize(17)
+            marker.setPenWidth(3)
+            q = self._flows[self._selected]
+            marker.setToolTip('Abscisado: ' + f'{station:.2f}' + ' km · Q: '
+                              + (f'{q:.2f} m³/s' if q is not None else 'sin dato'))
+            self._marker = marker
+            outline = register_overlay(
+                self._canvas, QgsRubberBand(self._canvas, QgsWkbTypes.PolygonGeometry))
+            outline.setColor(QColor('#D55E0F'))
+            outline.setFillColor(QColor(232, 116, 22, 38))
+            outline.setWidth(2)
+            vertices = [(x-self._cell_width/2, y-self._cell_height/2),
+                        (x+self._cell_width/2, y-self._cell_height/2),
+                        (x+self._cell_width/2, y+self._cell_height/2),
+                        (x-self._cell_width/2, y+self._cell_height/2)]
+            for cx, cy in vertices:
+                outline.addPoint(operation.transform(QgsPointXY(cx, cy)), False)
+            outline.addPoint(operation.transform(QgsPointXY(*vertices[0])), True)
+            self._outline = outline
+        except (RuntimeError, ValueError, TypeError):
+            self._remove_marker()
+
+    def dispose(self):
+        self.clear()
+        self._iface = self._canvas = None
