@@ -1082,14 +1082,17 @@ class BasinDialog(QDialog):
         drainage_busy = bool(self._drainage_timer.isActive()
             or (self._drainage_controller and self._drainage_controller.busy))
         available = self.analysis is not None and not self._resolution_pending and self._surface_valid
+        recovering_legacy_areas = self._legacy_area_task is not None
         self.basin_hydrology_widget.set_busy(busy)
         if not busy:
             self.basin_hydrology_widget.setEnabled(available and not self._saving_project and not drainage_busy)
         else:
             self.basin_hydrology_widget.setEnabled(True)
-        self.report_button.setEnabled(available and not busy and not drainage_busy and not self._saving_project)
+        self.report_button.setEnabled(available and not busy and not drainage_busy
+            and not self._saving_project and not recovering_legacy_areas)
         self.save_project_button.setEnabled(available and not busy and not drainage_busy
-            and not self._saving_project and not self._resolution_discovering)
+            and not self._saving_project and not self._resolution_discovering
+            and not recovering_legacy_areas)
         self.resolution_refresh_button.setEnabled(not busy and not self._saving_project and not self._resolution_pending)
         self._set_export_enabled(available and self._smoothing_ready and not busy and not self._saving_project)
         self._refresh_drainage_controls()
@@ -1129,6 +1132,7 @@ class BasinDialog(QDialog):
             self._legacy_area_generation, self.analysis, direction, dem,
             self._legacy_area_finished)
         self._legacy_area_task = task
+        self._refresh_basin_hydrology_controls()
         QgsApplication.taskManager().addTask(task)
 
     def _legacy_area_finished(self, task, success):
@@ -1145,6 +1149,7 @@ class BasinDialog(QDialog):
                 (task.error or 'recálculo D8 cancelado.'))
             if profile._rows:
                 profile._update_coverage()
+            self._refresh_basin_hydrology_controls()
             return
         from .course_flow_profile import course_centres, main_course_areas
         from types import SimpleNamespace
@@ -1165,6 +1170,7 @@ class BasinDialog(QDialog):
             if key in self._resolution_controller.variants:
                 self._resolution_controller.variants[key]['analysis'] = self.analysis
         self._cache_variant_state()
+        self._refresh_basin_hydrology_controls()
 
     def _invalidate_po_clip(self):
         """A new basin invalidates the previously computed P₀ crop."""
@@ -2666,6 +2672,10 @@ class BasinDialog(QDialog):
 
     def _state_for_output(self):
         self._close_outlet_selection()
+        if self._legacy_area_task is not None:
+            raise ValueError(
+                'Espera a que termine la recuperación de las áreas D8 de la consulta '
+                'antigua para guardar sus resultados completos.')
         if not self._surface_valid:
             raise ValueError('Espera al recálculo completo de la divisoria activa. ' + self._smoothing_error)
         if self._basin_hydrology_busy():
