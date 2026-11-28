@@ -5,7 +5,7 @@ from pathlib import Path
 from qgis.PyQt import sip
 from qgis.PyQt.QtCore import QBuffer, QIODevice, QPointF, QRectF, Qt
 from qgis.PyQt.QtGui import QColor, QFont, QImage, QPainter, QPainterPath, QPen
-from qgis.PyQt.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from qgis.PyQt.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QPushButton, QSlider, QVBoxLayout, QWidget
 
 def _finite(value):
     try:
@@ -237,7 +237,7 @@ class _CurveCanvas(QWidget):
         painter = QPainter(self)
         data = self.owner.plot_data()
         paint_hypsometric_curve(painter, self.rect(), data,
-                                control_width=self.owner.dimensionless_check.width() + 12)
+                                control_width=self.owner.dimensionless_check.width() + self.owner.opacity_slider.width() + 36)
         i = self.owner._selected_index
         if data['available'] and i is not None and 0 <= i < len(data['x']):
             point = curve_plot_point(data, self.rect(), i)
@@ -296,8 +296,12 @@ class _CurveCanvas(QWidget):
         font.setPixelSize(pixels)
         check.setFont(font)
         check.adjustSize()
-        check.move(max(12, self.width() - check.width() - 12),
-                   8 + max(0, (2 * pixels - check.height()) // 2))
+        y = 8 + max(0, (2 * pixels - check.height()) // 2)
+        check.move(max(12, self.width() - check.width() - 12), y)
+        slider = self.owner.opacity_slider
+        slider.setFixedHeight(max(16, min(22, check.height())))
+        slider.move(max(12, check.x() - slider.width() - 10),
+                    y + max(0, (check.height() - slider.height()) // 2))
 
 
 class HypsometricWidget(QWidget):
@@ -317,6 +321,12 @@ class HypsometricWidget(QWidget):
         self.dimensionless_check = QCheckBox('Adimensional', self.canvas)
         self.dimensionless_check.setChecked(False)
         self.dimensionless_check.setStyleSheet('QCheckBox { background-color: white; }')
+        self.opacity_slider = QSlider(Qt.Horizontal, self.canvas)
+        self.opacity_slider.setRange(0, 100)
+        self.opacity_slider.setValue(70)
+        self.opacity_slider.setFixedWidth(94)
+        self.opacity_slider.setToolTip('Opacidad del resaltado de celdas: 70 %')
+        self.opacity_slider.valueChanged.connect(self._set_selection_opacity)
         self.hi_label = QLabel(self)
         self.status_label = QLabel(self)
         self.hi_label.hide()
@@ -326,6 +336,12 @@ class HypsometricWidget(QWidget):
         self.selection_label.hide()
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        self.curve_title = QLabel('Curva Hipsométrica', self)
+        title_font = QFont(self.curve_title.font())
+        title_font.setBold(True)
+        self.curve_title.setFont(title_font)
+        self.curve_title.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.curve_title)
         layout.addWidget(self.canvas)
         layout.addWidget(self.selection_label)
         self.dimensionless_check.toggled.connect(self._refresh)
@@ -380,15 +396,16 @@ class HypsometricWidget(QWidget):
         if self._iface is None or not self._dem_path or not Path(self._dem_path).is_file():
             self.selection_label.setText(summary + ' MDT no disponible para señalar celdas.')
             return
-        from .hypsometric_selection import AltitudeSelectionTask, elevation_band
+        from .hypsometric_selection import AltitudeSelectionTask
         curve = self.analysis.diagnostics['hypsometric_curve']
-        lower, upper = elevation_band(curve['elevation_m'], index)
+        upper = float(curve['elevation_m'][index])
+        lower = -math.inf
         task = AltitudeSelectionTask(
             self._selection_generation, self._dem_path,
             self.analysis.geometry_wkb, self.analysis.crs_wkt,
             lower, upper, self._selection_finished)
         self._selection_task = task
-        self.selection_label.setText(summary + ' Localizando celdas del MDT…')
+        self.selection_label.setText(summary + ' Localizando todas las celdas bajo esta cota…')
         from qgis.core import QgsApplication
         QgsApplication.taskManager().addTask(task)
 
@@ -413,7 +430,7 @@ class HypsometricWidget(QWidget):
                 Path(path).unlink(missing_ok=True)
             except OSError:
                 pass
-            self.selection_label.setText(summary + ' No hay celdas en este intervalo de cota.')
+            self.selection_label.setText(summary + ' No hay celdas bajo esta cota.')
             return
         try:
             from qgis.core import QgsPalettedRasterRenderer, QgsProject, QgsRasterLayer
@@ -423,7 +440,8 @@ class HypsometricWidget(QWidget):
             qlayer.setRenderer(QgsPalettedRasterRenderer(
                 qlayer.dataProvider(), 1, [
                     QgsPalettedRasterRenderer.Class(
-                        1, QColor('#EE7827'), 'Celdas de altitud seleccionada')]))
+                        1, QColor('#EE7827'), 'Celdas hasta la altitud seleccionada')]))
+            qlayer.renderer().setOpacity(self.opacity_slider.value() / 100.0)
             qlayer.setCustomProperty('HidroCAUMAX/hypsometry_selection_owner', 'true')
             QgsProject.instance().addMapLayer(qlayer)
             self._selection_layer = qlayer
@@ -438,6 +456,17 @@ class HypsometricWidget(QWidget):
                     Path(path).unlink(missing_ok=True)
                 except OSError:
                     pass
+
+    def _set_selection_opacity(self, value):
+        self.opacity_slider.setToolTip(
+            f'Opacidad del resaltado de celdas: {value} %')
+        layer = self._selection_layer
+        if layer is not None:
+            try:
+                layer.renderer().setOpacity(value / 100.0)
+                layer.triggerRepaint()
+            except RuntimeError:
+                pass
 
     def _remove_layer(self):
         layer, self._selection_layer = self._selection_layer, None
