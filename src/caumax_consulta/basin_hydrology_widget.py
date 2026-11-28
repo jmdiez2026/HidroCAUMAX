@@ -417,7 +417,12 @@ class BasinHydrologyWidget(QWidget):
                                                 Qt.AlignCenter|Qt.TextWordWrap,item.text())
                     height=max(height,bounds.height()+2)
             table.setRowHeight(row,height)
+        # Unit suffixes can wrap the Pd column headers; keep the six rows
+        # and the full header visible at every supported QGIS panel width.
         table.horizontalHeader()._fit_height()
+        table.setFixedHeight(table.horizontalHeader().height() +
+                             sum(table.rowHeight(row) for row in range(table.rowCount())) +
+                             2 * table.frameWidth())
 
     def resizeEvent(self,event):
         super().resizeEvent(event)
