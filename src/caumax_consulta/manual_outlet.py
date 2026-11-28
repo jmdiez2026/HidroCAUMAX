@@ -5,10 +5,55 @@ from copy import deepcopy
 import math
 from pathlib import Path
 
+from osgeo import ogr, osr
+
 from . import basin as _b
 from .dem_hydrology import _check, _positive_finite, _preflight_analysis
 from .grid import cell_at_point
 from .terrain import analyze_basin
+
+
+def _reference_overlap(analysis, context, cancelled):
+    """Compare actual watershed footprints, not cell counts or target areas.
+
+    This is only enforced when a finer-resolution consultation has an actual
+    coarse watershed to compare against. It must not move the manual outlet.
+    """
+    if not context.get('verify_reference_overlap'):
+        return None
+    try:
+        raw = bytes.fromhex(context['reference_geometry_wkb_hex'])
+        reference = ogr.CreateGeometryFromWkb(raw)
+        candidate = ogr.CreateGeometryFromWkb(bytes(analysis.geometry_wkb))
+        source, target = osr.SpatialReference(), osr.SpatialReference()
+        if (reference is None or candidate is None
+                or source.ImportFromWkt(context['reference_crs_wkt']) != 0
+                or target.ImportFromWkt(analysis.crs_wkt) != 0):
+            raise ValueError('La geometría de referencia no se puede interpretar.')
+        source.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+        target.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+        if not source.IsSame(target):
+            if reference.Transform(osr.CoordinateTransformation(source, target)) != ogr.OGRERR_NONE:
+                raise ValueError('La referencia no se puede transformar al CRS del MDT.')
+        _check(cancelled)
+        intersection = reference.Intersection(candidate)
+        if intersection is None:
+            raise ValueError('No se puede calcular la intersección de las divisorias.')
+        reference_area, candidate_area = float(reference.GetArea()), float(candidate.GetArea())
+        common_area = float(intersection.GetArea())
+        if (not all(math.isfinite(v) for v in (reference_area, candidate_area, common_area))
+                or reference_area <= 0 or candidate_area <= 0 or common_area < 0):
+            raise ValueError('Las superficies de comparación no son válidas.')
+    except (ValueError, KeyError, TypeError, RuntimeError) as error:
+        raise ValueError('No se pudo verificar la cuenca manual frente a la '
+                         'divisoria original: ' + str(error)) from error
+    coverage, overlap = common_area / reference_area, common_area / candidate_area
+    return dict(reference_coverage_fraction=coverage,
+                candidate_overlap_fraction=overlap,
+                reference_overlap_area_m2=common_area,
+                reference_basin_area_m2=reference_area,
+                candidate_basin_area_m2=candidate_area,
+                reference_correspondence_valid=coverage > .5 and overlap > .5)
 
 
 def build_manual_outlet(context, x, y, cancelled=lambda: False, publish=lambda percent: None):
@@ -64,6 +109,11 @@ def build_manual_outlet(context, x, y, cancelled=lambda: False, publish=lambda p
         _check(cancelled)
         publish(10)
         count, window_cells, boundary, feasibility = _preflight_analysis(directions_path, selected, cancelled)
+        if boundary and context.get('require_complete_coverage'):
+            raise ValueError(
+                'La cuenca del cierre elegido alcanza el borde del MDT refinado. '
+                'No se publica una divisoria posiblemente cortada por la extensión del ráster. '
+                'Amplía la cobertura del MDT o revisa la red D8.')
         if (selected.row, selected.col) == (original.row, original.col):
             original_count = count
         else:
@@ -81,6 +131,19 @@ def build_manual_outlet(context, x, y, cancelled=lambda: False, publish=lambda p
     candidate_area, original_area = count * cell_area, original_count * cell_area
     if analysis.area_m2 != candidate_area or analysis.cell_count != count:
         raise ValueError('La cuenca recalculada no coincide con la celda manual seleccionada.')
+    correspondence = _reference_overlap(analysis, context, cancelled)
+    mismatch = bool(correspondence and not correspondence['reference_correspondence_valid'])
+    override = bool(context.get('allow_reference_mismatch', False))
+    if mismatch and not override:
+        raise ValueError(
+            'El cierre pertenece a una cuenca diferente de la consulta de referencia: '
+            'solape con la referencia ' +
+            f"{100 * correspondence['reference_coverage_fraction']:.1f} %, " +
+            'solape de la cuenca elegida ' +
+            f"{100 * correspondence['candidate_overlap_fraction']:.1f} %. " +
+            'Puede ser una ladera o un ramal lateral sin conexión D8 con el cauce '
+            'principal. Elige otra celda del cauce o, si quieres estudiar '
+            'deliberadamente una cuenca distinta, marca la excepción expresa.')
     snap = dict(
         method='manual_cell_d8', selection_mode='user_selected_cell', explicit_user_choice=True,
         manual_selection_scope='raster_extent', manual_raster_bounds=list(bounds),
@@ -95,6 +158,7 @@ def build_manual_outlet(context, x, y, cancelled=lambda: False, publish=lambda p
         minimum_upstream_area_m2=cell_area, reference_area_m2=reference_area,
         candidate_upstream_area_m2=candidate_area, original_cell_upstream_area_m2=original_area,
         candidate_touches_boundary=bool(boundary),
+        reference_mismatch_override=bool(mismatch and override),
         area_change_vs_original_cell_m2=candidate_area - original_area,
         area_change_vs_reference_pct=100 * (candidate_area / reference_area - 1),
         policy='explicit user choice of any valid native D8 cell inside the raster extent; '
@@ -107,6 +171,10 @@ def build_manual_outlet(context, x, y, cancelled=lambda: False, publish=lambda p
                     basin_cells=count, raster_boundary_touched=bool(boundary),
                     manual_outlet_selected=True, memory_feasibility=feasibility,
                     outlet_snap=deepcopy(snap))
+    if correspondence is not None:
+        metadata['manual_reference_overlap'] = correspondence
+        snap['reference_correspondence'] = correspondence
+        metadata['outlet_snap'] = deepcopy(snap)
     metadata.pop('coverage_warning', None)
     if boundary:
         metadata['coverage_warning'] = (
@@ -123,6 +191,11 @@ def build_manual_outlet(context, x, y, cancelled=lambda: False, publish=lambda p
              'Su límite es la extensión válida del MDT; el radio automático se conserva solo como referencia. '
              'La divisoria, el curso principal y todos los parámetros se han recalculado con esa celda; '
              'el punto original de consulta permanece registrado.')
+    if mismatch and override:
+        notes += ('Se ha aceptado expresamente un cierre de cuenca distinta a '
+                  'la referencia original. La correspondencia espacial no supera '
+                  'la mayoría estricta de ambas divisorias; no se debe presentar '
+                  'como simple refinamiento de la misma cuenca.',)
     analysis = replace(analysis, selected_x=original_x, selected_y=original_y,
                        diagnostics=diagnostic, notes=notes)
     _check(cancelled)
