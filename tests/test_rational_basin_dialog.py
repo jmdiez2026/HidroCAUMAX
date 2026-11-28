@@ -118,6 +118,22 @@ class RationalBasinDialogTests(unittest.TestCase):
         dialog._resolution_controller = controller
         return controller
 
+    def test_report_buttons_order_and_consulta_names(self):
+        """Keep save/open consultation before PDF; Cerrar stays on the right."""
+        from qgis.PyQt.QtWidgets import QDialogButtonBox
+
+        dialog = self.dialog
+        controls = dialog.save_project_button.parentWidget().layout()
+        self.assertEqual(dialog.save_project_button.text(), 'Guardar Consulta')
+        self.assertEqual(dialog.open_project_button.text(), 'Abrir Consulta')
+        self.assertEqual(dialog.report_button.text(), 'Informe (PDF)')
+        self.assertIs(controls.itemAt(0).widget(), dialog.save_project_button)
+        self.assertIs(controls.itemAt(1).widget(), dialog.open_project_button)
+        self.assertIs(controls.itemAt(2).widget(), dialog.report_button)
+        closing_group = controls.itemAt(controls.count() - 1).widget()
+        self.assertIsInstance(closing_group, QDialogButtonBox)
+        self.assertIs(dialog.close_button.parentWidget(), closing_group)
+
     def test_initial_task_checks_exact_native_basin_before_publishing(self):
         task = AnalysisTask(self.fixture.query, lambda *args: None)
         with patch('caumax_consulta.terrain.analyze_basin', wraps=analyze_basin) as terrain:
