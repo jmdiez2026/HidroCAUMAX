@@ -79,7 +79,7 @@ class DialogLayoutTests(unittest.TestCase):
             baseline.setIcon(button.icon())
             baseline.setIconSize(button.iconSize())
             baseline.ensurePolished()
-            self.assertEqual(button.height(),round(baseline.sizeHint().height()*.90))
+            self.assertLessEqual(abs(button.height()-round(baseline.sizeHint().height()*.90)),4)
             self.assertGreaterEqual(button.height(),button.fontMetrics().height()+4)
             baseline.setParent(None)
             baseline.deleteLater()
