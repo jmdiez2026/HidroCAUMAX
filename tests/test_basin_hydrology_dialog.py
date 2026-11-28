@@ -150,6 +150,78 @@ class BasinHydrologyDialogTests(unittest.TestCase):
         self.assertEqual(restored.query, dialog.query)
         self.assertEqual(restored.smoothing_state['basin_hydrology'], seeded)
 
+    def test_save_and_reopen_restores_both_real_clipped_rasters_as_visible(self):
+        from caumax_consulta.po_clip import clip_po_to_basin, publish_clipped_raster
+        from qgis.core import QgsProject
+        dialog = self.dialog
+        fingerprint = basin_fingerprint(dialog.analysis)
+        p0_source = self.raster(
+            'p0_source.tif', np.full((5, 5), 35., dtype=np.float32),
+            gdal.GDT_Float32, -9999.)
+        pd_source = self.raster(
+            'pd_source.tif', np.full((5, 5), 75., dtype=np.float32),
+            gdal.GDT_Float32, -9999.)
+        state = self.seed_results()
+        p0 = self.stats(35., path=str(p0_source))
+        rain = dict(state['rainfall_results'])
+        rain['100'] = self.stats(75., path=str(pd_source))
+        dialog.basin_hydrology_widget.set_result('both', {'p0':p0,'rainfall':rain})
+        po_path = self.folder / 'Po_Cuenca_saved.tif'
+        pd_path = self.folder / 'Pd_T100_Cuenca_saved.tif'
+        clip_po_to_basin(
+            p0_source, dialog.analysis.geometry_wkb, dialog.analysis.crs_wkt,
+            po_path)
+        clip_po_to_basin(
+            pd_source, dialog.analysis.geometry_wkb, dialog.analysis.crs_wkt,
+            pd_path, kind='pd')
+        layers = [
+            publish_clipped_raster(po_path, kind='po'),
+            publish_clipped_raster(pd_path, kind='pd', period=100),
+        ]
+        dialog._po_clip_path = po_path
+        dialog._po_clip_source = str(p0_source)
+        dialog._po_clip_fingerprint = fingerprint
+        dialog._pd_clip_path = pd_path
+        dialog._pd_clip_source = str(pd_source)
+        dialog._pd_clip_fingerprint = fingerprint
+        dialog._pd_clip_period = 100
+        self.assertIn('hydrology_clips', dialog.get_smoothing_state())
+        destination = self.folder / 'clipped-consultation.json'
+        save_session(destination, dialog.analysis, dialog.query,
+                     dialog.get_smoothing_state())
+        for layer in layers:
+            QgsProject.instance().removeMapLayer(layer.id())
+        self.assertEqual(len([v for v in QgsProject.instance().mapLayers().values()
+                             if str(v.source()) in (str(po_path), str(pd_path))]), 0)
+        restored = self.make_dialog(load_session(destination))
+        self.assertEqual(restored._po_clip_path, po_path)
+        self.assertEqual(restored._pd_clip_path, pd_path)
+        self.assertEqual(restored._pd_clip_period, 100)
+        self.assertTrue(restored.basin_hydrology_widget.po_export_button.isEnabled())
+        self.assertTrue(restored.basin_hydrology_widget.pd_export_button.isEnabled())
+        for path in (po_path, pd_path):
+            matches = [layer for layer in QgsProject.instance().mapLayers().values()
+                       if layer.source() == str(path)]
+            self.assertEqual(len(matches), 1)
+            node = QgsProject.instance().layerTreeRoot().findLayer(matches[0].id())
+            self.assertTrue(node.itemVisibilityChecked())
+        # Opening the same query a second time must not duplicate either TIFF.
+        repeated = self.make_dialog(load_session(destination))
+        self.assertEqual(repeated._po_clip_path, po_path)
+        self.assertEqual(repeated._pd_clip_path, pd_path)
+        for path in (po_path, pd_path):
+            self.assertEqual(len([layer for layer in QgsProject.instance().mapLayers().values()
+                                  if layer.source() == str(path)]), 1)
+        # A missing file leaves the saved consultation usable; no dummy raster.
+        QgsProject.instance().removeMapLayers([
+            layer.id() for layer in QgsProject.instance().mapLayers().values()
+            if layer.source() in (str(po_path), str(pd_path))])
+        po_path.unlink()
+        offline = self.make_dialog(load_session(destination))
+        self.assertIsNone(offline._po_clip_path)
+        self.assertEqual(offline._pd_clip_path, pd_path)
+        self.assertFalse(offline.basin_hydrology_widget.po_export_button.isEnabled())
+
     def test_default_qcin_report_folder_is_created_under_active_qgis_profile(self):
         profile_root = self.folder / 'QGIS3' / 'profiles' / 'default'
         destination = default_report_path(profile_root)
