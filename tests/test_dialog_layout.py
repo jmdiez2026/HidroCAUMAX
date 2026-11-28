@@ -67,7 +67,7 @@ class DialogLayoutTests(unittest.TestCase):
 
     def test_report_buttons_are_compact_left_aligned_with_close_at_right_in_one_row(self):
         dialog=self.dialog
-        buttons=(dialog.report_button,dialog.save_project_button,dialog.open_project_button,dialog.close_button)
+        buttons=(dialog.save_project_button,dialog.open_project_button,dialog.report_button,dialog.close_button)
         group=dialog.report_button.parentWidget()
         self.assertTrue(group.isAncestorOf(dialog.close_button))
         self.assertEqual(dialog.layout().indexOf(dialog.close_button.parentWidget()),-1)
