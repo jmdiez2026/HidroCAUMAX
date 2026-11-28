@@ -71,6 +71,34 @@ class AltitudeMapSelectionTests(unittest.TestCase):
         self.assertEqual(result['count'], 6)
         raster = None
 
+    def test_selected_cota_and_opacity_survive_widget_restore(self):
+        heights=np.arange(20,dtype=np.float64)
+        sample=SimpleNamespace(
+            values={'hypsometric':.5},
+            diagnostics={'hypsometric_curve':build_hypsometric_curve(heights,2.0,.5)})
+        original=HypsometricWidget()
+        self.addCleanup(original.close)
+        original.set_analysis(sample)
+        original.opacity_slider.setValue(35)
+        original.select_quantile(80)
+        snapshot=original.selection_state()
+        self.assertEqual(snapshot, {'selected_index':80,'opacity':35})
+        restored=HypsometricWidget()
+        self.addCleanup(restored.close)
+        restored.set_analysis(sample)
+        restored.restore_selection_state(**snapshot)
+        self.assertEqual(restored.selection_state(), snapshot)
+        self.assertIn('Altitud:', restored.selection_label.text())
+        restored.set_dimensionless(True)
+        self.assertEqual(restored.selection_state(), snapshot)
+        restored.restore_selection_state(None, 70)
+        self.assertIsNone(restored.selection_state()['selected_index'])
+        self.assertEqual(restored.selection_state()['opacity'],70)
+        with self.assertRaisesRegex(ValueError,'opacidad'):
+            restored.restore_selection_state(None, 101)
+        with self.assertRaisesRegex(ValueError,'cota'):
+            restored.restore_selection_state(201, 30)
+
     def test_curve_click_and_dimensionless_view_refer_to_same_physical_altitude(self):
         heights=np.arange(20,dtype=np.float64)
         sample=SimpleNamespace(
