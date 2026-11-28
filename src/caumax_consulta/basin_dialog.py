@@ -270,6 +270,13 @@ class BasinDialog(QDialog):
         self.export_button = QPushButton('Guardar Divisoria', smoothing)
         self.export_button.setToolTip(
             'Guardar los polígonos de la divisoria activa como SHP o GPKG.')
+        # User-selected SVG designs: crosshair + red outlet + green save (2);
+        # green watershed boundary + blue save (3). 16 px fits both buttons.
+        for button, icon_name in (
+                (self.export_closure_button, 'guardar_cierre_modelo2.svg'),
+                (self.export_button, 'guardar_divisoria_modelo3.svg')):
+            button.setIcon(QIcon(str(Path(__file__).parent / 'assets' / icon_name)))
+            button.setIconSize(QSize(16, 16))
         for export_control in (self.export_closure_button, self.export_button):
             export_control.setStyleSheet(
                 'QPushButton { padding: 2px 3px; min-height: 0px; }')
