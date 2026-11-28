@@ -2171,11 +2171,16 @@ class BasinDialog(QDialog):
                 or self._basin_hydrology_busy() or self._saving_project):
             return
         from .closure_layers import export_green_course_closure
-        from .improved_storage import export_directory
+        from .improved_storage import generated_layers_directory
         analysis = self.analysis
-        suggested = export_directory() / (
-            f'Cierre_CursoPrincipal_X{round(analysis.outlet_x)}_'
-            f'Y{round(analysis.outlet_y)}.shp')
+        try:
+            suggested = generated_layers_directory() / (
+                f'Cierre_CursoPrincipal_CONSULTA_X{round(analysis.outlet_x)}_'
+                f'Y{round(analysis.outlet_y)}.shp')
+        except OSError as error:
+            QMessageBox.critical(self, 'Guardar Cierre',
+                                 'No se pudo crear Capas_Generadas: ' + str(error))
+            return
         destination, _ = QFileDialog.getSaveFileName(
             self, 'Exportar Cierre · cruz azul',
             str(suggested), 'Shapefile (*.shp)',
