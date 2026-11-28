@@ -4,7 +4,9 @@ import sys
 import unittest
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'src'))
-from caumax_consulta.parameter_schema import METRICS,format_value,interpret_value
+from caumax_consulta.parameter_schema import (
+    METRICS, format_value, interpret_value, morphology_table_label, morphology_table_value,
+)
 
 
 class ParameterSchemaTests(unittest.TestCase):
@@ -39,6 +41,32 @@ class ParameterSchemaTests(unittest.TestCase):
         self.assertEqual(format_value('area_km2',0),'0,00')
         self.assertEqual(format_value('perimeter_km',.15),'0,15')
         self.assertEqual(format_value('area_km2',389),'389,00')
+
+    def test_qgis_morphology_label_units_are_bracketed_and_pdf_data_unmodified(self):
+        titles = {metric.key: morphology_table_label(metric) for metric in METRICS}
+        self.assertEqual(len(titles), 19)
+        for key, expected in (
+                ('area_km2', 'Área de la cuenca [km²]'),
+                ('perimeter_km', 'Perímetro [km]'),
+                ('slope_d8_pct', 'Pendiente media de la cuenca (D8) [%]'),
+                ('tri_m', 'Índice de Irregularidad del Terreno TRI (Riley) [m]'),
+                ('main_length_km', 'Longitud del curso principal total (L) [km]'),
+                ('tc_h', 'Tiempo de concentración (L) [h]'),
+                ('cell_resolution', 'Resolución celda [m]'),
+                ('cell_count', 'Número de celdas'),
+                ('elongation_ratio', 'Relación de elongación'),
+                ('melton', 'Índice de rugosidad de Melton')):
+            with self.subTest(key=key):
+                self.assertEqual(titles[key], expected)
+        for metric in METRICS:
+            if metric.unit:
+                self.assertTrue(titles[metric.key].endswith(f'[{metric.unit}]'))
+        self.assertEqual(morphology_table_value('cell_resolution', (25, 5)), '25 × 5')
+        self.assertEqual(morphology_table_value('cell_resolution', None), 'n.d.')
+        self.assertEqual(morphology_table_value('perimeter_km', 10.123), '10,12')
+        # The PDF/report schema intentionally retains separate unit fields.
+        self.assertEqual(format_value('cell_resolution', (25, 5)), '25mx5m')
+        self.assertEqual(next(m.unit for m in METRICS if m.key == 'perimeter_km'), 'km')
 
     def test_morphology_table_uses_at_most_two_decimals_and_keeps_integer_counts(self):
         for key, value, expected in (
