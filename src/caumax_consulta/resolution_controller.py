@@ -146,6 +146,21 @@ def _dem_point(path,source_wkt,x,y):
     return float(point[0]),float(point[1])
 
 
+def _transform_metre_point(x, y, source_wkt, target_wkt):
+    """Transform selected ground coordinates without changing their meaning."""
+    source, target = osr.SpatialReference(), osr.SpatialReference()
+    if source.ImportFromWkt(str(source_wkt)) != 0 or target.ImportFromWkt(str(target_wkt)) != 0:
+        raise ValueError('No se puede comprobar el CRS del cierre manual.')
+    source.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+    target.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+    if source.IsSame(target):
+        return float(x), float(y)
+    point = osr.CoordinateTransformation(source, target).TransformPoint(float(x), float(y))
+    if not all(math.isfinite(value) for value in point[:2]):
+        raise ValueError('La transformación del cierre manual no es finita.')
+    return float(point[0]), float(point[1])
+
+
 def _build(option,bounds,basin_crs,source_crs,x,y,cache_root,snap_options,cancelled,publish):
     current=tuple(bounds)
     result=None
@@ -478,8 +493,48 @@ class ResolutionController(QObject):
             try:
                 return _manual_analysis(context,x,y,cancelled,publish)
             except ValueError as error:
-                error.selection_context=deepcopy(context)
-                raise
+                from .manual_outlet import ManualOutletConsistencyError
+                reason=getattr(error,'reason_code',None)
+                option=self._option_objects.get(key)
+                if (not isinstance(error,ManualOutletConsistencyError)
+                        or reason not in ('clipped_manual_basin','unrelated_manual_basin')
+                        or key==self._base_key or option is None):
+                    error.selection_context=deepcopy(context)
+                    raise
+                # A fine D8 was generated for the original reference extent.
+                # If that routing cannot reproduce the explicitly requested
+                # basin, rebuild routing from an enlarged DEM, not just from
+                # a different cell in the same potentially clipped D8.
+                try:
+                    _check(cancelled)
+                    publish('Recalculando D8 con cobertura ampliada',0)
+                    native_crs=str(context['crs_wkt'])
+                    bx,by=_transform_metre_point(x,y,native_crs,self.crs_wkt)
+                    xmin,ymin,xmax,ymax=self.bounds
+                    padding=max(2000.,2*float(self.snap_radius_m))
+                    coverage=(min(xmin,bx-padding),min(ymin,by-padding),
+                              max(xmax,bx+padding),max(ymax,by+padding))
+                    coverage=_enlarge(coverage)
+                    cache=self.cache_dir/('resolution_'+key.replace('.','_'))/'manual_expanded'
+                    rebuilt=_build(option,coverage,self.crs_wkt,native_crs,x,y,
+                                   cache,{'snap_enabled':False},cancelled,publish)
+                    new_crs=str(rebuilt['analysis'].crs_wkt)
+                    original_x,original_y=_transform_metre_point(
+                        context['original_x'],context['original_y'],native_crs,new_crs)
+                    selected_x,selected_y=_transform_metre_point(x,y,native_crs,new_crs)
+                    verified=deepcopy(context)
+                    verified.update(dem_path=rebuilt['dem_path'],
+                                    directions_path=rebuilt['directions_path'],
+                                    crs_wkt=new_crs,original_x=original_x,
+                                    original_y=original_y,
+                                    metadata=dict(rebuilt['metadata'],
+                                                  manual_d8_rebuild_reason=reason))
+                    result=_manual_analysis(verified,selected_x,selected_y,cancelled,publish)
+                    result['metadata']['manual_d8_recalculated']=True
+                    return result
+                except ValueError as retry_error:
+                    retry_error.selection_context=deepcopy(context)
+                    raise
         self._on_status('Preparando la cuenca desde el cierre elegido…')
         self._start('CAUMAX: cierre elegido por el usuario',operation,'select',key)
         return True
