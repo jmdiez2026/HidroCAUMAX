@@ -25,6 +25,20 @@ from .flow_quantiles import PERIODS, estimate_flow
 MAX_PROFILE_CELLS = 100_000
 
 
+def _integer_tick_step(span, divisions=10):
+    """Smallest readable integer interval for a positive axis span."""
+    value = max(0., float(span))
+    if not math.isfinite(value) or value <= 0.:
+        return 1
+    estimate = max(1., value / max(1, divisions))
+    magnitude = 10 ** math.floor(math.log10(estimate))
+    for multiplier in (1, 2, 5, 10):
+        candidate = max(1, int(multiplier * magnitude))
+        if candidate >= estimate - 1e-10:
+            return candidate
+    return max(1, int(10 * magnitude))
+
+
 def profile_counts(flows):
     """Count cells with valid Q, missing Q and genuine Q=0 separately."""
     total = len(flows)
@@ -185,6 +199,8 @@ class _ProfilePlot(QWidget):
         self.flows = []
         self.selected = None
         self.chart = QRectF()
+        self._ymin = 0.
+        self._xstep = self._ystep = 1
         self.setMinimumHeight(260)
 
     @staticmethod
@@ -198,15 +214,35 @@ class _ProfilePlot(QWidget):
     def frame(self):
         self.chart = QRectF(76, 26, max(50, self.width() - 98),
                             max(80, self.height() - 90))
-        length = max(1e-9, self.rows[-1][0]) if self.rows else 1.
-        known = [q for q in self.flows if q is not None]
-        ymax = max(1., max(known) * 1.12) if known else 1.
-        return length, ymax
+        river_length = max(0., float(self.rows[-1][0])) if self.rows else 0.
+        self._xstep = _integer_tick_step(river_length, divisions=11)
+        length = max(self._xstep, math.ceil(river_length / self._xstep) * self._xstep)
+        known = [float(q) for q in self.flows if q is not None and math.isfinite(float(q))]
+        if not known:
+            self._ymin, self._ystep = 0., 1
+            return float(length), 1.
+        low, high = min(known), max(known)
+        if low == high:
+            margin = max(1., abs(low) * 0.05)
+            low = max(0., low - margin)
+            high += margin
+        self._ystep = _integer_tick_step(high - low, divisions=6)
+        self._ymin = max(0, math.floor(low / self._ystep) * self._ystep)
+        ymax = math.ceil(high / self._ystep) * self._ystep
+        if ymax <= self._ymin:
+            ymax = self._ymin + self._ystep
+        if ymax - self._ymin < 4 * self._ystep:
+            ymax = self._ymin + 4 * self._ystep
+        return float(length), float(ymax)
 
     def xy(self, i, length, ymax):
         rect = self.chart
-        return QPointF(rect.left() + self.rows[i][0] / length * rect.width(),
-                       rect.bottom() - (self.flows[i] or 0.) / ymax * rect.height())
+        point_x = rect.left() + self.rows[i][0] / length * rect.width()
+        q = self.flows[i]
+        if q is None:
+            return QPointF(point_x, rect.bottom())
+        return QPointF(point_x,
+                       rect.bottom() - (q - self._ymin) / (ymax - self._ymin) * rect.height())
 
     def mousePressEvent(self, event):
         if event.button() != Qt.LeftButton or not self.rows:
@@ -240,18 +276,20 @@ class _ProfilePlot(QWidget):
             x1 = chart.left() + stop / length * chart.width()
             painter.fillRect(QRectF(x0, chart.top(), max(0., x1 - x0), chart.height()),
                              QColor(224, 231, 236, 115))
-        for n in range(6):
-            f = n / 5.
-            y = chart.bottom() - f * chart.height()
-            x = chart.left() + f * chart.width()
+        for tick in range(int(self._ymin), int(ymax) + 1, self._ystep):
+            y = chart.bottom() - (tick - self._ymin) / (ymax - self._ymin) * chart.height()
             painter.setPen(QPen(QColor('#DFE6EF'), 1))
             painter.drawLine(QPointF(chart.left(), y), QPointF(chart.right(), y))
-            painter.drawLine(QPointF(x, chart.top()), QPointF(x, chart.bottom()))
             painter.setPen(QColor('#25384A'))
             painter.drawText(QRectF(0, y - 10, chart.left() - 8, 20),
-                             Qt.AlignRight | Qt.AlignVCenter, self.number(ymax * f))
-            painter.drawText(QRectF(x - 30, chart.bottom() + 4, 60, 19),
-                             Qt.AlignCenter, self.number(length * f))
+                             Qt.AlignRight | Qt.AlignVCenter, str(tick))
+        for tick in range(0, int(length) + 1, self._xstep):
+            x = chart.left() + tick / length * chart.width()
+            painter.setPen(QPen(QColor('#DFE6EF'), 1))
+            painter.drawLine(QPointF(x, chart.top()), QPointF(x, chart.bottom()))
+            painter.setPen(QColor('#25384A'))
+            painter.drawText(QRectF(x - 25, chart.bottom() + 4, 50, 19),
+                             Qt.AlignCenter, str(tick))
         painter.setPen(QPen(QColor('#526C81'), 1))
         painter.drawRect(chart)
         painter.drawText(QRectF(chart.left(), self.height()-28, chart.width(), 23),
