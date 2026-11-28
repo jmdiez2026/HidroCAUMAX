@@ -11,7 +11,8 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 from qgis.core import QgsApplication, QgsProject
 from qgis.PyQt.QtTest import QSignalSpy
 from caumax_consulta.po_clip import (
-    PD_EXPORT_FILENAME, clip_po_to_basin, export_pd_clip, publish_clipped_raster)
+    PD_EXPORT_FILENAME, basin_clip_fingerprint, clip_po_to_basin, export_pd_clip,
+    inspect_clipped_raster, publish_clipped_raster)
 from caumax_consulta.basin_hydrology_widget import BasinHydrologyWidget
 
 
@@ -73,6 +74,22 @@ class PdCedexClipTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'existe'):
             export_pd_clip(destination, exported)
 
+    def test_persisted_clip_metadata_matches_source_and_active_geometry(self):
+        path = self.directory / 'pd_t100_verified.tif'
+        clip_po_to_basin(self.original, self.polygon, self.wkt, path, kind='pd')
+        fingerprint = basin_clip_fingerprint(self.polygon, self.wkt)
+        self.assertEqual(inspect_clipped_raster(
+            path, 'pd', self.original, fingerprint=fingerprint), path)
+        with self.assertRaisesRegex(ValueError, 'divisoria'):
+            inspect_clipped_raster(path, 'pd', self.original, fingerprint='x'*64)
+        with self.assertRaisesRegex(ValueError, 'original'):
+            inspect_clipped_raster(path, 'pd', 'wrong.tif', fingerprint=fingerprint)
+        with self.assertRaisesRegex(ValueError, 'recorte'):
+            inspect_clipped_raster(path, 'po', self.original, fingerprint=fingerprint)
+        with self.assertRaises(FileNotFoundError):
+            inspect_clipped_raster(self.directory / 'missing.tif', 'pd',
+                                   self.original, fingerprint=fingerprint)
+
     def test_p0_and_selected_pd_are_loaded_and_explicitly_visible(self):
         p0_path = self.directory / 'po_cut.tif'
         pd_path = self.directory / 'pd_cut.tif'
@@ -90,6 +107,10 @@ class PdCedexClipTests(unittest.TestCase):
         self.assertEqual(pd_layer.customProperty('HidroCAUMAX/return_period'), 100)
         self.assertEqual(pd_layer.customProperty('HidroCAUMAX/hydrology_clipped'), 'pd')
         self.assertIn('T=100', pd_layer.name())
+        # Reopening a consultation must reuse the already published raster.
+        self.assertIs(publish_clipped_raster(
+            pd_path, kind='pd', period=100, project=self.project), pd_layer)
+        self.assertEqual(len(set(self.project.mapLayers())-self.original_layer_ids), 2)
 
     def test_period_selector_is_in_requested_row_and_disables_old_export(self):
         widget = BasinHydrologyWidget()
