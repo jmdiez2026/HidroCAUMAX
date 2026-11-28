@@ -524,7 +524,7 @@ class RationalLayersBridgeTests(unittest.TestCase):
         self.complete_parameters(binding)
         self.app.processEvents()
         self.assertTrue(binding.basin_button.isEnabled())
-        self.assertEqual(binding.basin_button.text(),'Descripción cuenca')
+        self.assertEqual(binding.basin_button.text(),'IC-5.2 Análisis Cuenca')
         self.assertTrue(binding.basin_button.icon().isNull())
         self.assertEqual(binding.action_row_bottom.indexOf(binding.basin_button),0)
         self.assertEqual(binding.action_row_bottom.indexOf(binding.button),1)
