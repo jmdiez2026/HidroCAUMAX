@@ -185,8 +185,12 @@ class RationalLayersBridgeTests(unittest.TestCase):
         self.assertIs(self.dialog.btnCalculate, button)
         self.assertTrue(button.icon().isNull())
         self.assertEqual(button.iconSize(), original_size)
-        self.assertTrue(binding.frequency_button.icon().isNull())
+        self.assertFalse(binding.frequency_button.icon().isNull())
         self.assertEqual(binding.frequency_button.text(), 'Calcular Q vs. T')
+        self.assertEqual(binding.frequency_button.iconSize(), QSize(22, 22))
+        self.assertEqual(binding.frequency_button.layoutDirection(), Qt.LeftToRight)
+        pixmap = binding.frequency_button.icon().pixmap(22, 22)
+        self.assertFalse(pixmap.isNull(), 'El SVG del modelo 2 debe cargarse correctamente')
         self.assertEqual(binding.action_row.indexOf(binding.frequency_button), 1)
         self.assertEqual(binding.action_row.indexOf(binding.basin_button), 2)
         self.assertEqual(binding.action_row.indexOf(binding.button), 3)
@@ -251,7 +255,8 @@ class RationalLayersBridgeTests(unittest.TestCase):
             self.assertGreater(binding.complete_button.geometry().center().y(),
                                binding.frequency_button.geometry().center().y())
             for b in buttons:
-                self.assertTrue(b.icon().isNull())
+                self.assertEqual(b.icon().isNull(),
+                                 b is not binding.frequency_button)
                 self.assertIn('#D9F0FF', b.styleSheet())
                 self.assertIn('padding: 5px 9px', b.styleSheet())
                 self.assertGreaterEqual(b.width(), b.sizeHint().width())
