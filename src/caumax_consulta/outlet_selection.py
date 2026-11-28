@@ -3,11 +3,11 @@ import math
 
 from osgeo import gdal
 from qgis.PyQt import sip
-from qgis.PyQt.QtCore import Qt, pyqtSignal
-from qgis.PyQt.QtGui import QColor
+from qgis.PyQt.QtCore import QEvent, QPoint, QRect, QTimer, Qt, pyqtSignal
+from qgis.PyQt.QtGui import QColor, QPainter, QPainterPath, QPen, QPixmap
 from qgis.PyQt.QtWidgets import (
     QCheckBox, QDialog, QDialogButtonBox, QGridLayout, QHBoxLayout, QLabel,
-    QPushButton, QSpinBox, QVBoxLayout,
+    QPushButton, QSpinBox, QVBoxLayout, QWidget,
 )
 from qgis.core import QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsPointXY, QgsProject
 from qgis.gui import QgsMapToolEmitPoint, QgsVertexMarker
@@ -15,6 +15,135 @@ from qgis.gui import QgsMapToolEmitPoint, QgsVertexMarker
 from .basin import _aligned, _open_raster, _read, _VALID_CODES
 from .grid import cell_at_point
 from .native_decimal import format_decimal
+
+
+class _HoverPointTool(QgsMapToolEmitPoint):
+    """Observe mouse hover without changing QgsMapToolEmitPoint click handling."""
+
+    def __init__(self, canvas, on_hover):
+        super().__init__(canvas)
+        self._on_hover = on_hover
+
+    def canvasMoveEvent(self, event):
+        self._on_hover(event.pos())
+
+
+class _CursorMagnifier(QWidget):
+    """Passive, circular 4× view of the existing QGIS map canvas.
+
+    The source is captured from the *viewport*, while this lens is a sibling
+    of the viewport. It therefore never captures itself or alters the canvas
+    extent, map tool, cursor coordinates, layers or raster values.
+    """
+
+    DIAMETER = 120
+    ZOOM = 4
+    HOVER_DELAY_MS = 25
+
+    def __init__(self, canvas):
+        super().__init__(canvas)
+        self.setObjectName('HidroCAUMAXOutletMagnifier')
+        self.canvas = canvas
+        self.setFixedSize(self.DIAMETER, self.DIAMETER)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WA_NoSystemBackground, True)
+        self.setFocusPolicy(Qt.NoFocus)
+        self._cursor_pos = None
+        self._sample = QPixmap()
+        self._sample_target = QRect()
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.setSingleShot(True)
+        self._refresh_timer.setInterval(self.HOVER_DELAY_MS)
+        self._refresh_timer.timeout.connect(self._refresh)
+        self.hide()
+
+    def follow(self, viewport_position):
+        viewport = self.canvas.viewport()
+        point = QPoint(viewport_position)
+        if not viewport.rect().contains(point):
+            self.stop()
+            return
+        self._cursor_pos = point
+        if not self._refresh_timer.isActive():
+            self._refresh_timer.start()
+
+    def stop(self):
+        self._refresh_timer.stop()
+        self._cursor_pos = None
+        self.hide()
+
+    def _refresh(self):
+        cursor = self._cursor_pos
+        if cursor is None:
+            return
+        viewport = self.canvas.viewport()
+        if not viewport.rect().contains(cursor):
+            self.stop()
+            return
+        source_diameter = self.DIAMETER // self.ZOOM
+        source = QRect(cursor.x() - source_diameter // 2,
+                       cursor.y() - source_diameter // 2,
+                       source_diameter, source_diameter)
+        visible_source = source.intersected(viewport.rect())
+        if visible_source.isEmpty():
+            self.stop()
+            return
+        # The lens is a child of canvas, not of canvas.viewport(): grabbing
+        # the viewport captures only the rendered map, never the magnifier.
+        snapshot = viewport.grab(visible_source)
+        if snapshot.isNull():
+            self.stop()
+            return
+        self._sample = snapshot
+        self._sample_target = QRect(
+            (visible_source.x() - source.x()) * self.ZOOM,
+            (visible_source.y() - source.y()) * self.ZOOM,
+            visible_source.width() * self.ZOOM,
+            visible_source.height() * self.ZOOM)
+        position = viewport.mapTo(self.canvas, cursor)
+        separation = 18
+        x = position.x() + separation
+        if x + self.DIAMETER > self.canvas.width():
+            x = position.x() - separation - self.DIAMETER
+        x = max(0, min(x, max(0, self.canvas.width() - self.DIAMETER)))
+        y = max(0, min(position.y() - self.DIAMETER // 2,
+                       max(0, self.canvas.height() - self.DIAMETER)))
+        self.move(x, y)
+        self.show()
+        self.raise_()
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        circle = QPainterPath()
+        circle.addEllipse(1, 1, self.DIAMETER - 2, self.DIAMETER - 2)
+        painter.setClipPath(circle)
+        painter.fillRect(self.rect(), QColor('#EFF7FB'))
+        if not self._sample.isNull():
+            painter.setRenderHint(QPainter.SmoothPixmapTransform, False)
+            painter.drawPixmap(self._sample_target, self._sample)
+        painter.setClipping(False)
+        mid = self.DIAMETER // 2
+        # Contrasting crosshair remains stationary over the exact hovered
+        # map pixel; it is a visual aid and never changes the selected point.
+        painter.setPen(QPen(QColor('#FFFFFF'), 3))
+        painter.drawLine(mid - 13, mid, mid - 5, mid)
+        painter.drawLine(mid + 5, mid, mid + 13, mid)
+        painter.drawLine(mid, mid - 13, mid, mid - 5)
+        painter.drawLine(mid, mid + 5, mid, mid + 13)
+        painter.setPen(QPen(QColor('#0068A8'), 1.5))
+        painter.drawLine(mid - 13, mid, mid - 5, mid)
+        painter.drawLine(mid + 5, mid, mid + 13, mid)
+        painter.drawLine(mid, mid - 13, mid, mid - 5)
+        painter.drawLine(mid, mid + 5, mid, mid + 13)
+        painter.setPen(QPen(QColor('#0D678F'), 2))
+        painter.drawEllipse(2, 2, self.DIAMETER - 4, self.DIAMETER - 4)
+        painter.setPen(QColor('#0D678F'))
+        painter.drawText(QRect(mid + 30, mid + 32, 24, 16),
+                         Qt.AlignCenter, '4×')
+        painter.end()
 
 
 class OutletSelectionDialog(QDialog):
@@ -34,6 +163,10 @@ class OutletSelectionDialog(QDialog):
         self.canvas = iface.mapCanvas()
         self._dem = self._directions = None
         self._marker = self._map_tool = self._previous_tool = None
+        self._magnifier = None
+        self._magnifier_active = False
+        self._map_viewport = self.canvas.viewport()
+        self._map_viewport.installEventFilter(self)
         self._picking = self._closed = False
         self._busy = False
         self.persistent = bool(persistent)
@@ -296,13 +429,33 @@ class OutletSelectionDialog(QDialog):
             self._invalid('No se puede representar el cierre en el CRS actual del mapa.')
             return False
 
+    def _map_hover(self, position):
+        if (self._picking and self._magnifier_active and not self._closed
+                and not self._busy and self._magnifier is not None):
+            self._magnifier.follow(position)
+
+    def eventFilter(self, watched, event):
+        if (watched is self._map_viewport
+                and event.type() in (QEvent.Leave, QEvent.Hide)):
+            if self._magnifier is not None:
+                self._magnifier.stop()
+        return super().eventFilter(watched, event)
+
     def start_picking(self, *args):
-        if self._closed or self._busy or (self._map_tool is not None and self.canvas.mapTool() is self._map_tool):
+        if self._closed or self._busy:
+            return
+        if self._map_tool is not None and self.canvas.mapTool() is self._map_tool:
+            # A second click on «Elegir en el mapa» re-enables the hover lens
+            # after it was hidden by a previous point selection.
+            self._magnifier_active = True
             return
         self._previous_tool = self.canvas.mapTool()
         if self._map_tool is None:
-            self._map_tool = QgsMapToolEmitPoint(self.canvas)
+            self._map_tool = _HoverPointTool(self.canvas, self._map_hover)
             self._map_tool.canvasClicked.connect(self._map_clicked)
+        if self._magnifier is None:
+            self._magnifier = _CursorMagnifier(self.canvas)
+        self._magnifier_active = True
         self._picking = True
         self.canvas.setMapTool(self._map_tool)
         self.status_label.setText('Haz clic en el mapa; después revisa la celda y pulsa «Aplicar cierre».')
@@ -310,6 +463,11 @@ class OutletSelectionDialog(QDialog):
     def _map_clicked(self, point, button):
         if self._closed or self._busy or not self._picking or button != Qt.LeftButton:
             return
+        # Retain QGIS's original clicked point, not the enlarged preview's
+        # position. Stop the lens until another explicit map-selection action.
+        self._magnifier_active = False
+        if self._magnifier is not None:
+            self._magnifier.stop()
         try:
             transform = QgsCoordinateTransform(self.canvas.mapSettings().destinationCrs(),self.crs,QgsProject.instance())
             native = transform.transform(point)
@@ -334,6 +492,11 @@ class OutletSelectionDialog(QDialog):
 
     def _stop_picking(self, restore=True):
         self._picking = False
+        self._magnifier_active = False
+        lens,self._magnifier = self._magnifier,None
+        if lens is not None:
+            lens.stop()
+            lens.deleteLater()
         tool,self._map_tool = self._map_tool,None
         if tool is not None:
             try:
@@ -355,6 +518,10 @@ class OutletSelectionDialog(QDialog):
         if self._closed:
             return
         self._closed = True
+        try:
+            self._map_viewport.removeEventFilter(self)
+        except RuntimeError:
+            pass
         for signal, slot in ((self.canvas.mapToolSet,self._tool_changed),
                              (self.canvas.destinationCrsChanged,self._refresh_marker)):
             try:
