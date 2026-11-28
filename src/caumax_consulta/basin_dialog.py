@@ -153,6 +153,8 @@ class BasinDialog(QDialog):
         self._quantiles_loading = False
         self._basin_hydrology_controller = None
         self._basin_hydrology_loading = False
+        self._legacy_area_generation = 0
+        self._legacy_area_task = None
         self._po_clip_generation = 0
         self._po_clip_task = None
         self._po_clip_path = None
@@ -909,6 +911,7 @@ class BasinDialog(QDialog):
         self._auto_hydrology_timer.start(0)
 
     def _display_analysis(self, quantile_snapshot=None):
+        self._cancel_legacy_area_recovery()
         self._invalidate_po_clip()
         self._invalidate_pd_clip()
         self._interpretations_valid = True
@@ -1091,6 +1094,78 @@ class BasinDialog(QDialog):
         self._set_export_enabled(available and self._smoothing_ready and not busy and not self._saving_project)
         self._refresh_drainage_controls()
         self._refresh_outlet_button()
+
+    def _cancel_legacy_area_recovery(self):
+        """Cancel out-of-date D8 area reconstruction when the basin changes."""
+        self._legacy_area_generation += 1
+        task, self._legacy_area_task = self._legacy_area_task, None
+        if task is not None:
+            task.cancel()
+
+    def _start_legacy_area_recovery(self):
+        """Recover real D8 upstream areas from original rasters when needed.
+
+        For historic consultations without these data, only official original
+        D8 and MDT files are accepted. Missing files leave saved Qci intact.
+        """
+        from .course_flow_profile import main_course_areas
+        from .legacy_course_areas import LegacyD8AreaTask
+        if (self._disposed or self.analysis is None or self._surface_pending
+                or self._resolution_pending or is_rational_query(self.query)
+                or not self.analysis.main_course_wkb or main_course_areas(self.analysis)):
+            return
+        if self._legacy_area_task is not None:
+            return
+        direction = str(getattr(self.query, 'directions_path', '') or '').split('|', 1)[0]
+        dem = str(getattr(self.query, 'dem_path', '') or '').split('|', 1)[0]
+        if not Path(direction).is_file() or not Path(dem).is_file():
+            profile = self.quantiles_widget.course_profile
+            profile._area_note = ('La aportación específica requiere las capas '
+                                  'D8 y MDT originales para esta consulta antigua.')
+            if profile._rows:
+                profile._update_coverage()
+            return
+        task = LegacyD8AreaTask(
+            self._legacy_area_generation, self.analysis, direction, dem,
+            self._legacy_area_finished)
+        self._legacy_area_task = task
+        QgsApplication.taskManager().addTask(task)
+
+    def _legacy_area_finished(self, task, success):
+        """Publish only areas matching the unchanged active native D8 course."""
+        if (self._disposed or task is not self._legacy_area_task
+                or task.generation != self._legacy_area_generation
+                or task.analysis is not self.analysis):
+            return
+        self._legacy_area_task = None
+        profile = self.quantiles_widget.course_profile
+        if not success:
+            profile._area_note = (
+                'Aportación específica no calculada: ' +
+                (task.error or 'recálculo D8 cancelado.'))
+            if profile._rows:
+                profile._update_coverage()
+            return
+        from .course_flow_profile import main_course_areas
+        from types import SimpleNamespace
+        # The worker has verified every native D8 centre. Preserve all old
+        # morphometry, Qci rasters/samples and saved statistics byte-for-byte.
+        diagnostics = dict(self.analysis.diagnostics)
+        diagnostics['main_course_areas_b64'] = task.result
+        proposed = SimpleNamespace(diagnostics=diagnostics)
+        if len(main_course_areas(proposed)) != len(
+                __import__('osgeo').ogr.CreateGeometryFromWkb(
+                    bytes(self.analysis.main_course_wkb)).GetPoints()):
+            profile._area_note = 'Las áreas D8 recuperadas no coinciden con el curso.'
+            return
+        self.analysis = replace(self.analysis, diagnostics=diagnostics)
+        profile.set_upstream_areas(
+            self.analysis, note='Áreas D8 originales recuperadas de la consulta antigua.')
+        if self._resolution_controller is not None:
+            key = self._active_resolution_key
+            if key in self._resolution_controller.variants:
+                self._resolution_controller.variants[key]['analysis'] = self.analysis
+        self._cache_variant_state()
 
     def _invalidate_po_clip(self):
         """A new basin invalidates the previously computed P₀ crop."""
@@ -1978,6 +2053,8 @@ class BasinDialog(QDialog):
         self._resolution_options(controller.options)
         self.resolution_progress.hide()
         self._cache_variant_state()
+        if state:
+            self._start_legacy_area_recovery()
         if not self._resolution_loading:
             self._queue_smoothing()
         self._resume_outlet_selection()
@@ -2866,6 +2943,7 @@ class BasinDialog(QDialog):
         self._apply_smoothing_snapshot(state)
         if state.get('course_flow_profile') and not is_rational_query(self.query):
             self.quantiles_widget.course_profile.restore_snapshot(state['course_flow_profile'])
+        self._start_legacy_area_recovery()
         self._setup_resolutions(getattr(saved,'resolution_state',None))
 
     def _apply_smoothing_snapshot(self, state):
@@ -3092,6 +3170,7 @@ class BasinDialog(QDialog):
         if self._disposed:
             return
         self._disposed = True
+        self._cancel_legacy_area_recovery()
         self._invalidate_po_clip()
         self._invalidate_pd_clip()
         self.hypsometry_widget.dispose()
