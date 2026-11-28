@@ -12,7 +12,8 @@ from qgis.core import QgsApplication, QgsProject, QgsVectorLayer
 
 import test_drainage_dialog as fixture
 from caumax_consulta.layer_order import add_result_layer, create_result_group, ensure_results_above_official
-from caumax_consulta.morphology_table import three_line_text
+from caumax_consulta.morphology_table import three_line_text, wrapped_line_count
+from caumax_consulta.parameter_schema import METRICS, morphology_table_label
 
 
 class DialogLayoutTests(unittest.TestCase):
@@ -180,22 +181,38 @@ class DialogLayoutTests(unittest.TestCase):
                 self.fixture.app.processEvents()
                 dialog._fit_rows()
                 table = dialog.table
-                actual = [table.columnWidth(column) for column in range(4)]
-                self.assertLessEqual(abs(sum(actual) - table.viewport().width()), 1)
-                for column,ratio in ((1,.13),(3,.38)):
-                    self.assertAlmostEqual(actual[column]/sum(actual),ratio,delta=.01)
-                self.assertAlmostEqual((actual[0]+actual[2])/sum(actual),.49,delta=.01)
-                self.assertLessEqual(actual[0]/sum(actual),.41)
+                self.assertEqual(table.columnCount(), 3)
+                actual = [table.columnWidth(column) for column in range(3)]
+                viewport = table.viewport().width()
+                self.assertLessEqual(abs(sum(actual) - viewport), 1)
+                self.assertEqual([table.horizontalHeaderItem(i).text()
+                                  for i in range(3)],
+                                 ['Parámetro', 'Valor', 'Interpretación'])
+                # Dimensional units are part of the name, not a narrow fourth
+                # column; the interpretation occupies the recovered space.
+                self.assertLessEqual(actual[0], max(135, int(viewport * .40)))
+                self.assertGreater(actual[2], actual[0])
                 header = table.horizontalHeader()
-                text_width = QFontMetrics(header.font()).horizontalAdvance(table.horizontalHeaderItem(2).text())
-                self.assertGreaterEqual(actual[2],text_width+10)
-                self.assertEqual(header.font(),dialog.font())
-                for row in range(table.rowCount()):
-                    for column in (1, 2):
-                        self.assertEqual(table.item(row, column).textAlignment(), int(Qt.AlignCenter))
-                    item = table.item(row, 3)
+                text_width = QFontMetrics(header.font()).horizontalAdvance(
+                    table.horizontalHeaderItem(2).text())
+                self.assertGreaterEqual(actual[2], text_width + 10)
+                self.assertEqual(header.font(), dialog.font())
+                metrics = table.fontMetrics()
+                for row, metric in enumerate(METRICS):
+                    label = table.item(row, 0)
+                    self.assertEqual(label.text(), morphology_table_label(metric))
+                    self.assertEqual(label.toolTip(), metric.definition)
+                    self.assertEqual(table.item(row, 1).textAlignment(),
+                                     int(Qt.AlignCenter))
+                    # Every parameter is rendered fully, even when it needs
+                    # more than three wrapped lines in a narrow QGIS dialog.
+                    lines = wrapped_line_count(label.text(), table.font(), actual[0] - 12)
+                    self.assertGreaterEqual(
+                        table.rowHeight(row),
+                        lines * max(metrics.height(), metrics.lineSpacing()) + 8)
+                    item = table.item(row, 2)
                     self.assertIn(item.text(), unescape(item.toolTip()))
-                    shown = three_line_text(item.text(), table.font(), actual[3] - 6)
+                    shown = three_line_text(item.text(), table.font(), actual[2] - 6)
                     self.assertLessEqual(len(shown.splitlines()), 3)
 
     def test_dialog_tracks_qgis_frame_at_right_with_its_full_height(self):
