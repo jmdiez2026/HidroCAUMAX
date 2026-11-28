@@ -120,38 +120,43 @@ class BasinHydrologyWidgetTests(unittest.TestCase):
         finally:
             widget.close()
 
-    def test_calculation_buttons_emit_once_and_busy_blocks_duplicate_requests(self):
+    def test_no_calculation_buttons_and_busy_preserves_automatic_means(self):
+        """The presentational widget has no manual trigger and no raster I/O."""
         self.widget.restore(saved_state())
         self.assertEqual(self.widget.status_label.text(), "")
         self.assertTrue(self.widget.status_label.isHidden())
-        p0_spy = QSignalSpy(self.widget.calculate_p0)
-        rainfall_spy = QSignalSpy(self.widget.calculate_rainfall)
+        self.assertFalse(hasattr(self.widget, 'p0_button'))
+        self.assertFalse(hasattr(self.widget, 'rainfall_button'))
+        self.assertEqual(self.widget.rainfall_group.title(),
+                         'Precipitación diaria máxima anual media en la cuenca')
         cancel_spy = QSignalSpy(self.widget.cancel_requested)
-        self.widget.p0_button.click()
-        self.widget.rainfall_button.click()
-        self.assertEqual((len(p0_spy), len(rainfall_spy)), (1, 1))
         before = self.widget.snapshot()
         self.widget.set_busy(True, "Calculando cobertura…")
-        self.assertFalse(self.widget.p0_button.isEnabled())
-        self.assertFalse(self.widget.rainfall_button.isEnabled())
         self.assertFalse(self.widget.cancel_button.isHidden())
         self.assertIn("Calculando cobertura", self.widget.status_label.text())
         self.assertFalse(self.widget.status_label.isHidden())
-        self.widget.p0_button.click()
-        self.widget.rainfall_button.click()
-        self.assertEqual((len(p0_spy), len(rainfall_spy)), (1, 1))
         self.widget.cancel_button.click()
         self.assertEqual(len(cancel_spy), 1)
         self.assertEqual(self.widget.snapshot(), before)
         self.widget.set_busy(False)
-        self.assertTrue(self.widget.p0_button.isEnabled())
-        self.assertTrue(self.widget.rainfall_button.isEnabled())
         self.assertTrue(self.widget.cancel_button.isHidden())
         self.assertTrue(self.widget.status_label.isHidden())
         self.widget.set_busy(False, "No se pudo abrir la capa de precipitación.")
         self.assertFalse(self.widget.status_label.isHidden())
         self.assertIn("No se pudo abrir", self.widget.status_label.text())
         self.assertEqual(self.widget.snapshot(), before)
+
+    def test_atomic_joint_results_reject_partial_publication(self):
+        before = self.widget.snapshot()
+        payload = {'p0': result(5.5), 'rainfall':
+                   {str(period): result(11. + i) for i, period in enumerate(PERIODS)}}
+        with self.assertRaises(ValueError):
+            self.widget.set_result('both', {'p0': payload['p0']})
+        self.assertEqual(self.widget.snapshot(), before)
+        self.widget.set_result('both', payload)
+        self.assertEqual(self.widget.snapshot()['p0_result']['mean_mm'], 5.5)
+        self.assertEqual(len(self.widget.snapshot()['rainfall_results']), 6)
+        self.assertIn('P₀ medio en la cuenca', self.widget.p0_label.text())
 
     def test_same_basin_preserves_calculated_values_without_resampling(self):
         state = saved_state()
@@ -350,7 +355,7 @@ class BasinHydrologyWidgetTests(unittest.TestCase):
         self.assertIn("Máximo: 12 mm · Mínimo: 8 mm", description["forward_text"])
         self.assertIn("Desviación típica espacial: 1 mm", description["forward_text"])
 
-    def test_precipitation_button_and_six_rows_fit_narrow_width_without_clipping(self):
+    def test_automatic_precipitation_six_rows_fit_narrow_width_without_clipping(self):
         state = saved_state()
         for item in state["rainfall_results"].values():
             mean = item["mean_mm"]
@@ -364,17 +369,13 @@ class BasinHydrologyWidgetTests(unittest.TestCase):
                 self.widget.show()
                 QTest.qWait(50)
                 self.assertGreaterEqual(self.widget.width(), width)
-                button = self.widget.rainfall_button
-                self.assertEqual(button.text(),
-                    "Calcular Precipitación diaria máxima anual MEDIA (mm)")
-                metrics = button.fontMetrics()
-                self.assertEqual(button.width(), round((metrics.horizontalAdvance(button.text())+4)*1.10))
-                self.assertEqual(button.height(), max(26,max(metrics.height(),metrics.lineSpacing())+6))
-                self.assertLessEqual(button.geometry().right(), self.widget.rainfall_group.width()-1)
+                self.assertFalse(hasattr(self.widget, 'rainfall_button'))
+                self.assertFalse(hasattr(self.widget, 'p0_button'))
                 table = self.widget.rainfall_table
                 self.assertEqual(table.rowCount(), 6)
                 self.assertEqual([table.horizontalHeaderItem(i).text() for i in range(6)],
-                    ['Periodo T (años)', 'Pd (media)', 'Pd mín', 'Pd máx', 'Desv. típ.', 'Estado'])
+                    ['Periodo T (años)', 'Pd (media) [mm]', 'Pd mín [mm]',
+                     'Pd máx [mm]', 'Desv. típ. [mm]', 'Estado'])
                 metrics = table.fontMetrics()
                 minimum = max(metrics.height(), metrics.lineSpacing())+2
                 for row in range(6):
