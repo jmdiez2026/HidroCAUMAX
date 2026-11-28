@@ -1,5 +1,7 @@
 """PDF tests using QGIS's Qt runtime and the installed PDF text reader."""
 import importlib
+import base64
+import struct
 import copy
 import os
 from pathlib import Path
@@ -121,7 +123,17 @@ class ReportTests(unittest.TestCase):
         png_path = self.folder / 'onscreen.png'
         self.assertTrue(image.save(str(png_path), 'PNG'))
         data = png_path.read_bytes()
+        self.analysis.diagnostics['main_course_areas_b64'] = base64.b64encode(
+            struct.pack('<2d', 1.2, 0.6)).decode('ascii')
         state = {
+            'hydrology_clips': {
+                'po': {'path':'C:/HidroCAUMAX/Capas_Generadas/Po_cuenca.tif',
+                       'source_path':'C:/CEDEX/Po.tif',
+                       'basin_fingerprint':'f' * 64},
+                'pd': {'path':'C:/HidroCAUMAX/Capas_Generadas/Pd_T100.tif',
+                       'source_path':'C:/CEDEX/Pd100.tif',
+                       'basin_fingerprint':'f' * 64, 'period':100}
+            },
             'chart_snapshots': [
                 {'key': 'main_course_qci',
                  'title': 'Caudal Máximo (Qci-n) a lo largo del curso principal',
@@ -147,6 +159,10 @@ class ReportTests(unittest.TestCase):
         self.assertIn('Aportación Específica', text)
         self.assertIn('Caudal Máximo (Qci-n)', text)
         self.assertIn('Datos longitudinales oficiales', text)
+        self.assertIn('Aportación específica del curso principal', text)
+        self.assertIn('Rásteres hidrológicos recortados', text)
+        self.assertIn('C:/CEDEX/Po.tif', text)
+        self.assertIn('C:/CEDEX/Pd100.tif', text)
         self.assertIn('celdas D8 muestreadas: 2', text)
         pictures = [ref.get_object()
                     for page in reader.pages
