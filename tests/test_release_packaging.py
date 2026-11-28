@@ -96,6 +96,26 @@ def attach_windows_fixture(test):
 
 
 class ReleasePackagingTests(unittest.TestCase):
+    def test_qgis_plugin_manager_uses_existing_toolbar_icon_from_second_screenshot(self):
+        """The installed listing and remote plugin feed use one PNG asset."""
+        source = ROOT / 'src/caumax_consulta'
+        metadata = builder.read_metadata(source)
+        self.assertEqual(metadata.get('icon'), 'assets/hidrocaumax.png')
+        icon = source / metadata['icon']
+        self.assertTrue(icon.is_file())
+        self.assertTrue(icon.read_bytes().startswith(bytes.fromhex('89504e470d0a1a0a')))
+        version = metadata['version']
+        tag = 'v' + version
+        xml = builder.repository_xml(metadata, 'jmdiez2026/HidroCAUMAX',
+                                     tag, 'HidroCAUMAX_v' +
+                                     version.replace('.', '_') + '.zip')
+        remote = ET.fromstring(xml).find('.//icon').text
+        self.assertEqual(remote,
+            f'https://raw.githubusercontent.com/jmdiez2026/HidroCAUMAX/{tag}/'
+            'src/caumax_consulta/assets/hidrocaumax.png')
+        self.assertIn('caumax_consulta/assets/hidrocaumax.png',
+                      builder.source_files(source))
+
     def test_actual_package_has_original_p0_in_improved_folder(self):
         files = builder.source_files(ROOT/'src/caumax_consulta')
         name = 'Po_Spain_CLC2000_100x100_30N_AdrLBallesteros.tif'
