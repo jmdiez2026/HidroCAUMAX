@@ -436,10 +436,15 @@ class OutletSelectionDialog(QDialog):
             self._magnifier.follow(position)
 
     def eventFilter(self, watched, event):
-        if (watched is self._map_viewport
-                and event.type() in (QEvent.Leave, QEvent.Hide)):
-            if self._magnifier is not None:
-                self._magnifier.stop()
+        if watched is self._map_viewport:
+            if event.type() == QEvent.MouseMove:
+                # The QGIS map tool does not always receive unpressed moves
+                # (notably on Qt5/offscreen). Listen to the viewport too;
+                # no mouse event is consumed and native click handling stays.
+                self._map_hover(event.pos())
+            elif event.type() in (QEvent.Leave, QEvent.Hide):
+                if self._magnifier is not None:
+                    self._magnifier.stop()
         return super().eventFilter(watched, event)
 
     def start_picking(self, *args):
