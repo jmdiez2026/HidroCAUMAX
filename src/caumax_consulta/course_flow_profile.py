@@ -25,6 +25,28 @@ from .flow_quantiles import PERIODS, estimate_flow
 MAX_PROFILE_CELLS = 100_000
 
 
+def profile_counts(flows):
+    """Count cells with valid Q, missing Q and genuine Q=0 separately."""
+    total = len(flows)
+    missing = sum(value is None for value in flows)
+    zeros = sum(value == 0 for value in flows if value is not None)
+    return dict(total=total, valid=total - missing, missing=missing, zeros=zeros)
+
+
+def profile_segments(flows):
+    """Consecutive data and NoData runs; zero is a valid observation."""
+    if not flows:
+        return []
+    segments, first, available = [], 0, flows[0] is not None
+    for i, value in enumerate(flows[1:], 1):
+        next_available = value is not None
+        if next_available != available:
+            segments.append((available, first, i - 1))
+            first, available = i, next_available
+    segments.append((available, first, len(flows) - 1))
+    return segments
+
+
 def _reference(wkt):
     srs = osr.SpatialReference()
     if not wkt or srs.ImportFromWkt(str(wkt)) != 0:
@@ -206,6 +228,18 @@ class _ProfilePlot(QWidget):
         painter.fillRect(self.rect(), Qt.white)
         length, ymax = self.frame()
         chart = self.chart
+        # Shaded bands indicate missing official Qci coverage, not Q=0.
+        for available, first, last in profile_segments(self.flows):
+            if available:
+                continue
+            start = (0. if first == 0 else
+                     (self.rows[first - 1][0] + self.rows[first][0]) / 2)
+            stop = (length if last == len(self.rows) - 1 else
+                    (self.rows[last][0] + self.rows[last + 1][0]) / 2)
+            x0 = chart.left() + start / length * chart.width()
+            x1 = chart.left() + stop / length * chart.width()
+            painter.fillRect(QRectF(x0, chart.top(), max(0., x1 - x0), chart.height()),
+                             QColor(224, 231, 236, 115))
         for n in range(6):
             f = n / 5.
             y = chart.bottom() - f * chart.height()
@@ -228,37 +262,30 @@ class _ProfilePlot(QWidget):
         painter.drawText(QRectF(-chart.height()/2, -13, chart.height(), 25),
                          Qt.AlignCenter, 'Caudal máximo (m³/s)')
         painter.restore()
+        # Join only consecutive cells with valid official Q; no interpolation.
         painter.setPen(QPen(QColor('#0080BB'), 2))
-        path = QPainterPath()
-        joined = False
-        for i, q in enumerate(self.flows):
-            if q is None:
-                if joined:
-                    painter.drawPath(path)
-                path, joined = QPainterPath(), False
+        for available, first, last in profile_segments(self.flows):
+            if not available:
                 continue
-            point = self.xy(i, length, ymax)
-            if not joined:
-                path.moveTo(point)
-                joined = True
-            else:
-                path.lineTo(point)
-        if joined:
-            painter.drawPath(path)
-        # Mark observed values at their actual D8 chainage. Repeated 25-m
-        # samples of the same official 500-m Qci pixel may overlap: draw each
-        # visible screen position once to avoid dense marker overpainting.
-        painter.setPen(QPen(QColor('#006D9C'), 1))
-        painter.setBrush(QColor('#0080BB'))
+            line = QPainterPath()
+            line.moveTo(self.xy(first, length, ymax))
+            for i in range(first + 1, last + 1):
+                line.lineTo(self.xy(i, length, ymax))
+            painter.drawPath(line)
+        # Blue markers: Q>0. Green markers: valid Q=0. NoData has no point.
         visible_points = set()
         for i, q in enumerate(self.flows):
             if q is None:
-                continue  # NoData is never represented as Q=0.
+                continue
             p = self.xy(i, length, ymax)
-            screen_key = (round(p.x()), round(p.y()))
-            if screen_key not in visible_points:
-                painter.drawEllipse(p, 2.0, 2.0)
-                visible_points.add(screen_key)
+            zero = q == 0
+            key = (round(p.x()), round(p.y()), zero)
+            if key in visible_points:
+                continue
+            visible_points.add(key)
+            painter.setBrush(QColor('#168A69') if zero else QColor('#0080BB'))
+            painter.setPen(QPen(QColor('#087353') if zero else QColor('#006D9C'), 1))
+            painter.drawEllipse(p, 3.0 if zero else 2.0, 3.0 if zero else 2.0)
         if not any(q is not None for q in self.flows):
             painter.setPen(QColor('#65788A'))
             painter.drawText(chart, Qt.AlignCenter | Qt.TextWordWrap,
@@ -274,8 +301,10 @@ class _ProfilePlot(QWidget):
                 painter.setPen(QPen(QColor('#BD5B13'), 2))
                 painter.drawEllipse(p, 5, 5)
             msg = 'Abscisado: ' + self.number(self.rows[i][0]) + ' km'
-            msg += '\nQ: ' + (self.number(self.flows[i]) + ' m³/s'
-                              if self.flows[i] is not None else 'sin dato')
+            q = self.flows[i]
+            msg += ('\nQ: sin dato SNCZI (NoData)' if q is None else
+                    '\nQ: ' + self.number(q) + ' m³/s' +
+                    (' (dato válido)' if q == 0 else ''))
             metrics = painter.fontMetrics()
             lines = msg.split('\n')
             w = max(metrics.horizontalAdvance(line) for line in lines) + 14
