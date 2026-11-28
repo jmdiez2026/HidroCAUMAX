@@ -11,8 +11,8 @@ from pathlib import Path
 from qgis.PyQt.QtCore import QBuffer, QIODevice, QPointF, QRectF, QSize, Qt, pyqtSignal, QTimer
 from qgis.PyQt.QtGui import QColor, QFont, QIcon, QImage, QPainter, QPen, QPolygonF, QTextDocument
 from qgis.PyQt.QtWidgets import (
-    QCheckBox, QDoubleSpinBox, QGridLayout, QGroupBox, QHeaderView, QLabel, QPushButton,
-    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QDoubleSpinBox, QGridLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QPushButton,
+    QSizePolicy, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from .flow_quantiles import CompactTableHeader, PERIODS, estimate_flow as _estimate_precipitation
@@ -289,6 +289,9 @@ class BasinHydrologyWidget(QWidget):
     changed = pyqtSignal()
     po_clip_requested = pyqtSignal()
     po_export_requested = pyqtSignal()
+    pd_clip_requested = pyqtSignal(int)
+    pd_export_requested = pyqtSignal()
+    pd_period_changed = pyqtSignal(int)
 
     def __init__(self,parent=None):
         super().__init__(parent)
@@ -297,6 +300,9 @@ class BasinHydrologyWidget(QWidget):
         self._updating = False
         self._busy = False
         self._po_export_ready = False
+        self._pd_export_ready = False
+        self._pd_export_period = None
+        self._pd_clipping = False
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0,0,0,0)
         self.p0_group = QGroupBox('Umbral de Escorrentía (P₀)',self)
@@ -392,6 +398,39 @@ class BasinHydrologyWidget(QWidget):
         self.extrapolate_check.setChecked(True)
         controls.addWidget(self.extrapolate_check,0,2,2,1,Qt.AlignVCenter)
         rainfall_layout.addLayout(controls)
+        # New CEDEX tools sit immediately below Consultar T(Pd), above the
+        # methodological explanation and plots. The selector chooses one of
+        # the six actual source rasters; an interpolated T is never invented.
+        pd_row = QHBoxLayout()
+        pd_row.setSpacing(6)
+        self.pd_clip_button = QPushButton('Recorte capa Pd-T CEDEX', self.rainfall_group)
+        self.pd_period_combo = QComboBox(self.rainfall_group)
+        for period in PERIODS:
+            self.pd_period_combo.addItem(f'{period} años', int(period))
+        self.pd_period_combo.setCurrentIndex(self.pd_period_combo.findData(100))
+        self.pd_period_combo.setToolTip(
+            'Período de retorno de la capa ráster CEDEX que se utilizará para el recorte.')
+        self.pd_export_button = QPushButton('Exportar capa Pd-T', self.rainfall_group)
+        self.pd_clip_button.setToolTip(
+            'Recortar la capa CEDEX del período seleccionado con la divisoria activa.')
+        self.pd_export_button.setToolTip(
+            'Exportar como CONSULTA_Pd-T CEDEX.tif a Capas_Generadas.')
+        for button in (self.pd_clip_button, self.pd_export_button):
+            button.setEnabled(False)
+            button.setMinimumHeight(30)
+            button.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        self.pd_period_combo.setMinimumWidth(90)
+        self.pd_period_combo.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        self.pd_clip_button.clicked.connect(
+            lambda checked=False: self.pd_clip_requested.emit(self.selected_pd_period()))
+        self.pd_export_button.clicked.connect(
+            lambda checked=False: self.pd_export_requested.emit())
+        self.pd_period_combo.currentIndexChanged.connect(self._pd_period_changed)
+        pd_row.addWidget(self.pd_clip_button)
+        pd_row.addWidget(self.pd_period_combo)
+        pd_row.addWidget(self.pd_export_button)
+        pd_row.addStretch()
+        rainfall_layout.addLayout(pd_row)
         self.method_label = QLabel(self)
         self.method_label.setWordWrap(True)
         rainfall_layout.addWidget(self.method_label)
@@ -528,6 +567,35 @@ class BasinHydrologyWidget(QWidget):
             self._updating = False
         self.changed.emit()
 
+    def selected_pd_period(self):
+        return int(self.pd_period_combo.currentData())
+
+    def _pd_period_changed(self, _index):
+        self._pd_export_ready = False
+        self._pd_export_period = None
+        self._refresh_pd_actions()
+        self.pd_period_changed.emit(self.selected_pd_period())
+
+    def set_pd_clipping(self, active):
+        self._pd_clipping = bool(active)
+        self._refresh_pd_actions()
+
+    def set_pd_clip_export_available(self, available, period=None):
+        self._pd_export_ready = bool(available)
+        self._pd_export_period = int(period) if available and period is not None else None
+        self._refresh_pd_actions()
+
+    def _refresh_pd_actions(self):
+        state = self._state or {}
+        period = self.selected_pd_period()
+        record = (state.get('rainfall_results') or {}).get(str(period)) or {}
+        available = (bool(record.get('source_path'))
+                     and record.get('status') in ('ok', 'partial'))
+        self.pd_clip_button.setEnabled(available and not self._busy and not self._pd_clipping)
+        self.pd_export_button.setEnabled(
+            self._pd_export_ready and self._pd_export_period == period
+            and not self._busy and not self._pd_clipping)
+
     def set_clip_export_available(self, available):
         self._po_export_ready = bool(available)
         self._refresh_po_actions()
@@ -578,6 +646,7 @@ class BasinHydrologyWidget(QWidget):
     def _sync_busy(self):
         self.cancel_button.setVisible(self._busy)
         self._refresh_po_actions()
+        self._refresh_pd_actions()
 
     def _changed(self,key,value):
         if self._updating or self._state is None:
