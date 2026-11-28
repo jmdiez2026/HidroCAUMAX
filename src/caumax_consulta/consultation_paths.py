@@ -24,3 +24,21 @@ def consultation_directory(profile_root=None):
 def default_consultation_path(profile_root=None):
     """Default location and filename for a complete consultation save."""
     return consultation_directory(profile_root) / DEFAULT_CONSULTATION_FILENAME
+
+
+REPORT_FOLDER = 'Informes'
+DEFAULT_REPORT_FILENAME = 'Informe_Consulta_Máximos_Naturales (Qcin).pdf'
+
+
+def report_directory(profile_root=None):
+    """Create the PDF report folder in the currently active QGIS profile."""
+    if profile_root is None:
+        profile_root = QgsApplication.qgisSettingsDirPath()
+    folder = Path(profile_root) / 'HidroCAUMAX' / REPORT_FOLDER
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder
+
+
+def default_report_path(profile_root=None):
+    """Default fully qualified location for the maximum-flow Qci PDF report."""
+    return report_directory(profile_root) / DEFAULT_REPORT_FILENAME
