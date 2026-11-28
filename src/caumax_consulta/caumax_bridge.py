@@ -534,7 +534,7 @@ class CaumaxBridge(QObject):
         if layout is None:
             self._notify('No se encuentra la botonera de consulta de CAUMAX; se conserva la ventana original.')
             return
-        button = _LogoBasinButton('Análisis de la Cuenca', dialog)
+        button = _LogoBasinButton('Consulta: Análisis Cuenca', dialog)
         button.setObjectName(BUTTON_NAME)
         button.setStyleSheet(BUTTON_STYLE)
         button.setToolTip('Delimitar la cuenca del último punto consultado correctamente en CAUMAX')
