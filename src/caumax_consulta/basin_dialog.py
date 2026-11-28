@@ -153,6 +153,10 @@ class BasinDialog(QDialog):
         self._quantiles_loading = False
         self._basin_hydrology_controller = None
         self._basin_hydrology_loading = False
+        self._po_clip_generation = 0
+        self._po_clip_task = None
+        self._po_clip_path = None
+        self._po_clip_fingerprint = None
         self._auto_hydrology_timer = QTimer(self)
         self._auto_hydrology_timer.setSingleShot(True)
         self._auto_hydrology_timer.timeout.connect(self._calculate_auto_basin_hydrology)
@@ -245,6 +249,8 @@ class BasinDialog(QDialog):
         # background. The active basin/closure is the only calculation input.
         self.basin_hydrology_widget.changed.connect(self._basin_hydrology_changed)
         self.basin_hydrology_widget.cancel_requested.connect(self._cancel_basin_hydrology)
+        self.basin_hydrology_widget.po_clip_requested.connect(self._clip_po_to_basin)
+        self.basin_hydrology_widget.po_export_requested.connect(self._export_po_clip)
         layout.addWidget(self.basin_hydrology_widget)
         self.progress = QProgressBar(self)
         self.progress.setRange(0, 0)
@@ -893,6 +899,7 @@ class BasinDialog(QDialog):
         self._auto_hydrology_timer.start(0)
 
     def _display_analysis(self, quantile_snapshot=None):
+        self._invalidate_po_clip()
         self._interpretations_valid = True
         key = f'{min(self.analysis.cell_width, self.analysis.cell_height):g}'
         visible = self._grid_visibility_by_resolution.get(key, key in ('500', '25'))
@@ -1073,6 +1080,124 @@ class BasinDialog(QDialog):
         self._set_export_enabled(available and self._smoothing_ready and not busy and not self._saving_project)
         self._refresh_drainage_controls()
         self._refresh_outlet_button()
+
+    def _invalidate_po_clip(self):
+        """A new basin invalidates the previously computed P₀ crop."""
+        self._po_clip_generation += 1
+        task, self._po_clip_task = self._po_clip_task, None
+        if task is not None:
+            task.cancel()
+        self._po_clip_path = None
+        self._po_clip_fingerprint = None
+        if hasattr(self, 'basin_hydrology_widget'):
+            self.basin_hydrology_widget.set_clip_export_available(False)
+
+    def _clip_po_to_basin(self):
+        """Compute the P₀ raster crop in a QGIS worker, publish on GUI thread."""
+        if (self._disposed or self.analysis is None or self._resolution_pending
+                or self._saving_project or self._basin_hydrology_busy()
+                or not self._surface_valid):
+            return
+        from .basin_hydrology import basin_fingerprint
+        from .po_clip import PoClipTask
+        from uuid import uuid4
+        state = self.basin_hydrology_widget.snapshot() or {}
+        p0 = state.get('p0_result') or {}
+        source = str(p0.get('source_path') or '').split('|', 1)[0]
+        if not source or not Path(source).is_file():
+            QMessageBox.warning(
+                self, 'Recorte capa Po',
+                'El ráster P₀ de esta consulta no está disponible en disco.')
+            return
+        try:
+            self._invalidate_po_clip()
+            folder = Path(QgsApplication.qgisSettingsDirPath()) / 'HidroCAUMAX' / 'PoRecortes'
+            folder.mkdir(parents=True, exist_ok=True)
+            path = folder / ('Po_Cuenca_' + uuid4().hex + '.tif')
+            fingerprint = basin_fingerprint(self.analysis)
+            task = PoClipTask(self._po_clip_generation, source,
+                              self.analysis.geometry_wkb, self.analysis.crs_wkt,
+                              path, self._po_clip_finished)
+            self._po_clip_task = task
+            self._po_clip_fingerprint = fingerprint
+            self.basin_hydrology_widget.po_clip_button.setEnabled(False)
+            self.basin_hydrology_widget.set_clip_export_available(False)
+            self.basin_hydrology_widget.po_clip_button.setToolTip(
+                'Recortando P₀ a la divisoria activa…')
+            QgsApplication.taskManager().addTask(task)
+        except (OSError, ValueError, RuntimeError) as error:
+            QMessageBox.warning(self, 'Recorte capa Po', str(error))
+
+    def _po_clip_finished(self, task, success):
+        """Accept only the latest valid basin crop and keep its QGIS layer."""
+        from .basin_hydrology import basin_fingerprint
+        stale = (self._disposed or task is not self._po_clip_task
+                 or task.generation != self._po_clip_generation
+                 or self.analysis is None
+                 or basin_fingerprint(self.analysis) != self._po_clip_fingerprint)
+        if stale:
+            task.path.unlink(missing_ok=True)
+            return
+        self._po_clip_task = None
+        self.basin_hydrology_widget.po_clip_button.setToolTip(
+            'Recortar el ráster P₀ oficial utilizando la divisoria activa.')
+        self.basin_hydrology_widget._refresh_po_actions()
+        if not success:
+            task.path.unlink(missing_ok=True)
+            QMessageBox.warning(
+                self, 'Recorte capa Po',
+                task.error or 'No se pudo completar el recorte P₀.')
+            return
+        try:
+            from .po_style import apply_po_style
+            from .generated_cleanup import register_dataset
+            raster = QgsRasterLayer(str(task.result),
+                                    'HidroCAUMAX · Umbral Po recortado a cuenca', 'gdal')
+            if not raster.isValid():
+                raise ValueError('El ráster P₀ generado no es válido en QGIS.')
+            apply_po_style(raster)
+            raster.setCustomProperty('HidroCAUMAX/po_clipped', True)
+            QgsProject.instance().addMapLayer(raster)
+            register_dataset(task.result)
+            self._po_clip_path = Path(task.result)
+            self.basin_hydrology_widget.set_clip_export_available(True)
+            self.iface.messageBar().pushMessage(
+                'HidroCAUMAX', 'Recorte de P₀ cargado en QGIS: ' + str(task.result),
+                level=Qgis.Info, duration=8)
+        except (ValueError, RuntimeError, OSError) as error:
+            self._po_clip_path = None
+            self.basin_hydrology_widget.set_clip_export_available(False)
+            QMessageBox.warning(self, 'Recorte capa Po', str(error))
+
+    def _export_po_clip(self):
+        from .po_clip import EXPORT_FILENAME, export_po_clip
+        from .improved_storage import generated_layers_directory
+        path = self._po_clip_path
+        if (self._disposed or path is None or not path.is_file()
+                or self.analysis is None):
+            QMessageBox.warning(
+                self, 'Exportar capa Po',
+                'Primero genera el recorte de P₀ correspondiente a la cuenca activa.')
+            return
+        try:
+            suggested = generated_layers_directory() / EXPORT_FILENAME
+        except OSError as error:
+            QMessageBox.warning(self, 'Exportar capa Po', str(error))
+            return
+        destination, _ = QFileDialog.getSaveFileName(
+            self, 'Exportar Umbral Po de la Cuenca', str(suggested),
+            'GeoTIFF (*.tif)')
+        if not destination:
+            return
+        if not Path(destination).suffix:
+            destination += '.tif'
+        try:
+            target = export_po_clip(path, destination)
+            self.iface.messageBar().pushMessage(
+                'HidroCAUMAX', 'Umbral Po exportado: ' + str(target),
+                level=Qgis.Info, duration=8)
+        except (OSError, ValueError, RuntimeError) as error:
+            QMessageBox.warning(self, 'Exportar capa Po', str(error))
 
     def _basin_hydrology_status(self, text, progress):
         if not self._disposed:
@@ -2723,6 +2848,7 @@ class BasinDialog(QDialog):
         if self._disposed:
             return
         self._disposed = True
+        self._invalidate_po_clip()
         self.hypsometry_widget.dispose()
         self.quantiles_widget.course_profile.dispose()
         from .delineation_cleanup import unregister_dialog
