@@ -272,7 +272,7 @@ class BasinHydrologyDialogTests(unittest.TestCase):
         empty = legacy.basin_hydrology_widget.snapshot()
         self.assertIsNone(empty['p0_result'])
         self.assertEqual(empty['rainfall_results'], {})
-        self.assertIn('no calculado', legacy.basin_hydrology_widget.p0_label.text().lower())
+        self.assertIn('pendiente de cálculo', legacy.basin_hydrology_widget.p0_label.text().lower())
         self.assertEqual(len(self.manager.tasks), scheduled_tasks)
 
     def test_discovery_failure_does_not_unlock_save_or_pdf_while_mean_task_is_busy(self):
