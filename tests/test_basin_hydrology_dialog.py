@@ -23,7 +23,9 @@ import test_drainage_dialog as fixture
 from caumax_consulta.basin_hydrology import basin_fingerprint
 from caumax_consulta.consultation_paths import (
     CONSULTATION_FILTER, CONSULTATION_FOLDER, DEFAULT_CONSULTATION_FILENAME,
+    REPORT_FOLDER, DEFAULT_REPORT_FILENAME,
     consultation_directory, default_consultation_path,
+    report_directory, default_report_path,
 )
 from caumax_consulta.session_store import load_session, save_session
 from caumax_consulta.terrain import analyze_basin
@@ -147,6 +149,38 @@ class BasinHydrologyDialogTests(unittest.TestCase):
         self.assertEqual(restored.analysis.values, dialog.analysis.values)
         self.assertEqual(restored.query, dialog.query)
         self.assertEqual(restored.smoothing_state['basin_hydrology'], seeded)
+
+    def test_default_qcin_report_folder_is_created_under_active_qgis_profile(self):
+        profile_root = self.folder / 'QGIS3' / 'profiles' / 'default'
+        destination = default_report_path(profile_root)
+        expected = profile_root / 'HidroCAUMAX' / 'Informes'
+        self.assertEqual(report_directory(profile_root), expected)
+        self.assertTrue(expected.is_dir())
+        self.assertEqual(expected.name, REPORT_FOLDER)
+        self.assertEqual(destination.parent, expected)
+        self.assertEqual(destination.name,
+                         'Informe_Consulta_Máximos_Naturales (Qcin).pdf')
+        self.assertEqual(destination.name, DEFAULT_REPORT_FILENAME)
+
+    def test_informe_pdf_chooser_suggests_qcin_filename_and_keeps_generation(self):
+        from caumax_consulta import reports
+        profile_root = self.folder / 'QGIS3' / 'profiles' / 'default'
+        proposed = default_report_path(profile_root)
+        with patch.object(reports, 'default_report_path', return_value=proposed) as path:
+            with patch.object(reports.QFileDialog, 'getSaveFileName',
+                              return_value=(str(proposed), 'Archivos PDF (*.pdf)')) as chooser:
+                with patch.object(reports, 'generate_basin_pdf',
+                                  return_value=proposed) as generate:
+                    saved = reports.ask_basin_pdf(
+                        self.dialog, self.dialog.analysis, self.dialog.query,
+                        smoothing_state=self.dialog.get_smoothing_state())
+        path.assert_called_once_with()
+        chooser.assert_called_once_with(
+            self.dialog, 'Informe de la cuenca hidrográfica',
+            str(proposed), 'Archivos PDF (*.pdf)')
+        self.assertEqual(saved, proposed)
+        self.assertTrue(generate.call_args.kwargs['open_after'])
+        self.assertEqual(generate.call_args.args[0], proposed)
 
     def test_automatic_joint_means_run_in_one_task_and_publish_only_current_basin(self):
         dialog = self.dialog
