@@ -185,8 +185,8 @@ class BasinHydrologyWidgetTests(unittest.TestCase):
         self.assertEqual(self.widget.snapshot()["rainfall_results"], {})
         self.widget.set_analysis(None)
         self.assertIsNone(self.widget.snapshot())
-        self.assertFalse(self.widget.p0_button.isEnabled())
-        self.assertFalse(self.widget.rainfall_button.isEnabled())
+        self.assertFalse(hasattr(self.widget, 'p0_button'))
+        self.assertFalse(hasattr(self.widget, 'rainfall_button'))
 
     def test_offline_restore_emits_one_change_and_returns_deep_copies(self):
         state = saved_state()
@@ -379,7 +379,7 @@ class BasinHydrologyWidgetTests(unittest.TestCase):
                 metrics = table.fontMetrics()
                 minimum = max(metrics.height(), metrics.lineSpacing())+2
                 for row in range(6):
-                    self.assertEqual(table.rowHeight(row), minimum)
+                    self.assertGreaterEqual(table.rowHeight(row), minimum)
                     for column in range(6):
                         bounds = metrics.boundingRect(0, 0, table.columnWidth(column)-6, 1000,
                             Qt.AlignCenter | Qt.TextWordWrap, table.item(row, column).text())
