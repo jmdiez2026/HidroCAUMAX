@@ -420,6 +420,7 @@ class CourseFlowProfile(QWidget):
         self._task = None
         self._generation = 0
         self._rows, self._flows = [], []
+        self._areas, self._specific_values = [], []
         self._selected = None
         self._crs = ''
         self._cell_width = self._cell_height = 0.
@@ -436,6 +437,16 @@ class CourseFlowProfile(QWidget):
         self.graph = _ProfilePlot(self)
         self.graph.chosen.connect(self.select_index)
         layout.addWidget(self.graph)
+        self.specific_title = QLabel('Aportación Específica (m³/s·km²)', self)
+        specific_font = self.specific_title.font()
+        specific_font.setBold(True)
+        self.specific_title.setFont(specific_font)
+        layout.addWidget(self.specific_title)
+        self.specific_graph = _ProfilePlot(self, specific=True)
+        self.specific_graph.chosen.connect(self.select_index)
+        layout.addWidget(self.specific_graph)
+        self.specific_title.hide()
+        self.specific_graph.hide()
         self.coverage_label = QLabel('', self)
         self.coverage_label.setWordWrap(True)
         self.coverage_label.setToolTip(
@@ -474,8 +485,12 @@ class CourseFlowProfile(QWidget):
         self._remove_marker()
         self._key = None
         self._rows, self._flows = [], []
+        self._areas, self._specific_values = [], []
         self._selected = None
         self.graph.show_profile([], [], None)
+        self.specific_graph.show_profile([], [], None)
+        self.specific_graph.hide()
+        self.specific_title.hide()
         self.coverage_label.clear()
         self.hide()
 
@@ -489,11 +504,15 @@ class CourseFlowProfile(QWidget):
             self.clear()
             return
         crs = str(analysis.crs_wkt)
-        key = hashlib.sha256(wkb + crs.encode() + repr(paths).encode()).hexdigest()
+        areas = main_course_areas(analysis)
+        key = hashlib.sha256(
+            wkb + crs.encode() + repr(paths).encode()
+            + repr((len(areas), areas[0] if areas else None)).encode()).hexdigest()
         self._iface, self._canvas = iface, iface.mapCanvas()
         self._crs = crs
         self._cell_width = float(analysis.cell_width)
         self._cell_height = float(analysis.cell_height)
+        self._areas = areas
         self.show()
         self.set_period(state['input_period'], state['extrapolate'])
         if key == self._key:
@@ -503,8 +522,11 @@ class CourseFlowProfile(QWidget):
         self._remove_marker()
         self._selected = None
         self._rows, self._flows = [], []
+        self._specific_values = []
         self._key = key
         self.graph.show_profile([], [], None)
+        self.specific_graph.hide()
+        self.specific_title.hide()
         self.coverage_label.setText('Recuento de celdas: pendiente de lectura SNCZI.')
         if not any((Path(path.split('|', 1)[0]).is_file() or
                     path.startswith('/vsi')) for path in paths if path):
@@ -548,6 +570,19 @@ class CourseFlowProfile(QWidget):
         self._flows = [estimate_flow(self._period, item[3], self._extrapolate)['flow']
                        for item in self._rows]
         self.graph.show_profile(self._rows, self._flows, self._selected)
+        if len(self._areas) == len(self._rows) and self._rows:
+            self._specific_values = [
+                None if q is None or area <= 0 else q / area
+                for q, area in zip(self._flows, self._areas)
+            ]
+            self.specific_graph.show_profile(
+                self._rows, self._specific_values, self._selected)
+            self.specific_title.show()
+            self.specific_graph.show()
+        else:
+            self._specific_values = []
+            self.specific_graph.hide()
+            self.specific_title.hide()
         self._update_coverage()
         self._selection_text()
         self._update_marker()
@@ -590,11 +625,16 @@ class CourseFlowProfile(QWidget):
         if self._selected is not None and 0 <= self._selected < len(self._rows):
             station = self._rows[self._selected][0]
             flow = self._flows[self._selected]
-            self.label.setText(
-                f"Abscisado desde el cierre: {station:.2f} km · "
-                + ('Q: sin dato SNCZI (NoData)' if flow is None else
-                   f'Q máx. T={self._period:g}: {flow:.2f} m³/s'
-                   + (' (dato válido)' if flow == 0 else '')))
+            specific = (self._specific_values[self._selected]
+                        if self._specific_values else None)
+            text = (f'Abscisado desde el cierre: {station:.2f} km · '
+                    + ('Q: sin dato SNCZI (NoData)' if flow is None else
+                       f'Q máx. T={self._period:g}: {flow:.2f} m³/s'
+                       + (' (dato válido)' if flow == 0 else '')))
+            if self._specific_values:
+                text += (' · Aportación específica: sin dato' if specific is None else
+                         f' · Aportación específica: {specific:.4f} m³/s·km²')
+            self.label.setText(text)
         elif self._rows:
             good = sum(q is not None for q in self._flows)
             self.label.setText(
@@ -606,6 +646,9 @@ class CourseFlowProfile(QWidget):
             return
         self._selected = int(index)
         self.graph.show_profile(self._rows, self._flows, self._selected)
+        if self._specific_values:
+            self.specific_graph.show_profile(
+                self._rows, self._specific_values, self._selected)
         self._selection_text()
         self._update_marker()
 
