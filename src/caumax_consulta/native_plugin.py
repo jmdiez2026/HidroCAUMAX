@@ -96,7 +96,7 @@ class NativeCaumaxPlugin(QObject):
         except OSError as error:
             self.iface.messageBar().pushMessage('HidroCAUMAX',
                 'No se ha podido preparar la carpeta de exportación: ' + str(error), level=Qgis.Warning, duration=10)
-        self.action = QAction('Cargar capas de CAUMAX', self.iface.mainWindow())
+        self.action = QAction('Cargar capas CAUMAX', self.iface.mainWindow())
         self.action.triggered.connect(self._load_native_caumax_layers)
         self.iface.addPluginToMenu(self.MENU, self.action)
         self.restore_action = QAction('Restaurar herramientas HidroCAUMAX',
@@ -155,7 +155,7 @@ class NativeCaumaxPlugin(QObject):
         self.help_action.setIcon(QIcon(str(Path(__file__).parent / 'assets' / 'help_manual.svg')))
         for action, caption, tip in (
                 (self.action, 'HidroCAUMAX v.1.0',
-                 'Complementos > CAUMAX > CARGAR CAPAS DE CAUMAX'),
+                 'Complementos > CAUMAX > CARGAR CAPAS CAUMAX'),
                 (self.reference_action, 'Capas', 'Cargar las capas de referencia HidroCAUMAX'),
                 (self.open_action, 'Abrir cuenca', 'Abrir un proyecto de cuenca guardado'),
                 (self.clear_layers_action, 'Limpiar capas',
@@ -183,17 +183,18 @@ class NativeCaumaxPlugin(QObject):
             if menu is None or normal(parent_action.text()) != 'caumax':
                 continue
             for child_action in menu.actions():
-                if normal(child_action.text()) == 'cargar capas de caumax':
+                if normal(child_action.text()) in (
+                        'cargar capas caumax', 'cargar capas de caumax'):
                     if child_action.isEnabled():
                         child_action.trigger()
                     else:
                         QMessageBox.warning(
                             self.iface.mainWindow(), 'Cargar capas de CAUMAX',
-                            'La acción CARGAR CAPAS DE CAUMAX está deshabilitada.')
+                            'La acción CARGAR CAPAS CAUMAX está deshabilitada.')
                     return
         QMessageBox.warning(
             self.iface.mainWindow(), 'Cargar capas de CAUMAX',
-            'No se encuentra Complementos > CAUMAX > CARGAR CAPAS DE CAUMAX. '
+            'No se encuentra Complementos > CAUMAX > CARGAR CAPAS CAUMAX. '
             'Comprueba que el complemento oficial CAUMAX está activado.')
 
     def _activate_tools(self, *args):
