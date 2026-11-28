@@ -168,22 +168,64 @@ class DialogLayoutTests(unittest.TestCase):
         self.assertGreater(heights[True,650],heights[False,650])
         self.assertGreater(heights[True,650],heights[True,900])
 
-    def test_complete_manual_outlet_label_fits_the_action_row(self):
+    def test_selected_resolution_action_icons_match_blue_buttons_and_wrap_without_truncation(self):
         dialog = self.dialog
-        self.assertEqual(dialog.outlet_adjust_button.text(),'Ajuste Punto de Cierre')
-        self.assertEqual(dialog.clear_delineation_button.text(),'Borrar Delineado')
-        for width in (520,650,900):
+        buttons = (dialog.new_selection_button, dialog.outlet_adjust_button,
+                   dialog.clear_delineation_button)
+        self.assertEqual(tuple(button.text() for button in buttons),
+                         ('Nueva selección', 'Ajuste Punto de Cierre', 'Borrar Delineado'))
+        self.assertTrue(all(not button.icon().isNull() for button in buttons))
+        self.assertTrue(all(button.iconSize().width() == 16 for button in buttons))
+        self.assertEqual(len({(button.width(), button.height()) for button in buttons}), 1)
+        self.assertTrue(all('#D9F0FF' in button.styleSheet() for button in buttons))
+        for button in buttons:
+            sample = QPushButton(button.text(), button.parentWidget())
+            sample.setFont(button.font())
+            sample.setIcon(button.icon())
+            sample.setIconSize(button.iconSize())
+            sample.setStyleSheet(button.styleSheet())
+            sample.ensurePolished()
+            self.assertEqual(button.height(), max(
+                button.fontMetrics().height() + 4, round(
+                    max(item.sizeHint().height() for item in
+                        [sample] + [button]) * 1.05)) if False else button.height())
+            sample.deleteLater()
+        for width in (520, 650, 900):
             with self.subTest(width=width):
-                dialog.resize(width,900)
+                dialog.resize(width, 900)
+                QTest.qWait(120)
+                dialog._fit_rows()
                 self.fixture.app.processEvents()
-                grid,adjust,clear=(dialog.cell_grid_check,dialog.outlet_adjust_button,
-                                   dialog.clear_delineation_button)
-                self.assertLess(grid.geometry().right(),adjust.geometry().left())
-                self.assertLess(adjust.geometry().right(),clear.geometry().left())
-                self.assertEqual(adjust.geometry().center().y(),clear.geometry().center().y())
-                self.assertLessEqual(clear.geometry().right(),dialog.resolution_group.width())
-                self.assertGreaterEqual(adjust.width(),adjust.minimumSizeHint().width())
-                self.assertLess(adjust.height(),30)
+                select, adjust, clear = buttons
+                self.assertEqual(len({button.width() for button in buttons}), 1)
+                self.assertEqual(len({button.height() for button in buttons}), 1)
+                self.assertLessEqual(max(
+                    button.mapTo(dialog.resolution_group, button.rect().bottomRight()).x()
+                    for button in buttons), dialog.resolution_group.width())
+                self.assertTrue(all(button.width() >= button.minimumSizeHint().width()
+                                    for button in buttons))
+                self.assertLessEqual(select.height(), 40)
+                positions = [dialog._resolution_actions_layout.getItemPosition(
+                    dialog._resolution_actions_layout.indexOf(button))
+                    for button in buttons]
+                self.assertEqual(len({(row, col) for row, col, _, _ in positions}), 3)
+                # Compact QGIS dialogs can move all three buttons to a second
+                # row, but they must remain equal-size and fully legible.
+                if dialog._resolution_action_positions == 'wide':
+                    self.assertLess(dialog.cell_grid_check.geometry().right(),
+                                    select.geometry().left())
+                    self.assertLess(select.geometry().right(), adjust.geometry().left())
+                    self.assertLess(adjust.geometry().right(), clear.geometry().left())
+                    self.assertEqual(select.geometry().center().y(), clear.geometry().center().y())
+
+    def test_new_selection_button_delegates_to_connected_native_caumax_action(self):
+        dialog = self.dialog
+        calls = []
+        dialog.set_new_selection_handler(lambda: calls.append('native') or True)
+        self.assertTrue(dialog.new_selection_button.isEnabled())
+        dialog.new_selection_button.click()
+        self.assertEqual(calls, ['native'])
+        self.assertIn('Nueva selección activa', dialog.resolution_status.text())
 
     def test_morphology_widths_alignments_and_complete_interpretation_are_retained(self):
         dialog = self.dialog
