@@ -157,6 +157,7 @@ class BasinDialog(QDialog):
         self._po_clip_task = None
         self._po_clip_path = None
         self._po_clip_fingerprint = None
+        self._po_clip_source = None
         self._pd_clip_generation = 0
         self._pd_clip_task = None
         self._pd_clip_path = None
@@ -1099,6 +1100,7 @@ class BasinDialog(QDialog):
             task.cancel()
         self._po_clip_path = None
         self._po_clip_fingerprint = None
+        self._po_clip_source = None
         if hasattr(self, 'basin_hydrology_widget'):
             self.basin_hydrology_widget.set_clip_export_available(False)
 
@@ -1162,6 +1164,7 @@ class BasinDialog(QDialog):
             from .po_clip import publish_clipped_raster
             publish_clipped_raster(task.result, kind='po')
             self._po_clip_path = Path(task.result)
+            self._po_clip_source = task.source
             self.basin_hydrology_widget.set_clip_export_available(True)
             self.iface.messageBar().pushMessage(
                 'HidroCAUMAX', 'Recorte de P₀ visible en QGIS: ' + str(task.result),
@@ -2314,6 +2317,84 @@ class BasinDialog(QDialog):
             lines.append('Cálculos sobre la divisoria original. Cambiar el grado recalcula automáticamente toda la cuenca.')
         self.smoothing_status.setText('\n'.join(lines))
 
+    def _snapshot_hydrology_clips(self):
+        """Only persist clips still tied to the active geometry and sources."""
+        if self.analysis is None:
+            return None
+        from .basin_hydrology import basin_fingerprint
+        fingerprint = basin_fingerprint(self.analysis)
+        hydrology = self.basin_hydrology_widget.snapshot() or {}
+        saved = {'po': None, 'pd': None}
+        p0 = hydrology.get('p0_result') or {}
+        source = str(p0.get('source_path') or '').split('|', 1)[0]
+        if (self._po_clip_path is not None and self._po_clip_path.is_file()
+                and self._po_clip_fingerprint == fingerprint
+                and self._po_clip_source and source == self._po_clip_source
+                and p0.get('status') in ('ok', 'partial')):
+            saved['po'] = dict(path=str(self._po_clip_path.absolute()),
+                               source_path=source, basin_fingerprint=fingerprint)
+        period = self._pd_clip_period
+        rain = ((hydrology.get('rainfall_results') or {}).get(str(period)) or {})
+        source = str(rain.get('source_path') or '').split('|', 1)[0]
+        if (self._pd_clip_path is not None and self._pd_clip_path.is_file()
+                and self._pd_clip_fingerprint == fingerprint
+                and period in (2, 5, 10, 25, 100, 500)
+                and self._pd_clip_source and source == self._pd_clip_source
+                and rain.get('status') in ('ok', 'partial')):
+            saved['pd'] = dict(path=str(self._pd_clip_path.absolute()),
+                               source_path=source, basin_fingerprint=fingerprint,
+                               period=int(period))
+        return saved if any(saved.values()) else None
+
+    def _restore_hydrology_clips(self, state):
+        """Restore existing hydrology TIFFs as visible layers, without recomputing.
+
+        An absent, moved or replaced file is reported but never stops opening
+        the rest of the portable consultation.
+        """
+        clips = state.get('hydrology_clips')
+        if not clips or self.analysis is None or self._disposed:
+            return
+        from .basin_hydrology import basin_fingerprint
+        from .po_clip import inspect_clipped_raster, publish_clipped_raster
+
+        fingerprint = basin_fingerprint(self.analysis)
+        issues = []
+        for kind in ('po', 'pd'):
+            record = clips.get(kind)
+            if record is None:
+                continue
+            try:
+                path = inspect_clipped_raster(
+                    record['path'], kind, record['source_path'],
+                    fingerprint=fingerprint)
+                period = record.get('period') if kind == 'pd' else None
+                if kind == 'pd' and period != self.basin_hydrology_widget.selected_pd_period():
+                    raise ValueError('El período seleccionado no coincide con el recorte Pd-T.')
+                publish_clipped_raster(path, kind=kind, period=period)
+                if kind == 'po':
+                    self._po_clip_path = path
+                    self._po_clip_source = record['source_path']
+                    self._po_clip_fingerprint = fingerprint
+                    self.basin_hydrology_widget.set_clip_export_available(True)
+                else:
+                    self._pd_clip_path = path
+                    self._pd_clip_source = record['source_path']
+                    self._pd_clip_fingerprint = fingerprint
+                    self._pd_clip_period = period
+                    self.basin_hydrology_widget.set_pd_clip_export_available(True, period)
+            except (ValueError, RuntimeError, OSError) as error:
+                issues.append(('P₀' if kind == 'po' else 'Pd-T CEDEX') +
+                              ': ' + str(error))
+        if issues:
+            try:
+                self.iface.messageBar().pushMessage(
+                    'HidroCAUMAX', 'No se han recuperado algunos recortes: ' +
+                    '; '.join(issues), level=Qgis.Warning, duration=12)
+            except (RuntimeError, AttributeError):
+                self.status.setText(
+                    self.status.text() + '\nRecortes no recuperados: ' + '; '.join(issues))
+
     def get_smoothing_state(self):
         self._normalise_drainage_encoding()
         state = dict(original_checked=self.original_check.isChecked(), smooth_checked=self.smooth_check.isChecked(),
@@ -2330,6 +2411,9 @@ class BasinDialog(QDialog):
         state['hypsometric_selected_index'] = hypso_selection['selected_index']
         state['hypsometric_opacity'] = hypso_selection['opacity']
         state['pd_clip_period'] = self.basin_hydrology_widget.selected_pd_period()
+        clips = self._snapshot_hydrology_clips()
+        if clips is not None:
+            state['hydrology_clips'] = clips
         quantiles = self.quantiles_widget.snapshot()
         if quantiles is not None:
             state['flow_quantiles'] = deepcopy(quantiles)
@@ -2829,6 +2913,7 @@ class BasinDialog(QDialog):
         self._sync_boundary_layers()
         self._preview()
         self._show_smoothing_summary()
+        self._restore_hydrology_clips(state)
         if (self.smooth_check.isChecked()
                 and float(state['degree']) != self.smoothing_degree.value()):
             self._queue_smoothing()
