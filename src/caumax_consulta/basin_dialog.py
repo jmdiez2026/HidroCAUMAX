@@ -1278,6 +1278,9 @@ class BasinDialog(QDialog):
             destination += '.tif'
         try:
             target = export_po_clip(path, destination)
+            # Once the user exports a permanent TIFF, save that stable path
+            # in the consultation rather than the temporary crop directory.
+            self._po_clip_path = Path(target)
             self.iface.messageBar().pushMessage(
                 'HidroCAUMAX', 'Umbral Po exportado: ' + str(target),
                 level=Qgis.Info, duration=8)
@@ -1418,6 +1421,7 @@ class BasinDialog(QDialog):
             destination += '.tif'
         try:
             saved = export_pd_clip(path, destination)
+            self._pd_clip_path = Path(saved)
             self.iface.messageBar().pushMessage(
                 'HidroCAUMAX',
                 f'Pd-T CEDEX T={period} exportado: {saved}',
