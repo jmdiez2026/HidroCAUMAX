@@ -130,7 +130,7 @@ class DrainageDialogTests(unittest.TestCase):
 
     def test_exportar_cierre_green_shapefile_from_visible_blue_cross_button(self):
         dialog = self.dialog
-        self.assertEqual(dialog.export_closure_button.text(), 'Exportar Cierre')
+        self.assertEqual(dialog.export_closure_button.text(), 'Guardar Cierre')
         self.assertEqual(dialog.export_button.text(), 'Exportar Cuenca')
         self.assertTrue(dialog._smoothing_ready)
         self.assertTrue(dialog._surface_valid)
