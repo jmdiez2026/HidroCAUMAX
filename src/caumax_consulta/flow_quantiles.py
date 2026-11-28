@@ -327,41 +327,67 @@ def sample_quantiles(query, paths=None):
         input_flow=_finite(query.flow,0),extrapolate=True,method=METHOD)
 
 
-def render_quantile_plots(snapshot,width=1100,height=500,font_family=None,*,fit_height=False):
+def render_quantile_plots(snapshot,width=1100,height=500,font_family=None,*,fit_height=False,selected=None):
     """Render the same responsive, integer-labelled Qci/T plots for screen and PDF."""
     from .quantile_graphics import render
     state=_normalise(snapshot)
     return render(state,_known(state['flows']),
                   estimate_flow(state['input_period'],state['flows'],state['extrapolate']),
                   estimate_period(state['input_flow'],state['flows'],state['extrapolate']),
-                  width,height,font_family,fit_height=fit_height)
+                  width,height,font_family,fit_height=fit_height,selected=selected)
 
 
 class _Plots(QWidget):
     def __init__(self,parent):
-        super().__init__(parent);self.state=None;self.setMinimumHeight(292)
+        super().__init__(parent);self.state=None;self.selected=None;self.setMinimumHeight(263)
         policy=QSizePolicy(QSizePolicy.Expanding,QSizePolicy.Preferred)
         policy.setHeightForWidth(True);self.setSizePolicy(policy)
-    def sizeHint(self):return QSize(640,292)
+    def sizeHint(self):return QSize(640,263)
     def heightForWidth(self,width):
-        # A further 10% reduction of the 1.2.10 screen height (0.9 * 0.9).
+        # Another 10% reduction of the *current* Qci panel, without scaling fonts.
         base=680 if width<580 else 360
-        if self.state is None:return round(base*.81)
+        if self.state is None:return round(base*.729)
         from .quantile_graphics import geometry
         state=self.state
         height=geometry(state,_known(state['flows']),
             estimate_flow(state['input_period'],state['flows'],state['extrapolate']),
             estimate_period(state['input_flow'],state['flows'],state['extrapolate']),width,base)['height']
-        return round(height*.81)
+        return round(height*.729)
     def resizeEvent(self,event):
         super().resizeEvent(event)
         height=self.heightForWidth(self.width())
         if self.minimumHeight()!=height:
             self.setMinimumHeight(height);self.updateGeometry()
+    def _render_size(self):
+        return max(320,self.width()),max(self.heightForWidth(self.width()),self.height())
+
+    def mousePressEvent(self,event):
+        if event.button()!=Qt.LeftButton or self.state is None:
+            return super().mousePressEvent(event)
+        from .quantile_graphics import geometry, pick_linked_curve
+        state=self.state
+        known=_known(state['flows'])
+        width,height=self._render_size()
+        layout=geometry(state,known,
+            estimate_flow(state['input_period'],state['flows'],state['extrapolate']),
+            estimate_period(state['input_flow'],state['flows'],state['extrapolate']),
+            width,height,fit_height=True)
+        picked=pick_linked_curve(layout,known,
+            event.x()*layout['width']/max(1,self.width()),
+            event.y()*layout['height']/max(1,self.height()),
+            tolerance=12.)
+        if picked is None:
+            return super().mousePressEvent(event)
+        self.selected=picked
+        self.update()
+        event.accept()
+
     def paintEvent(self,event):
         painter=QPainter(self)
         if self.state is not None:
-            png=render_quantile_plots(self.state,max(320,self.width()),max(self.heightForWidth(self.width()),self.height()),fit_height=True)
+            width,height=self._render_size()
+            png=render_quantile_plots(self.state,width,height,
+                fit_height=True,selected=self.selected)
             painter.drawImage(self.rect(),QImage.fromData(png))
         else:painter.fillRect(self.rect(),QColor('white'))
         painter.end()
@@ -441,6 +467,7 @@ class FlowQuantileWidget(QWidget):
             self._state=None
             self.table.clearContents()
             self.plots.state=None
+            self.plots.selected=None
             self.course_profile.clear()
             self.rational_label.setText(rational_flow_text(self._query))
 
@@ -497,6 +524,7 @@ class FlowQuantileWidget(QWidget):
         self._updating=True
         try:
             self._state=state
+            self.plots.selected=None
             for row,(period,flow,path) in enumerate(zip(PERIODS,state['flows'],state['source_paths'])):
                 period_item=QTableWidgetItem(str(period));period_item.setTextAlignment(Qt.AlignCenter)
                 self.table.setItem(row,0,period_item)
