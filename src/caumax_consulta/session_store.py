@@ -1145,6 +1145,10 @@ def _png(raw):
 
 
 def _reference_text_limit(parent, key):
+    # The per-cell D8 contributing areas are a compact portable Float64 array
+    # encoded in base64. It can legitimately exceed ordinary 16 KB metadata.
+    if key == 'main_course_areas_b64':
+        return MAX_WKB_BYTES * 2
     # Large WKB strings are permitted only in the explicit spatial-proof
     # record. Ordinary diagnostics/provider strings keep their original cap.
     if (parent.get('method') == 'reference_basin_d8'
