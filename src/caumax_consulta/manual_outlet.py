@@ -13,6 +13,13 @@ from .grid import cell_at_point
 from .terrain import analyze_basin
 
 
+class ManualOutletConsistencyError(ValueError):
+    """Manual D8 result needs another coverage/stream-network review."""
+    def __init__(self, message, reason_code):
+        super().__init__(message)
+        self.reason_code = str(reason_code)
+
+
 def _reference_overlap(analysis, context, cancelled):
     """Compare actual watershed footprints, not cell counts or target areas.
 
@@ -110,10 +117,11 @@ def build_manual_outlet(context, x, y, cancelled=lambda: False, publish=lambda p
         publish(10)
         count, window_cells, boundary, feasibility = _preflight_analysis(directions_path, selected, cancelled)
         if boundary and context.get('require_complete_coverage'):
-            raise ValueError(
+            raise ManualOutletConsistencyError(
                 'La cuenca del cierre elegido alcanza el borde del MDT refinado. '
                 'No se publica una divisoria posiblemente cortada por la extensión del ráster. '
-                'Amplía la cobertura del MDT o revisa la red D8.')
+                'Amplía la cobertura del MDT o revisa la red D8.',
+                'clipped_manual_basin')
         if (selected.row, selected.col) == (original.row, original.col):
             original_count = count
         else:
@@ -135,15 +143,16 @@ def build_manual_outlet(context, x, y, cancelled=lambda: False, publish=lambda p
     mismatch = bool(correspondence and not correspondence['reference_correspondence_valid'])
     override = bool(context.get('allow_reference_mismatch', False))
     if mismatch and not override:
-        raise ValueError(
-            'El cierre pertenece a una cuenca diferente de la consulta de referencia: '
+        raise ManualOutletConsistencyError(
+            'El cierre pertenece a una cuenca diferente de la consulta de referencia: 
             'solape con la referencia ' +
             f"{100 * correspondence['reference_coverage_fraction']:.1f} %, " +
             'solape de la cuenca elegida ' +
             f"{100 * correspondence['candidate_overlap_fraction']:.1f} %. " +
             'Puede ser una ladera o un ramal lateral sin conexión D8 con el cauce '
             'principal. Elige otra celda del cauce o, si quieres estudiar '
-            'deliberadamente una cuenca distinta, marca la excepción expresa.')
+            'deliberadamente una cuenca distinta, marca la excepción expresa.',
+            'unrelated_manual_basin')
     snap = dict(
         method='manual_cell_d8', selection_mode='user_selected_cell', explicit_user_choice=True,
         manual_selection_scope='raster_extent', manual_raster_bounds=list(bounds),
