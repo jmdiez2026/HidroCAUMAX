@@ -99,6 +99,38 @@ class ManualOutletTests(unittest.TestCase):
                 self.assertEqual((analysis.outlet_x, analysis.outlet_y), tuple(target))
                 self.assertTrue(analysis.diagnostics['outlet_snap']['explicit_user_choice'])
 
+    def test_refined_manual_outlet_rejects_lateral_catchment_without_explicit_override(self):
+        """A D8-valid hillslope must not be presented as the same refined basin."""
+        context, transform = self.fixture()
+        main = gdal.ApplyGeoTransform(transform, 5.5, 3.5)
+        reference = manual.build_manual_outlet(context, *main)['analysis']
+        context['reference_geometry_wkb_hex'] = bytes(reference.geometry_wkb).hex()
+        context['reference_crs_wkt'] = reference.crs_wkt
+        context['verify_reference_overlap'] = True
+        verified = manual.build_manual_outlet(context, *main)
+        self.assertTrue(verified['metadata']['manual_reference_overlap']
+                        ['reference_correspondence_valid'])
+        self.assertFalse(verified['analysis'].diagnostics['outlet_snap']
+                         ['reference_mismatch_override'])
+        hillside = gdal.ApplyGeoTransform(transform, 3.5, 1.5)
+        with self.assertRaisesRegex(ValueError, 'cuenca diferente'):
+            manual.build_manual_outlet(context, *hillside)
+        context['allow_reference_mismatch'] = True
+        other = manual.build_manual_outlet(context, *hillside)
+        self.assertEqual(other['analysis'].cell_count, 2)
+        self.assertTrue(other['analysis'].diagnostics['outlet_snap']
+                        ['reference_mismatch_override'])
+        self.assertFalse(other['metadata']['manual_reference_overlap']
+                         ['reference_correspondence_valid'])
+
+    def test_fine_manual_outlet_refuses_raster_edge_without_changing_sources(self):
+        context, transform = self.fixture()
+        context['require_complete_coverage'] = True
+        point = gdal.ApplyGeoTransform(transform, 5.5, 3.5)
+        with self.assertRaisesRegex(ValueError, 'borde del MDT refinado'):
+            manual.build_manual_outlet(context, *point)
+        self.assertFalse(context['metadata'].get('manual_outlet_selected', False))
+
     def test_manual_choice_can_exceed_automatic_radius_within_the_native_extent(self):
         context, _ = self.fixture()
         context['search_radius_m'] = 8
