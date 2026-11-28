@@ -8,11 +8,13 @@ import os
 from pathlib import Path
 import tempfile
 
-from qgis.PyQt.QtCore import QStandardPaths, QUrl
+from qgis.PyQt.QtCore import QUrl
 from qgis.PyQt.QtGui import QDesktopServices, QFont, QFontDatabase, QImage, QTextDocument
 from qgis.PyQt.QtPrintSupport import QPrinter
 from qgis.PyQt.QtWidgets import QFileDialog, QMessageBox
 from qgis.core import QgsCoordinateReferenceSystem
+
+from .consultation_paths import default_report_path
 
 
 class PdfOpenError(RuntimeError):
@@ -758,9 +760,16 @@ def generate_basin_pdf(destination, analysis, query, open_after=True, smoothing_
 
 
 def ask_basin_pdf(parent, analysis, query, smoothing_state=None):
-    """Select a report filename and keep save/open outcomes distinct."""
-    directory = QStandardPaths.writableLocation(QStandardPaths.DocumentsLocation)
-    suggested = os.path.join(directory, 'Informe_cuenca_HidroCAUMAX.pdf')
+    """Offer the QGIS-profile Informes folder and open the saved PDF normally."""
+    try:
+        # QgsApplication.qgisSettingsDirPath() resolves the user's *active*
+        # QGIS3 profile. Do not hard-code a Windows username or Documents.
+        suggested = str(default_report_path())
+    except OSError as error:
+        QMessageBox.critical(parent, 'CAUMAX - Informe PDF',
+                             'No se puede crear la carpeta de informes de HidroCAUMAX: '
+                             + str(error))
+        return None
     destination, _ = QFileDialog.getSaveFileName(
         parent, 'Informe de la cuenca hidrográfica', suggested, 'Archivos PDF (*.pdf)',
     )
