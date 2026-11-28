@@ -401,18 +401,21 @@ class BasinDialog(QDialog):
         buttons.setSizePolicy(QSizePolicy.Maximum,QSizePolicy.Fixed)
         self.close_button = buttons.addButton('Cerrar', QDialogButtonBox.RejectRole)
         buttons.rejected.connect(self.close)
-        for button in (self.report_button,self.save_project_button,self.open_project_button,self.close_button):
+        # Each of the four buttons is exactly 90% of its own original
+        # (pre-compact-style) QGIS height. Keep the font size unchanged.
+        report_buttons = (self.save_project_button, self.open_project_button,
+                          self.report_button, self.close_button)
+        for button in report_buttons:
             button.ensurePolished()
-            natural_height = button.sizeHint().height()
+            original_height = button.sizeHint().height()
             button.setStyleSheet('QPushButton { padding: 3px 6px; min-height: 0px; }')
-            button.setSizePolicy(QSizePolicy.Maximum,QSizePolicy.Fixed)
-            button.setFixedHeight(round(natural_height*.90))
+            button.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+            button.setFixedHeight(max(1, round(original_height * 0.90)))
         self.close_button.setStyleSheet('QPushButton { background-color: #FADBD8; color: #742A2A; '
             'border: 1px solid #D69A9A; border-radius: 3px; padding: 3px 6px; min-height: 0px; } '
             'QPushButton:hover { background-color: #F5C6C2; } '
             'QPushButton:pressed { background-color: #EDB0AA; } '
             'QPushButton:disabled { background-color: #F8ECEA; color: #A79390; border-color: #E3CBC7; }')
-        self.close_button.setFixedHeight(self.report_button.height())
         report_layout.addStretch()
         report_layout.addWidget(buttons)
         outer.addWidget(reports)
