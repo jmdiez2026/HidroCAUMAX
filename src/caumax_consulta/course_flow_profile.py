@@ -221,7 +221,7 @@ class _ProfilePlot(QWidget):
         painter.setPen(QPen(QColor('#526C81'), 1))
         painter.drawRect(chart)
         painter.drawText(QRectF(chart.left(), self.height()-28, chart.width(), 23),
-                         Qt.AlignCenter, 'Abscisado (km)')
+                         Qt.AlignCenter, 'Abscisado desde el cierre (km)')
         painter.save()
         painter.translate(17, chart.center().y())
         painter.rotate(-90)
@@ -245,6 +245,20 @@ class _ProfilePlot(QWidget):
                 path.lineTo(point)
         if joined:
             painter.drawPath(path)
+        # Mark observed values at their actual D8 chainage. Repeated 25-m
+        # samples of the same official 500-m Qci pixel may overlap: draw each
+        # visible screen position once to avoid dense marker overpainting.
+        painter.setPen(QPen(QColor('#006D9C'), 1))
+        painter.setBrush(QColor('#0080BB'))
+        visible_points = set()
+        for i, q in enumerate(self.flows):
+            if q is None:
+                continue  # NoData is never represented as Q=0.
+            p = self.xy(i, length, ymax)
+            screen_key = (round(p.x()), round(p.y()))
+            if screen_key not in visible_points:
+                painter.drawEllipse(p, 2.0, 2.0)
+                visible_points.add(screen_key)
         if not any(q is not None for q in self.flows):
             painter.setPen(QColor('#65788A'))
             painter.drawText(chart, Qt.AlignCenter | Qt.TextWordWrap,
