@@ -500,7 +500,7 @@ class BridgeTests(unittest.TestCase):
         self.assertAlmostEqual(button.font().pointSizeF()/self.dialog.btnReport.font().pointSizeF(),1.1)
         self.assertEqual(button.height(),round(round(self.dialog.btnReport.height()*1.1)*1.1))
         self.assertGreaterEqual(button.minimumWidth(),button.fontMetrics().horizontalAdvance(button.text())+button.iconSize().width()+4)
-        self.assertEqual(button.text(),'Cuenca hidrográfica')
+        self.assertEqual(button.text(),'Análisis de la Cuenca')
         self.assertLessEqual(button.iconSize().height(),button.height()-4)
         self.assertGreater(button.iconSize().width(),0)
         self.assertAlmostEqual(button.iconSize().width()/button.iconSize().height(),344/150,delta=.25)
