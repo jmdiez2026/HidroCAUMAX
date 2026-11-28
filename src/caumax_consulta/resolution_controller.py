@@ -505,6 +505,7 @@ class ResolutionController(QObject):
                 # If that routing cannot reproduce the explicitly requested
                 # basin, rebuild routing from an enlarged DEM, not just from
                 # a different cell in the same potentially clipped D8.
+                verified=None
                 try:
                     _check(cancelled)
                     publish('Recalculando D8 con cobertura ampliada',0)
@@ -533,7 +534,10 @@ class ResolutionController(QObject):
                     result['metadata']['manual_d8_recalculated']=True
                     return result
                 except ValueError as retry_error:
-                    retry_error.selection_context=deepcopy(context)
+                    # If the enlarged D8 was generated successfully, keep
+                    # those paths for the next manual choice instead of
+                    # repeatedly starting from the clipped network.
+                    retry_error.selection_context=deepcopy(verified or context)
                     raise
         self._on_status('Preparando la cuenca desde el cierre elegido…')
         self._start('CAUMAX: cierre elegido por el usuario',operation,'select',key)
