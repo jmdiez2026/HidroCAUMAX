@@ -415,6 +415,10 @@ class FlowQuantileWidget(QWidget):
         self.controls_layout=controls;layout.addLayout(controls)
         self.method_label=QLabel(self);self.method_label.hide()
         self.plots=_Plots(self);layout.addWidget(self.plots)
+        # Third chart shows the native D8 course rather than inventing Q.
+        from .course_flow_profile import CourseFlowProfile
+        self.course_profile=CourseFlowProfile(self)
+        layout.addWidget(self.course_profile)
         self.period_spin.valueChanged.connect(lambda value:self._changed('input_period',float(value)))
         self.flow_spin.valueChanged.connect(lambda value:self._changed('input_flow',float(value)))
         self.extrapolate_check.toggled.connect(lambda value:self._changed('extrapolate',bool(value)))
@@ -423,6 +427,7 @@ class FlowQuantileWidget(QWidget):
         self.rational_label.setVisible(active)
         self.table.setVisible(not active)
         self.plots.setVisible(not active)
+        self.course_profile.setVisible(not active)
         for index in range(self.controls_layout.count()):
             widget=self.controls_layout.itemAt(index).widget()
             if widget is not None:widget.setVisible(not active)
@@ -431,6 +436,7 @@ class FlowQuantileWidget(QWidget):
             self._state=None
             self.table.clearContents()
             self.plots.state=None
+            self.course_profile.clear()
             self.rational_label.setText(rational_flow_text(self._query))
 
     def set_query(self,query,paths=None,snapshot=None):
@@ -441,6 +447,13 @@ class FlowQuantileWidget(QWidget):
             return
         self._set_rational_mode(False)
         self.restore(snapshot if snapshot is not None else sample_quantiles(query,paths))
+
+    def bind_basin(self,analysis,iface):
+        """Use the active course and original SNCZI rasters, never terrain-derived Q."""
+        if is_rational_query(getattr(self,'_query',None)):
+            self.course_profile.clear()
+        else:
+            self.course_profile.configure(analysis,self.snapshot(),iface)
 
     def resizeEvent(self,event):
         super().resizeEvent(event)
@@ -510,3 +523,5 @@ class FlowQuantileWidget(QWidget):
         self.plots.state=self.snapshot()
         self.plots.setMinimumHeight(self.plots.heightForWidth(self.plots.width()))
         self.plots.updateGeometry();self.plots.update()
+        self.course_profile.set_period(self._state['input_period'],
+                                       self._state['extrapolate'])
