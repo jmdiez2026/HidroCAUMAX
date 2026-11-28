@@ -133,7 +133,7 @@ class _CursorMagnifier(QWidget):
         painter.drawLine(mid + 5, mid, mid + 13, mid)
         painter.drawLine(mid, mid - 13, mid, mid - 5)
         painter.drawLine(mid, mid + 5, mid, mid + 13)
-        painter.setPen(QPen(QColor('#0068A8'), 1.5))
+        painter.setPen(QPen(QColor('#0068A8'), 2))
         painter.drawLine(mid - 13, mid, mid - 5, mid)
         painter.drawLine(mid + 5, mid, mid + 13, mid)
         painter.drawLine(mid, mid - 13, mid, mid - 5)
@@ -166,6 +166,7 @@ class OutletSelectionDialog(QDialog):
         self._magnifier = None
         self._magnifier_active = False
         self._map_viewport = self.canvas.viewport()
+        self._previous_mouse_tracking = None
         self._map_viewport.installEventFilter(self)
         self._picking = self._closed = False
         self._busy = False
@@ -457,6 +458,9 @@ class OutletSelectionDialog(QDialog):
             self._magnifier = _CursorMagnifier(self.canvas)
         self._magnifier_active = True
         self._picking = True
+        # Hover must be delivered with no mouse button pressed on Qt5/QGIS.
+        self._previous_mouse_tracking = self._map_viewport.hasMouseTracking()
+        self._map_viewport.setMouseTracking(True)
         self.canvas.setMapTool(self._map_tool)
         self.status_label.setText('Haz clic en el mapa; después revisa la celda y pulsa «Aplicar cierre».')
 
@@ -513,6 +517,12 @@ class OutletSelectionDialog(QDialog):
             except RuntimeError:
                 pass
         self._previous_tool = None
+        if self._previous_mouse_tracking is not None:
+            try:
+                self._map_viewport.setMouseTracking(self._previous_mouse_tracking)
+            except RuntimeError:
+                pass
+            self._previous_mouse_tracking = None
 
     def _cleanup(self):
         if self._closed:
