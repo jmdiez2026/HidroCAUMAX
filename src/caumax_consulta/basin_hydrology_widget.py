@@ -6,9 +6,10 @@ and the screen/PDF interpolation of its six spatially averaged quantiles.
 """
 import copy
 import math
+from pathlib import Path
 
 from qgis.PyQt.QtCore import QBuffer, QIODevice, QPointF, QRectF, QSize, Qt, pyqtSignal, QTimer
-from qgis.PyQt.QtGui import QColor, QFont, QImage, QPainter, QPen, QPolygonF, QTextDocument
+from qgis.PyQt.QtGui import QColor, QFont, QIcon, QImage, QPainter, QPen, QPolygonF, QTextDocument
 from qgis.PyQt.QtWidgets import (
     QCheckBox, QDoubleSpinBox, QGridLayout, QGroupBox, QHeaderView, QLabel, QPushButton,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
@@ -286,6 +287,8 @@ class _PrecipitationPlots(QWidget):
 class BasinHydrologyWidget(QWidget):
     cancel_requested = pyqtSignal()
     changed = pyqtSignal()
+    po_clip_requested = pyqtSignal()
+    po_export_requested = pyqtSignal()
 
     def __init__(self,parent=None):
         super().__init__(parent)
@@ -293,6 +296,7 @@ class BasinHydrologyWidget(QWidget):
         self._state = None
         self._updating = False
         self._busy = False
+        self._po_export_ready = False
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0,0,0,0)
         self.p0_group = QGroupBox('Umbral de Escorrentía (P₀)',self)
@@ -315,6 +319,24 @@ class BasinHydrologyWidget(QWidget):
         p0_row.addWidget(self.p0_label,0,0)
         p0_row.addWidget(self.p0_statistics_label,1,0)
         p0_row.addWidget(self.coverage_label,2,0)
+        # Both selected model-2 icons belong beside the P₀ statistics,
+        # inside the same group, never under any longitudinal graph.
+        self.po_clip_button = QPushButton('Recorte capa Po', self.p0_group)
+        self.po_export_button = QPushButton('Exportar capa Po', self.p0_group)
+        for control, asset, tip in (
+            (self.po_clip_button, 'recorte_po_modelo2.svg',
+             'Recortar el ráster P₀ oficial utilizando la divisoria activa.'),
+            (self.po_export_button, 'exportar_po_modelo2.svg',
+             'Exportar como CONSULTA_Umbral Po Cuenca.tif a Capas_Generadas.')):
+            control.setIcon(QIcon(str(Path(__file__).parent / 'assets' / asset)))
+            control.setIconSize(QSize(26, 26))
+            control.setToolTip(tip)
+            control.setMinimumHeight(34)
+            control.setEnabled(False)
+        self.po_clip_button.clicked.connect(self.po_clip_requested.emit)
+        self.po_export_button.clicked.connect(self.po_export_requested.emit)
+        p0_row.addWidget(self.po_clip_button,0,1)
+        p0_row.addWidget(self.po_export_button,1,1)
         p0_row.setColumnStretch(0,1)
         p0_layout.addLayout(p0_row)
         self.rainfall_table = QTableWidget(6,6,self)
@@ -506,6 +528,17 @@ class BasinHydrologyWidget(QWidget):
             self._updating = False
         self.changed.emit()
 
+    def set_clip_export_available(self, available):
+        self._po_export_ready = bool(available)
+        self._refresh_po_actions()
+
+    def _refresh_po_actions(self):
+        p0 = self._state.get('p0_result') if self._state else None
+        available = bool(p0 and p0.get('source_path') and
+                         p0.get('status') in ('ok', 'partial'))
+        self.po_clip_button.setEnabled(available and not self._busy)
+        self.po_export_button.setEnabled(self._po_export_ready and not self._busy)
+
     def snapshot(self):
         return copy.deepcopy(self._state)
 
@@ -544,6 +577,7 @@ class BasinHydrologyWidget(QWidget):
 
     def _sync_busy(self):
         self.cancel_button.setVisible(self._busy)
+        self._refresh_po_actions()
 
     def _changed(self,key,value):
         if self._updating or self._state is None:
