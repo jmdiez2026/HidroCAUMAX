@@ -2326,6 +2326,9 @@ class BasinDialog(QDialog):
                     course_visibility=self._course_layers.visibility() if self._course_layers else {'main':True,'central':False},
                     resolution_metadata=self._resolution_metadata(), **self._map_data)
         state['hypsometric_dimensionless'] = self.hypsometry_widget.is_dimensionless()
+        hypso_selection = self.hypsometry_widget.selection_state()
+        state['hypsometric_selected_index'] = hypso_selection['selected_index']
+        state['hypsometric_opacity'] = hypso_selection['opacity']
         state['pd_clip_period'] = self.basin_hydrology_widget.selected_pd_period()
         quantiles = self.quantiles_widget.snapshot()
         if quantiles is not None:
@@ -2536,7 +2539,9 @@ class BasinDialog(QDialog):
                     or any(current[key] != snapshot[key] for key in
                            ('original_checked','smooth_checked','degree','geometry_wkb','course_visibility','resolution_metadata','cell_grid_visible','contour_transparency'))
                     or current.get('drainage_state') != snapshot.get('drainage_state')
-                    or current.get('hypsometric_dimensionless') != snapshot.get('hypsometric_dimensionless')):
+                    or current.get('hypsometric_dimensionless') != snapshot.get('hypsometric_dimensionless')
+                    or current.get('hypsometric_selected_index') != snapshot.get('hypsometric_selected_index')
+                    or current.get('hypsometric_opacity') != snapshot.get('hypsometric_opacity')):
                 raise ValueError('La consulta ha cambiado durante la captura. Vuelve a generar el informe o guardar el proyecto.')
             if current.get('flow_quantiles') != snapshot.get('flow_quantiles'):
                 raise ValueError('La consulta ha cambiado durante la captura. Vuelve a generar el informe o guardar el proyecto.')
@@ -2594,6 +2599,8 @@ class BasinDialog(QDialog):
             geometry_wkb={kind:bytes(geometry.asWkb()) for kind,geometry in geometries.items()},stats=stats,
             course_visibility={'main':True,'central':False},cell_grid_visible=key in ('500','25'),
             hypsometric_dimensionless=self.hypsometry_widget.is_dimensionless(),
+            hypsometric_selected_index=None,
+            hypsometric_opacity=self.hypsometry_widget.opacity_slider.value(),
             pd_clip_period=self.basin_hydrology_widget.selected_pd_period(),
             resolution_metadata=self._resolution_metadata(key))
 
@@ -2790,6 +2797,9 @@ class BasinDialog(QDialog):
         self.smooth_check.setChecked(state['smooth_checked'])
         self.smoothing_degree.setValue(max(1, round(state['degree'])))
         self.hypsometry_widget.set_dimensionless(state.get('hypsometric_dimensionless',False))
+        self.hypsometry_widget.restore_selection_state(
+            state.get('hypsometric_selected_index'),
+            state.get('hypsometric_opacity', 70))
         if is_rational_query(self.query):
             self.quantiles_widget.set_query(self.query)
         elif state.get('flow_quantiles'):
