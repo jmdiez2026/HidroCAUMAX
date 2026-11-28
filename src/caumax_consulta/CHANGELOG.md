@@ -1,3 +1,11 @@
+# HidroCAUMAX v.1.0 — vista previa 1.0.31 (2026-11-28)
+
+- Controles de recorte de P₀ junto a la media del umbral de escorrentía y de Pd-T CEDEX bajo las consultas Pd(T) / T(Pd), con selector para los seis períodos oficiales.
+- Recorte GeoTIFF sobre la divisoria activa, conservando el tamaño de celda y los valores nativos del ráster de origen y NoData fuera de la cuenca.
+- Los recortes se añaden inmediatamente como capas visibles en QGIS; exportación a Capas_Generadas mediante los nombres CONSULTA_Umbral Po Cuenca.tif y CONSULTA_Pd-T CEDEX.tif.
+- Ajustes y ampliaciones de curvas hipsométricas, perfiles de caudales y aportación específica, guardar consulta e informes PDF.
+- Paquete de prueba de desarrollo: las funciones necesitan revisión funcional en QGIS antes de publicar la versión estable.
+
 # HidroCAUMAX v.1.0 — reparar método racional con capas configuradas (revisión 1.0.22, 2026-11-27)
 
 - Validación previa GDAL del MDT y D8 ESRI de 25 m o 5 m seleccionados en «Configurar capas de cálculo»: mismo origen, tamaño y CRS EPSG:25830, cobertura real del punto de cierre, máscara NoData coherente y ocho códigos ESRI-D8. No se combinan rásteres de zonas diferentes.
