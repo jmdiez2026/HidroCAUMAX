@@ -9,8 +9,8 @@ import math
 from pathlib import Path
 import sys
 
-from qgis.PyQt.QtCore import QObject, QTimer, Qt
-from qgis.PyQt.QtGui import QPixmap
+from qgis.PyQt.QtCore import QObject, QTimer, Qt, QSize
+from qgis.PyQt.QtGui import QIcon, QPixmap
 from qgis.PyQt.QtWidgets import (
     QApplication, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton,
     QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
@@ -495,6 +495,12 @@ class RationalLayersBridge(QObject):
         row.addWidget(logo, 0, Qt.AlignVCenter)
         frequency_button = QPushButton('Calcular Q vs. T', frame)
         frequency_button.setObjectName(FREQUENCY_BUTTON_NAME)
+        # Model 2 expressly selected by the user: Q/T line chart with
+        # five outlined markers, to the LEFT of the original action label.
+        frequency_button.setIcon(QIcon(str(
+            Path(__file__).parent / 'assets' / 'calcular_q_vs_t_modelo2.svg')))
+        frequency_button.setIconSize(QSize(22, 22))
+        frequency_button.setLayoutDirection(Qt.LeftToRight)
         frequency_button.setStyleSheet(ACTION_BUTTON_STYLE)
         frequency_button.setToolTip('Calcular y mostrar la tabla y el gráfico de caudales '
                                    'para varios periodos de retorno.')
