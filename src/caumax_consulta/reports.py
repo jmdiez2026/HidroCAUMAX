@@ -503,8 +503,36 @@ def _captured_dialog_charts_html(state):
     return ''.join(sections)
 
 
-def _longitudinal_coverage_report_html(state):
-    """Summarize every T in the portable per-cell Qci history."""
+def _saved_hydrology_clips_report_html(state):
+    """Document exported rasters without claiming they are embedded in JSON."""
+    clips = (state or {}).get('hydrology_clips') or {}
+    if not any(clips.values()):
+        return ''
+    items = []
+    for kind, title in (
+            ('po', 'Umbral de escorrentía P₀'),
+            ('pd', 'Precipitación máxima Pd-T CEDEX')):
+        record = clips.get(kind)
+        if record is None:
+            continue
+        period = (' · T = ' + str(record['period']) + ' años') if kind == 'pd' else ''
+        items.append(
+            '<tr><td>' + _text(title + period) + '</td>'
+            '<td>' + _text(record['source_path']) + '</td>'
+            '<td>' + _text(record['path']) + '</td></tr>')
+    return (
+        '<h2>Rásteres hidrológicos recortados de la consulta</h2>'
+        '<p class="small">Los archivos GeoTIFF se conservan en disco y se '
+        'referencian por su ruta en Guardar Consulta. Al reabrir, QGIS comprueba '
+        'la fuente y la divisoria e informa si el archivo no existe.</p>'
+        '<table class="results" border="1" bordercolor="#d6dee5" '
+        'width="100%" cellspacing="0" cellpadding="4">'
+        '<tr><th>Producto</th><th>Ráster original</th><th>GeoTIFF recortado</th></tr>'
+        + ''.join(items) + '</table>')
+
+
+def _longitudinal_coverage_report_html(state, analysis=None):
+    """Summarize every T in portable per-cell Qci and specific discharge data."""
     snapshot = (state or {}).get('course_flow_profile')
     if not snapshot or not snapshot.get('rows'):
         return ''
@@ -525,6 +553,35 @@ def _longitudinal_coverage_report_html(state):
             '<tr><td align="center">' +
             '</td><td align="right">'.join(_text(cell) for cell in cells) +
             '</td></tr>')
+    specific = ''
+    from .course_flow_profile import main_course_areas
+    areas = main_course_areas(analysis) if analysis is not None else []
+    if len(areas) == count and all(area > 0 for area in areas):
+        specific_rows = []
+        for index, period in enumerate(periods):
+            values = [row[3][index] / area
+                      for row, area in zip(rows, areas)
+                      if row[3][index] is not None]
+            specific_rows.append(
+                '<tr><td align="center">' + str(period) +
+                '</td><td align="right">' +
+                _text(_number(min(values), 5)) +
+                '</td><td align="right">' +
+                _text(_number(max(values), 5)) +
+                '</td><td align="right">' + str(len(values)) + '</td></tr>'
+                if values else
+                '<tr><td align="center">' + str(period) +
+                '</td><td colspan="3">NoData</td></tr>')
+        specific = (
+            '<h3>Aportación específica del curso principal</h3>'
+            '<p class="small">Qci(T) dividido por el área drenante D8 exacta '
+            'de cada celda. Área aportante en el cierre: ' +
+            _text(_number(areas[0], 5)) + ' km².</p>'
+            '<table class="results" width="100%" border="1" '
+            'bordercolor="#d6dee5" cellspacing="0" cellpadding="3">'
+            '<tr><th>T (años)</th><th>Mín. (m³/s/km²)</th>'
+            '<th>Máx. (m³/s/km²)</th><th>Celdas válidas</th></tr>'
+            + ''.join(specific_rows) + '</table>')
     selected = snapshot.get('selected')
     selected_info = ''
     if isinstance(selected, int) and 0 <= selected < count:
@@ -548,7 +605,7 @@ def _longitudinal_coverage_report_html(state):
         '<tr><th>T (años)</th><th>Con dato</th><th>NoData</th>'
         '<th>Q = 0</th><th>Q mín. (m³/s)</th><th>Q máx. (m³/s)</th>'
         '<th>Q en cierre (m³/s)</th></tr>'
-        + ''.join(html_rows) + '</table>' + selected_info
+        + ''.join(html_rows) + '</table>' + selected_info + specific
     )
 
 
@@ -641,7 +698,8 @@ def build_report_html(analysis, query, smoothing_state=None):
     hypsometric_html = _hypsometric_report_html(analysis, smoothing_state)
     quantiles_html = '' if rational else _flow_quantiles_report_html(smoothing_state)
     basin_hydrology_html = _basin_hydrology_report_html(analysis, smoothing_state)
-    longitudinal_html = _longitudinal_coverage_report_html(smoothing_state)
+    longitudinal_html = _longitudinal_coverage_report_html(smoothing_state, analysis)
+    saved_clips_html = _saved_hydrology_clips_report_html(smoothing_state)
     captured_charts_html = _captured_dialog_charts_html(smoothing_state)
     source_summary = ('Cuenca y resultado nativos: método racional de CAUMAX 3.0. '
                       'El caudal conserva las entradas del cálculo original y no se recalcula al modificar '
@@ -722,6 +780,7 @@ Las pendientes nulas, los desniveles no positivos y los recorridos con cotas aus
 se sustituyen por valores arbitrarios.</p>
 ''' + smoothing_html + '''
 ''' + longitudinal_html + '''
+''' + saved_clips_html + '''
 <h2>Fuentes y referencia</h2>
 <p class="small">''' + _text(source_summary) + '''<br>
 BOE-A-2016-2405, Orden FOM/298/2016, Norma 5.2-IC de Drenaje superficial, apartado 2.2.2.5.<br>
