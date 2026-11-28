@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <title>IC-5.2 Análisis Cuenca - modelo 3</title>
+  <g fill="none" stroke="#176D9D" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M11 14L23 9L35 17L39 29L30 42L16 40L9 29Z"/>
+    <path d="M20 15L23 24L28 30L26 37M14 25L23 24"/>
+    <circle cx="40" cy="40" r="12" fill="#FFFFFF" fill-opacity="0.65"/>
+    <path d="M49 49L59 59M35 41L40 35L45 40"/>
+  </g>
+</svg>
