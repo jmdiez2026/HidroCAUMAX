@@ -20,10 +20,14 @@ from qgis.core import (
 )
 from qgis.gui import QgsRubberBand, QgsVertexMarker
 
-from .parameter_schema import METRICS, format_value, interpret_value, interpretation_reference
+from .parameter_schema import (
+    METRICS, format_value, interpret_value, interpretation_reference,
+    morphology_table_label, morphology_table_value,
+)
 from .drainage_threshold import manual_step, recommended_threshold
 from .metrics import shape_metrics
-from .morphology_table import InterpretationDelegate, InterpretationHeader, fit_morphology_rows
+from .morphology_table import (InterpretationDelegate, InterpretationHeader,
+                               compact_parameter_width, fit_morphology_rows)
 from .drainage_panel import DrainageControls, DrainageStatusLabel
 from .flow_quantiles import is_rational_query, rational_flow_text
 from .native_decimal import format_decimal
@@ -186,8 +190,8 @@ class BasinDialog(QDialog):
         group = QGroupBox('Morfología de la Cuenca', self)
         self.morphology_group = group
         box = QVBoxLayout(group)
-        self.table = QTableWidget(len(METRICS), 4, group)
-        self.table.setHorizontalHeaderLabels(['Parámetro', 'Valor', 'Unidad', 'Interpretación'])
+        self.table = QTableWidget(len(METRICS), 3, group)
+        self.table.setHorizontalHeaderLabels(['Parámetro', 'Valor', 'Interpretación'])
         self.table.setHorizontalHeader(InterpretationHeader(self.table))
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -202,13 +206,14 @@ class BasinDialog(QDialog):
         ''')
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Fixed)
         self.table.horizontalHeader().setMinimumSectionSize(20)
-        self.table.setItemDelegateForColumn(3, InterpretationDelegate(self.table))
+        self.table.setItemDelegateForColumn(2, InterpretationDelegate(self.table))
         self.table.setMinimumHeight(280)
         for row, metric in enumerate(METRICS):
-            for column, text in enumerate((metric.label, 'Calculando…', metric.unit, '')):
+            for column, text in enumerate((morphology_table_label(metric),
+                                          'Calculando…', '')):
                 item = QTableWidgetItem(text)
-                item.setToolTip('' if column == 3 else metric.definition)
-                if column in (1, 2):
+                item.setToolTip('' if column == 2 else metric.definition)
+                if column == 1:
                     item.setTextAlignment(Qt.AlignCenter)
                 self.table.setItem(row, column, item)
         self._row_timer = QTimer(self)
@@ -508,15 +513,18 @@ class BasinDialog(QDialog):
         header = self.table.horizontalHeader()
         blocked = header.blockSignals(True)
         try:
-            widths = [round(width * ratio) for ratio in (.40, .13, .09)]
-            unit_header = self.table.horizontalHeaderItem(2)
-            unit_font = unit_header.data(Qt.FontRole) or header.font()
-            # The header stylesheet has 4px padding plus its 1px border per side.
-            unit_minimum = QFontMetrics(unit_font).horizontalAdvance(unit_header.text())+10
-            extra = min(max(0,unit_minimum-widths[2]),max(0,widths[0]-header.minimumSectionSize()))
-            widths[0] -= extra
-            widths[2] += extra
-            widths.append(max(20, width - sum(widths)))
+            # Remove the separate unit column and give its space to comments.
+            # Parameter names may wrap but must never be truncated.
+            metrics = self.table.fontMetrics()
+            value_labels = [self.table.item(row, 1).text()
+                            for row in range(self.table.rowCount())]
+            value_width = max(
+                metrics.horizontalAdvance('Valor') + 18,
+                *(metrics.horizontalAdvance(text) + 16 for text in value_labels))
+            value_width = min(value_width, max(72, round(width * .22)))
+            name_width = compact_parameter_width(self.table, width)
+            widths = (name_width, value_width,
+                      max(20, width - name_width - value_width))
             for column, value in enumerate(widths):
                 self.table.setColumnWidth(column, value)
         finally:
@@ -635,12 +643,12 @@ class BasinDialog(QDialog):
         values = dict(self.analysis.values) if ready else {}
         if ready:
             values['cell_resolution'] = (self.analysis.cell_width, self.analysis.cell_height)
-        self.table.horizontalHeaderItem(3).setText('Interpretación')
+        self.table.horizontalHeaderItem(2).setText('Interpretación')
         for row, metric in enumerate(METRICS):
             text = interpret_value(metric.key, values.get(metric.key), values) if ready else ''
-            self.table.item(row, 3).setText(text)
+            self.table.item(row, 2).setText(text)
             detail = text + '\n\n' + interpretation_reference(metric.key) if text else ''
-            self.table.item(row, 3).setToolTip(
+            self.table.item(row, 2).setToolTip(
                 '<qt>' + escape(detail).replace('\n', '<br>') + '</qt>' if detail else '')
         self._row_timer.start(0)
 
@@ -648,8 +656,8 @@ class BasinDialog(QDialog):
         """Do not retain comments from an earlier basin while recalculating."""
         self._interpretations_valid = False
         for row in range(len(METRICS)):
-            self.table.item(row, 3).setText('')
-            self.table.item(row, 3).setToolTip('')
+            self.table.item(row, 2).setText('')
+            self.table.item(row, 2).setToolTip('')
         self._row_timer.start(0)
 
     def _connect_parent(self, signal, slot):
@@ -686,7 +694,7 @@ class BasinDialog(QDialog):
         self.progress.hide()
         self.context_mdt.setText('MDT activo: cálculo no disponible')
         for row, metric in enumerate(METRICS):
-            self.table.item(row, 1).setText(format_value(metric.key, None))
+            self.table.item(row, 1).setText(morphology_table_value(metric.key, None))
         self.status.setText(message)
         self.resolution_status.setText(message)
         self._row_timer.start(0)
@@ -740,7 +748,7 @@ class BasinDialog(QDialog):
         self._update_context()
         self.progress.hide()
         for row, metric in enumerate(METRICS):
-            self.table.item(row, 1).setText(format_value(metric.key, self.analysis.values.get(metric.key)))
+            self.table.item(row, 1).setText(morphology_table_value(metric.key, self.analysis.values.get(metric.key)))
         self._render_interpretations()
         crs = QgsCoordinateReferenceSystem.fromWkt(self.analysis.crs_wkt)
         summary = (
