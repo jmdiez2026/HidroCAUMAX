@@ -518,6 +518,12 @@ class RationalLayersBridge(QObject):
         lower_row.addWidget(complete_button, 0, Qt.AlignLeft)
         basin_button = QPushButton('IC-5.2 Análisis Cuenca', frame)
         basin_button.setObjectName(BASIN_BUTTON_NAME)
+        # Model 3 chosen by the user: watershed outline with a magnifying glass,
+        # to the left of the caption. The native basin request is unchanged.
+        basin_button.setIcon(QIcon(str(
+            Path(__file__).parent / 'assets' / 'ic52_analisis_cuenca_modelo3.svg')))
+        basin_button.setIconSize(QSize(22, 22))
+        basin_button.setLayoutDirection(Qt.LeftToRight)
         basin_button.setStyleSheet(ACTION_BUTTON_STYLE)
         basin_button.setEnabled(False)
         row.addWidget(basin_button, 0, Qt.AlignLeft)
