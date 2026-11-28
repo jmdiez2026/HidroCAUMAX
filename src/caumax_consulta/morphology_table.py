@@ -101,7 +101,7 @@ def compact_parameter_width(table, available_width, *, max_lines=3):
             left = middle + 1
     # Guard at least a third of the actual viewport for Interpretation;
     # value column is sized separately in the caller.
-    return min(left, max(135, int(available_width * .46)))
+    return min(left, max(135, int(available_width * .40)))
 
 
 def fit_morphology_rows(table):
