@@ -476,6 +476,82 @@ def _basin_hydrology_report_html(analysis, state):
     )
 
 
+def _captured_dialog_charts_html(state):
+    """Include every available on-screen chart, with its current selection."""
+    charts = (state or {}).get('chart_snapshots') or []
+    if not charts:
+        return ''
+    sections = [
+        '<h2 style="page-break-before: always;">Gráficos disponibles al generar la consulta</h2>'
+        '<p class="small">Capturas de las gráficas calculadas en el diálogo al '
+        'generar el informe, con la selección activa en ese momento. Las zonas '
+        'sin datos se conservan; no se han inventado caudales ni precipitaciones.</p>'
+    ]
+    for item in charts:
+        data = bytes(item['png'])
+        picture = QImage.fromData(data, 'PNG')
+        if picture.isNull() or not data.startswith(b'\\x89PNG\\r\\n\\x1a\\n'):
+            raise ValueError('Uno de los gráficos guardados no es un PNG válido.')
+        scale = min(1., 820 / picture.width(), 450 / picture.height())
+        width = max(1, round(picture.width() * scale))
+        height = max(1, round(picture.height() * scale))
+        src = 'data:image/png;base64,' + base64.b64encode(data).decode('ascii')
+        sections.append(
+            '<h3>' + _text(item['title']) + '</h3>'
+            '<p align="center"><img src="' + src +
+            '" width="' + str(width) + '" height="' + str(height) + '"></p>')
+    return ''.join(sections)
+
+
+def _longitudinal_coverage_report_html(state):
+    """Summarize every T in the portable per-cell Qci history."""
+    snapshot = (state or {}).get('course_flow_profile')
+    if not snapshot or not snapshot.get('rows'):
+        return ''
+    rows = snapshot['rows']
+    count = len(rows)
+    periods = (2, 5, 10, 25, 100, 500)
+    html_rows = []
+    for index, period in enumerate(periods):
+        known = [row[3][index] for row in rows if row[3][index] is not None]
+        zeros = sum(q == 0 for q in known)
+        cells = [
+            str(period), str(len(known)), str(count - len(known)), str(zeros),
+            _number(min(known), 3) if known else 'No disponible',
+            _number(max(known), 3) if known else 'No disponible',
+            _number(rows[0][3][index], 3),
+        ]
+        html_rows.append(
+            '<tr><td align="center">' +
+            '</td><td align="right">'.join(_text(cell) for cell in cells) +
+            '</td></tr>')
+    selected = snapshot.get('selected')
+    selected_info = ''
+    if isinstance(selected, int) and 0 <= selected < count:
+        distance, x, y, flows = rows[selected]
+        selected_info = (
+            '<p class="small"><b>Celda seleccionada:</b> abscisado ' +
+            _text(_number(distance, 3)) + ' km; X = ' + _text(_number(x, 3)) +
+            '; Y = ' + _text(_number(y, 3)) + '. Datos por T: ' +
+            '; '.join(str(period) + ' años: ' + _text(_number(flow, 3)) + ' m³/s'
+                      for period, flow in zip(periods, flows)) + '.</p>')
+    return (
+        '<h2>Datos longitudinales oficiales del curso principal</h2>'
+        '<p class="small">El abscisado parte de 0 km en el cierre y aumenta aguas arriba. '
+        'Longitud registrada: ' + _text(_number(rows[-1][0], 3)) +
+        ' km; celdas D8 muestreadas: ' + str(count) + '. '
+        'Cada celda conserva los seis caudales originales (o NoData) en el archivo '
+        'Guardar Consulta, además de su posición X/Y. El PDF resume su disponibilidad '
+        'para evitar reproducir miles de filas.</p>'
+        '<table class="results" border="1" bordercolor="#d6dee5" width="100%" '
+        'cellspacing="0" cellpadding="3">'
+        '<tr><th>T (años)</th><th>Con dato</th><th>NoData</th>'
+        '<th>Q = 0</th><th>Q mín. (m³/s)</th><th>Q máx. (m³/s)</th>'
+        '<th>Q en cierre (m³/s)</th></tr>'
+        + ''.join(html_rows) + '</table>' + selected_info
+    )
+
+
 def build_report_html(analysis, query, smoothing_state=None):
     """Build the same metrics/units used by the on-screen parameter schema."""
     from .parameter_schema import METRICS, format_value, interpret_value, interpretation_reference
@@ -565,6 +641,8 @@ def build_report_html(analysis, query, smoothing_state=None):
     hypsometric_html = _hypsometric_report_html(analysis, smoothing_state)
     quantiles_html = '' if rational else _flow_quantiles_report_html(smoothing_state)
     basin_hydrology_html = _basin_hydrology_report_html(analysis, smoothing_state)
+    longitudinal_html = _longitudinal_coverage_report_html(smoothing_state)
+    captured_charts_html = _captured_dialog_charts_html(smoothing_state)
     source_summary = ('Cuenca y resultado nativos: método racional de CAUMAX 3.0. '
                       'El caudal conserva las entradas del cálculo original y no se recalcula al modificar '
                       'la resolución, el cierre o el suavizado en este diálogo. ' if rational else
@@ -643,6 +721,7 @@ como Tc válido de cuenca principal: deben verificarse los tramos de flujo difus
 Las pendientes nulas, los desniveles no positivos y los recorridos con cotas ausentes no
 se sustituyen por valores arbitrarios.</p>
 ''' + smoothing_html + '''
+''' + longitudinal_html + '''
 <h2>Fuentes y referencia</h2>
 <p class="small">''' + _text(source_summary) + '''<br>
 BOE-A-2016-2405, Orden FOM/298/2016, Norma 5.2-IC de Drenaje superficial, apartado 2.2.2.5.<br>
@@ -650,7 +729,7 @@ https://www.boe.es/buscar/doc.php?id=BOE-A-2016-2405<br>
 TRI de Riley: raíz de la suma de los cuadrados de las diferencias de cota entre una celda
 y sus ocho vecinos; se promedian los valores válidos de la cuenca.<br>
 https://gdal.org/en/stable/programs/gdal_raster_tri.html</p>
-</div>''' + map_html + '''</body></html>'''
+</div>''' + map_html + captured_charts_html + '''</body></html>'''
 
 
 def _pdf_font_family():
