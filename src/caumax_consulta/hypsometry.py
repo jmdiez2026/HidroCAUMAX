@@ -301,28 +301,52 @@ class _CurveCanvas(QWidget):
 
 
 class HypsometricWidget(QWidget):
-    """Basin curve and display-mode control; it never reads or recalculates a DEM."""
+    """Clickable hypsometric curve with native elevation-cell overlay in QGIS."""
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.analysis = None
+        self._selected_index = None
+        self._iface = None
+        self._dem_path = ''
+        self._selection_generation = 0
+        self._selection_task = None
+        self._selection_layer = None
+        self._selection_path = None
         self.canvas = _CurveCanvas(self)
         self.dimensionless_check = QCheckBox('Adimensional', self.canvas)
         self.dimensionless_check.setChecked(False)
         self.dimensionless_check.setStyleSheet('QCheckBox { background-color: white; }')
-        # Retain these informational attributes for callers, without extra rows.
         self.hi_label = QLabel(self)
         self.status_label = QLabel(self)
         self.hi_label.hide()
         self.status_label.hide()
+        self.selection_label = QLabel('', self)
+        self.selection_label.setWordWrap(True)
+        self.selection_label.hide()
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.canvas)
+        layout.addWidget(self.selection_label)
         self.dimensionless_check.toggled.connect(self._refresh)
         self._refresh()
 
     def set_analysis(self, analysis):
-        self.analysis = analysis
+        if analysis is not self.analysis:
+            self._cancel_selection()
+            self.analysis = analysis
+            self._selected_index = None
+            self.selection_label.clear()
+            self.selection_label.hide()
         self._refresh()
+
+    def bind_qgis_map(self, iface, dem_path):
+        new_path = str(dem_path or '')
+        if self._iface is not iface or self._dem_path != new_path:
+            self._cancel_selection()
+            self._selected_index = None
+            self._iface, self._dem_path = iface, new_path
+            self.canvas.update()
 
     def set_dimensionless(self, value):
         self.dimensionless_check.setChecked(bool(value))
@@ -333,8 +357,121 @@ class HypsometricWidget(QWidget):
     def plot_data(self):
         return curve_plot_data(self.analysis, self.is_dimensionless())
 
+    def _selection_summary(self):
+        i = self._selected_index
+        data = self.plot_data()
+        if (self.analysis is None or i is None or not data['available']
+                or not 0 <= i < len(data['x'])):
+            return ''
+        elevation = float(self.analysis.diagnostics['hypsometric_curve']['elevation_m'][i])
+        area = (f'{data["x"][i]:.3f} (a/A)' if data['dimensionless']
+                else f'{data["x"][i]:.3f} km²')
+        return f'Altitud: {elevation:.2f} m · Área acumulada: {area}.'
+
+    def select_quantile(self, index):
+        data = self.plot_data()
+        if not data['available'] or not 0 <= index < len(data['x']):
+            return
+        self._cancel_selection()
+        self._selected_index = int(index)
+        summary = self._selection_summary()
+        self.canvas.update()
+        self.selection_label.show()
+        if self._iface is None or not self._dem_path or not Path(self._dem_path).is_file():
+            self.selection_label.setText(summary + ' MDT no disponible para señalar celdas.')
+            return
+        from .hypsometric_selection import AltitudeSelectionTask, elevation_band
+        curve = self.analysis.diagnostics['hypsometric_curve']
+        lower, upper = elevation_band(curve['elevation_m'], index)
+        task = AltitudeSelectionTask(
+            self._selection_generation, self._dem_path,
+            self.analysis.geometry_wkb, self.analysis.crs_wkt,
+            lower, upper, self._selection_finished)
+        self._selection_task = task
+        self.selection_label.setText(summary + ' Localizando celdas del MDT…')
+        from qgis.core import QgsApplication
+        QgsApplication.taskManager().addTask(task)
+
+    def _selection_finished(self, task, success):
+        path = (task.result or {}).get('path')
+        if task is not self._selection_task or task.generation != self._selection_generation:
+            if path:
+                try:
+                    Path(path).unlink(missing_ok=True)
+                except OSError:
+                    pass
+            return
+        self._selection_task = None
+        summary = self._selection_summary()
+        if not success:
+            self.selection_label.setText(
+                summary + ' No se han podido señalar las celdas: ' +
+                (task.error or 'Cálculo cancelado.'))
+            return
+        if task.result.get('count', 0) <= 0:
+            try:
+                Path(path).unlink(missing_ok=True)
+            except OSError:
+                pass
+            self.selection_label.setText(summary + ' No hay celdas en este intervalo de cota.')
+            return
+        try:
+            from qgis.core import QgsPalettedRasterRenderer, QgsProject, QgsRasterLayer
+            qlayer = QgsRasterLayer(path, 'HidroCAUMAX · Celdas de la cota elegida', 'gdal')
+            if not qlayer.isValid():
+                raise ValueError('No se puede cargar la selección georreferenciada.')
+            qlayer.setRenderer(QgsPalettedRasterRenderer(
+                qlayer.dataProvider(), 1, [
+                    QgsPalettedRasterRenderer.Class(
+                        1, QColor('#EE7827'), 'Celdas de altitud seleccionada')]))
+            qlayer.setCustomProperty('HidroCAUMAX/hypsometry_selection_owner', 'true')
+            QgsProject.instance().addMapLayer(qlayer)
+            self._selection_layer = qlayer
+            self._selection_path = path
+            self.selection_label.setText(
+                summary + f' {task.result["count"]} celdas resaltadas en QGIS.')
+        except (RuntimeError, ValueError) as error:
+            self.selection_label.setText(summary + ' Error de visualización: ' + str(error))
+        finally:
+            if self._selection_path != path and path:
+                try:
+                    Path(path).unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+    def _remove_layer(self):
+        layer, self._selection_layer = self._selection_layer, None
+        if layer is not None:
+            from qgis.core import QgsProject
+            try:
+                QgsProject.instance().removeMapLayer(layer.id())
+            except RuntimeError:
+                pass
+        path, self._selection_path = self._selection_path, None
+        if path:
+            try:
+                Path(path).unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    def _cancel_selection(self):
+        self._selection_generation += 1
+        task, self._selection_task = self._selection_task, None
+        if task is not None:
+            task.cancel()
+        self._remove_layer()
+
     def _refresh(self, *unused):
         data = self.plot_data()
         self.hi_label.setText(_title(data['hi']))
         self.status_label.setText('' if data['available'] else data['reason'])
+        if self._selected_index is not None:
+            self.selection_label.setText(self._selection_summary())
         self.canvas.update()
+
+    def closeEvent(self, event):
+        self._cancel_selection()
+        super().closeEvent(event)
+
+    def dispose(self):
+        self._cancel_selection()
