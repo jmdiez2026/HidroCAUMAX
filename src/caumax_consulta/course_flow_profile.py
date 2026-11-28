@@ -41,6 +41,20 @@ def _integer_tick_step(span, divisions=10):
     return max(1, int(10 * magnitude))
 
 
+def _integer_distance_step(river_length_km, chart_width):
+    """Choose a readable integer-km step with more divisions on long rivers."""
+    if not math.isfinite(river_length_km) or river_length_km <= 0:
+        return 1
+    divisions = max(6, min(12, int(chart_width / 48.)))
+    desired = max(1., river_length_km / divisions)
+    magnitude = 10 ** math.floor(math.log10(desired))
+    candidates = sorted({max(1, round(factor * magnitude * power))
+                         for factor in (1, 2, 5, 10)
+                         for power in (0.1, 1, 10)})
+    return min(candidates, key=lambda step: (
+        abs(math.log(step / desired)), step))
+
+
 def _decimal_tick_step(span, divisions=6):
     """Readable 1/2/2.5/5/10-step ticks for specific discharge units."""
     value = max(0., float(span))
@@ -249,7 +263,7 @@ class _ProfilePlot(QWidget):
         self.chart = QRectF(76, 26, max(50, self.width() - 98),
                             max(80, self.height() - 90))
         river_length = max(0., float(self.rows[-1][0])) if self.rows else 0.
-        self._xstep = _integer_tick_step(river_length, divisions=11)
+        self._xstep = _integer_distance_step(river_length, self.chart.width())
         length = max(self._xstep, math.ceil(river_length / self._xstep) * self._xstep)
         known = [float(q) for q in self.flows if q is not None and math.isfinite(float(q))]
         if not known:
