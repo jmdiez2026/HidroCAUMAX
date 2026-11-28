@@ -54,9 +54,9 @@ jobs:
           if-no-files-found: error
           retention-days: 30
   smoke:
-    name: Recortes GDAL y visibilidad PyQGIS
+    name: Recortes, curva hipsométrica y perfiles Qci-n en PyQGIS
     runs-on: ubuntu-24.04
-    timeout-minutes: 12
+    timeout-minutes: 18
     steps:
       - uses: actions/checkout@v4
       - name: Instalar PyQGIS y GDAL nativos
@@ -73,3 +73,6 @@ jobs:
           export PYTHONPATH="$GITHUB_WORKSPACE/src:$GITHUB_WORKSPACE/tests"
           /usr/bin/python3 -m unittest discover -s tests -p 'test_po_clip.py' -v
           /usr/bin/python3 -m unittest discover -s tests -p 'test_pd_clip.py' -v
+          /usr/bin/python3 -m unittest discover -s tests -p 'test_course_flow_profile.py' -v
+          /usr/bin/python3 -m unittest discover -s tests -p 'test_hypsometric_selection.py' -v
+          /usr/bin/python3 -m unittest discover -s tests -p 'test_session_store.py' -v
