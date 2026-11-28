@@ -2326,6 +2326,7 @@ class BasinDialog(QDialog):
                     course_visibility=self._course_layers.visibility() if self._course_layers else {'main':True,'central':False},
                     resolution_metadata=self._resolution_metadata(), **self._map_data)
         state['hypsometric_dimensionless'] = self.hypsometry_widget.is_dimensionless()
+        state['pd_clip_period'] = self.basin_hydrology_widget.selected_pd_period()
         quantiles = self.quantiles_widget.snapshot()
         if quantiles is not None:
             state['flow_quantiles'] = deepcopy(quantiles)
@@ -2593,6 +2594,7 @@ class BasinDialog(QDialog):
             geometry_wkb={kind:bytes(geometry.asWkb()) for kind,geometry in geometries.items()},stats=stats,
             course_visibility={'main':True,'central':False},cell_grid_visible=key in ('500','25'),
             hypsometric_dimensionless=self.hypsometry_widget.is_dimensionless(),
+            pd_clip_period=self.basin_hydrology_widget.selected_pd_period(),
             resolution_metadata=self._resolution_metadata(key))
 
     def _cancel_save_surfaces(self):
@@ -2793,6 +2795,10 @@ class BasinDialog(QDialog):
         elif state.get('flow_quantiles'):
             self.quantiles_widget.restore(state['flow_quantiles'])
         self.basin_hydrology_widget.set_analysis(self.analysis, state=state.get('basin_hydrology'))
+        selected_pd = state.get('pd_clip_period', 100)
+        index = self.basin_hydrology_widget.pd_period_combo.findData(selected_pd)
+        if index >= 0:
+            self.basin_hydrology_widget.pd_period_combo.setCurrentIndex(index)
         self._smoothing_loading = False
         self._map_data = {key:state[key] for key in ('map_png','map_caption','map_extent') if key in state}
         # A saved PNG remains the offline fallback. When the source DEM is
