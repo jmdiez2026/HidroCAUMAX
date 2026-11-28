@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <title>Guardar Divisoria: perímetro de cuenca verde y guardar azul</title>
+  <path d="M8 16L17 12L21 5L31 8L36 5L44 11L52 9L55 18L60 23L55 33L58 42L49 47L44 55L34 52L24 58L17 51L9 50L11 39L4 33L9 25Z"
+        fill="#EBF9E9" stroke="#087B23" stroke-width="4.3" stroke-linecap="round" stroke-linejoin="round"/>
+  <g transform="translate(31 31)" stroke="#065B9E" stroke-width="2.4" stroke-linejoin="round">
+    <path d="M2 0H23L29 6V29H2Z" fill="#0782D6"/>
+    <path d="M7 2H22V12H7Z" fill="#FFFFFF"/>
+    <path d="M16 3V10H21V3" fill="#0561A7" stroke="none"/>
+    <rect x="8" y="18" width="16" height="9" rx="1" fill="#FFFFFF"/>
+  </g>
+</svg>
