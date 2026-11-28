@@ -157,6 +157,12 @@ class BasinDialog(QDialog):
         self._po_clip_task = None
         self._po_clip_path = None
         self._po_clip_fingerprint = None
+        self._pd_clip_generation = 0
+        self._pd_clip_task = None
+        self._pd_clip_path = None
+        self._pd_clip_fingerprint = None
+        self._pd_clip_period = None
+        self._pd_clip_source = None
         self._auto_hydrology_timer = QTimer(self)
         self._auto_hydrology_timer.setSingleShot(True)
         self._auto_hydrology_timer.timeout.connect(self._calculate_auto_basin_hydrology)
@@ -251,6 +257,9 @@ class BasinDialog(QDialog):
         self.basin_hydrology_widget.cancel_requested.connect(self._cancel_basin_hydrology)
         self.basin_hydrology_widget.po_clip_requested.connect(self._clip_po_to_basin)
         self.basin_hydrology_widget.po_export_requested.connect(self._export_po_clip)
+        self.basin_hydrology_widget.pd_clip_requested.connect(self._clip_pd_to_basin)
+        self.basin_hydrology_widget.pd_export_requested.connect(self._export_pd_clip)
+        self.basin_hydrology_widget.pd_period_changed.connect(self._pd_period_changed)
         layout.addWidget(self.basin_hydrology_widget)
         self.progress = QProgressBar(self)
         self.progress.setRange(0, 0)
@@ -900,6 +909,7 @@ class BasinDialog(QDialog):
 
     def _display_analysis(self, quantile_snapshot=None):
         self._invalidate_po_clip()
+        self._invalidate_pd_clip()
         self._interpretations_valid = True
         key = f'{min(self.analysis.cell_width, self.analysis.cell_height):g}'
         visible = self._grid_visibility_by_resolution.get(key, key in ('500', '25'))
@@ -1149,20 +1159,12 @@ class BasinDialog(QDialog):
                 task.error or 'No se pudo completar el recorte P₀.')
             return
         try:
-            from .po_style import apply_po_style
-            from .generated_cleanup import register_dataset
-            raster = QgsRasterLayer(str(task.result),
-                                    'HidroCAUMAX · Umbral Po recortado a cuenca', 'gdal')
-            if not raster.isValid():
-                raise ValueError('El ráster P₀ generado no es válido en QGIS.')
-            apply_po_style(raster)
-            raster.setCustomProperty('HidroCAUMAX/po_clipped', True)
-            QgsProject.instance().addMapLayer(raster)
-            register_dataset(task.result)
+            from .po_clip import publish_clipped_raster
+            publish_clipped_raster(task.result, kind='po')
             self._po_clip_path = Path(task.result)
             self.basin_hydrology_widget.set_clip_export_available(True)
             self.iface.messageBar().pushMessage(
-                'HidroCAUMAX', 'Recorte de P₀ cargado en QGIS: ' + str(task.result),
+                'HidroCAUMAX', 'Recorte de P₀ visible en QGIS: ' + str(task.result),
                 level=Qgis.Info, duration=8)
         except (ValueError, RuntimeError, OSError) as error:
             self._po_clip_path = None
@@ -1198,6 +1200,147 @@ class BasinDialog(QDialog):
                 level=Qgis.Info, duration=8)
         except (OSError, ValueError, RuntimeError) as error:
             QMessageBox.warning(self, 'Exportar capa Po', str(error))
+
+    def _invalidate_pd_clip(self):
+        """Drop stale Pd clipping output when basin/source/period changes."""
+        self._pd_clip_generation += 1
+        task, self._pd_clip_task = self._pd_clip_task, None
+        if task is not None:
+            task.cancel()
+        self._pd_clip_path = None
+        self._pd_clip_fingerprint = None
+        self._pd_clip_period = None
+        self._pd_clip_source = None
+        if hasattr(self, 'basin_hydrology_widget'):
+            self.basin_hydrology_widget.set_pd_clipping(False)
+            self.basin_hydrology_widget.set_pd_clip_export_available(False)
+
+    def _pd_period_changed(self, period):
+        """Selecting another official CEDEX raster invalidates its old export."""
+        self._invalidate_pd_clip()
+
+    def _clip_pd_to_basin(self, period):
+        """Crop the selected real CEDEX Pd-T raster to the active geometry."""
+        if (self._disposed or self.analysis is None or self._resolution_pending
+                or self._saving_project or self._basin_hydrology_busy()
+                or not self._surface_valid):
+            return
+        from .basin_hydrology import basin_fingerprint
+        from .flow_quantiles import PERIODS
+        from .po_clip import PoClipTask
+        from uuid import uuid4
+
+        period = int(period)
+        if period not in PERIODS:
+            QMessageBox.warning(self, 'Recorte capa Pd-T CEDEX',
+                                'El período de retorno seleccionado no es oficial.')
+            return
+        state = self.basin_hydrology_widget.snapshot() or {}
+        result = (state.get('rainfall_results') or {}).get(str(period)) or {}
+        source = str(result.get('source_path') or '').split('|', 1)[0]
+        if (result.get('status') not in ('ok', 'partial')
+                or not source or not Path(source).is_file()):
+            QMessageBox.warning(self, 'Recorte capa Pd-T CEDEX',
+                f'No se encuentra una capa CEDEX válida para T={period} años.')
+            return
+        try:
+            self._invalidate_pd_clip()
+            folder = Path(QgsApplication.qgisSettingsDirPath()) / 'HidroCAUMAX' / 'PdRecortes'
+            folder.mkdir(parents=True, exist_ok=True)
+            destination = folder / f'Pd_T{period}_Cuenca_{uuid4().hex}.tif'
+            fingerprint = basin_fingerprint(self.analysis)
+            task = PoClipTask(
+                self._pd_clip_generation, source, self.analysis.geometry_wkb,
+                self.analysis.crs_wkt, destination, self._pd_clip_finished, kind='pd')
+            task.selected_period = period
+            self._pd_clip_task = task
+            self._pd_clip_fingerprint = fingerprint
+            self._pd_clip_period = period
+            self._pd_clip_source = source
+            self.basin_hydrology_widget.set_pd_clipping(True)
+            self.basin_hydrology_widget.set_pd_clip_export_available(False)
+            QgsApplication.taskManager().addTask(task)
+        except (OSError, ValueError, RuntimeError) as error:
+            self._invalidate_pd_clip()
+            QMessageBox.warning(self, 'Recorte capa Pd-T CEDEX', str(error))
+
+    def _pd_clip_finished(self, task, success):
+        """Only show the requested period with the correct basin fingerprint."""
+        from .basin_hydrology import basin_fingerprint
+        state = self.basin_hydrology_widget.snapshot() or {}
+        period = getattr(task, 'selected_period', None)
+        current = (state.get('rainfall_results') or {}).get(str(period)) or {}
+        stale = (self._disposed or task is not self._pd_clip_task
+                 or task.generation != self._pd_clip_generation
+                 or self.analysis is None
+                 or period != self._pd_clip_period
+                 or period != self.basin_hydrology_widget.selected_pd_period()
+                 or (self.analysis is not None and
+                     basin_fingerprint(self.analysis) != self._pd_clip_fingerprint)
+                 or str(current.get('source_path') or '').split('|', 1)[0]
+                    != self._pd_clip_source)
+        if stale:
+            task.path.unlink(missing_ok=True)
+            return
+        self._pd_clip_task = None
+        self.basin_hydrology_widget.set_pd_clipping(False)
+        if not success:
+            task.path.unlink(missing_ok=True)
+            QMessageBox.warning(self, 'Recorte capa Pd-T CEDEX',
+                task.error or 'No se pudo completar el recorte Pd-T.')
+            return
+        try:
+            from .po_clip import publish_clipped_raster
+            publish_clipped_raster(task.result, kind='pd', period=period)
+            self._pd_clip_path = Path(task.result)
+            self.basin_hydrology_widget.set_pd_clip_export_available(True, period)
+            self.iface.messageBar().pushMessage(
+                'HidroCAUMAX',
+                f'Pd-T CEDEX T={period} años: ráster recortado y visible en QGIS.',
+                level=Qgis.Info, duration=8)
+        except (ValueError, RuntimeError, OSError) as error:
+            self._pd_clip_path = None
+            self.basin_hydrology_widget.set_pd_clip_export_available(False)
+            QMessageBox.warning(self, 'Recorte capa Pd-T CEDEX', str(error))
+
+    def _export_pd_clip(self):
+        """Export the generated selected CEDEX raster as a GeoTIFF."""
+        from .basin_hydrology import basin_fingerprint
+        from .po_clip import PD_EXPORT_FILENAME, export_pd_clip
+        from .improved_storage import generated_layers_directory
+        period = self.basin_hydrology_widget.selected_pd_period()
+        state = self.basin_hydrology_widget.snapshot() or {}
+        current = (state.get('rainfall_results') or {}).get(str(period)) or {}
+        path = self._pd_clip_path
+        if (self._disposed or path is None or not path.is_file()
+                or self.analysis is None or self._pd_clip_period != period
+                or basin_fingerprint(self.analysis) != self._pd_clip_fingerprint
+                or str(current.get('source_path') or '').split('|', 1)[0]
+                   != self._pd_clip_source):
+            QMessageBox.warning(
+                self, 'Exportar capa Pd-T CEDEX',
+                'Primero recorta la capa Pd-T del período seleccionado.')
+            return
+        try:
+            suggested = generated_layers_directory() / PD_EXPORT_FILENAME
+        except OSError as error:
+            QMessageBox.warning(self, 'Exportar capa Pd-T CEDEX', str(error))
+            return
+        destination, _ = QFileDialog.getSaveFileName(
+            self, f'Exportar Pd-T CEDEX T={period} años', str(suggested),
+            'GeoTIFF (*.tif)')
+        if not destination:
+            return
+        if not Path(destination).suffix:
+            destination += '.tif'
+        try:
+            saved = export_pd_clip(path, destination)
+            self.iface.messageBar().pushMessage(
+                'HidroCAUMAX',
+                f'Pd-T CEDEX T={period} exportado: {saved}',
+                level=Qgis.Info, duration=8)
+        except (OSError, ValueError, RuntimeError) as error:
+            QMessageBox.warning(self, 'Exportar capa Pd-T CEDEX', str(error))
 
     def _basin_hydrology_status(self, text, progress):
         if not self._disposed:
@@ -2849,6 +2992,7 @@ class BasinDialog(QDialog):
             return
         self._disposed = True
         self._invalidate_po_clip()
+        self._invalidate_pd_clip()
         self.hypsometry_widget.dispose()
         self.quantiles_widget.course_profile.dispose()
         from .delineation_cleanup import unregister_dialog
