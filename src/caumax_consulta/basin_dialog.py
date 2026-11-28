@@ -2573,10 +2573,10 @@ class BasinDialog(QDialog):
         if errors:
             QMessageBox.warning(
                 self, 'Guardar Consulta',
-                'Consulta guardada en:\\n' + str(saved_path) +
-                '\\n\\nArchivos SHP: ' +
+                'Consulta guardada en:\n' + str(saved_path) +
+                '\n\nArchivos SHP: ' +
                 (', '.join(exported) if exported else 'ninguno nuevo') +
-                '\\n\\nIncidencias:\\n' + '\\n'.join(errors))
+                '\n\nIncidencias:\n' + '\n'.join(errors))
         else:
             self.status.setText(
                 'Consulta guardada con cierre y divisoria en Capas_Generadas.')
