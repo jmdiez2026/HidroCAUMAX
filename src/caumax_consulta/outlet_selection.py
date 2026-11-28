@@ -6,7 +6,7 @@ from qgis.PyQt import sip
 from qgis.PyQt.QtCore import Qt, pyqtSignal
 from qgis.PyQt.QtGui import QColor
 from qgis.PyQt.QtWidgets import (
-    QDialog, QDialogButtonBox, QGridLayout, QHBoxLayout, QLabel,
+    QCheckBox, QDialog, QDialogButtonBox, QGridLayout, QHBoxLayout, QLabel,
     QPushButton, QSpinBox, QVBoxLayout,
 )
 from qgis.core import QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsPointXY, QgsProject
@@ -94,6 +94,15 @@ class OutletSelectionDialog(QDialog):
         self.pick_button.clicked.connect(self.start_picking)
         arrows.addWidget(self.pick_button,1,1)
         layout.addLayout(arrows)
+        self.allow_different_check = QCheckBox(
+            'Aceptar expresamente una cuenca diferente de la consulta original', self)
+        self.allow_different_check.setToolTip(
+            'Solo para estudiar deliberadamente otra cuenca. El cierre elegido puede '
+            'pertenecer a una ladera o un afluente distinto: no se considerará '
+            'el refinamiento espacial de la cuenca original.')
+        self.allow_different_check.setChecked(False)
+        self.allow_different_check.setVisible(bool(context.get('verify_reference_overlap')))
+        layout.addWidget(self.allow_different_check)
         buttons = QDialogButtonBox(QDialogButtonBox.Cancel, self)
         buttons.button(QDialogButtonBox.Cancel).setText('Cancelar')
         self.apply_button = buttons.addButton('Aplicar cierre',QDialogButtonBox.AcceptRole)
@@ -134,6 +143,10 @@ class OutletSelectionDialog(QDialog):
             self._transform,self.crs = transform,crs
             self._rows,self._cols = dem.RasterYSize,dem.RasterXSize
             self._dem,self._directions = dem,directions
+            if hasattr(self, 'allow_different_check'):
+                self.allow_different_check.setChecked(False)
+                self.allow_different_check.setVisible(bool(
+                    context.get('verify_reference_overlap')))
         finally:
             dem = directions = None
 
@@ -361,6 +374,11 @@ class OutletSelectionDialog(QDialog):
             self._invalid(error)
             return
         self._selection = (x,y)
+        # This opt-in never silently changes the selected native cell; it only
+        # records permission to analyse a deliberately different watershed.
+        self.context['allow_reference_mismatch'] = bool(
+            self.allow_different_check.isChecked()
+            and self.context.get('verify_reference_overlap'))
         if self.persistent:
             self.set_busy(True)
             self.applied.emit()
